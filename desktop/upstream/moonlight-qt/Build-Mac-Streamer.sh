@@ -45,7 +45,7 @@ mkdir "$build"
 )
 stage="$build/app/Moonlight.app/Contents"
 "$qt_bin/macdeployqt" "$build/app/Moonlight.app" "-qmldir=$source/app/gui" -appstore-compliant
-/usr/bin/lipo -verify_arch "$native_arch" "$stage/MacOS/Moonlight"
+/usr/bin/lipo "$stage/MacOS/Moonlight" -verify_arch "$native_arch"
 expected_arch="$(uname -m)"
 if [[ "$expected_arch" == "$native_arch" ]]; then
   [[ "$("$stage/MacOS/Moonlight" --aurora-runtime-info)" == aurora-stream/1 ]] ||
