@@ -1,0 +1,62 @@
+name: Build Aurora for macOS
+
+on:
+  workflow_dispatch:
+    inputs:
+      architecture:
+        description: Mac architecture
+        type: choice
+        options: [arm64, x64, both]
+        default: arm64
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: macOS ${{ matrix.architecture }}
+    runs-on: ${{ matrix.architecture == 'arm64' && 'macos-15' || 'macos-15-intel' }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        architecture: ${{ fromJSON(inputs.architecture == 'both' && '["arm64","x64"]' || inputs.architecture == 'x64' && '["x64"]' || '["arm64"]') }}
+    env:
+      AURORA_ARCHITECTURE: ${{ matrix.architecture }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 9.0.x
+
+      - uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.6.3'
+          host: mac
+          target: desktop
+          arch: clang_64
+
+      - name: Build and sign Aurora.app
+        run: pwsh -NoProfile -File ./desktop/Build-Mac.ps1 -Architecture "$AURORA_ARCHITECTURE" -Qmake "$QT_ROOT_DIR/bin/qmake"
+
+      - name: Verify the packaged streaming component
+        run: |
+          zip="dist/Aurora-macOS-${AURORA_ARCHITECTURE}-integrated.zip"
+          check="$(mktemp -d)"
+          ditto -x -k "$zip" "$check"
+          app="$check/Aurora.app"
+          codesign --verify --deep --strict "$app"
+          runtime="$app/Contents/MacOS/AuroraStream"
+          test -x "$runtime"
+          test "$("$runtime" --aurora-runtime-info)" = aurora-stream/1
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Aurora-macOS-${{ matrix.architecture }}-integrated
+          path: dist/Aurora-macOS-${{ matrix.architecture }}-integrated.zip
+          if-no-files-found: error
+          compression-level: 0

@@ -1,0 +1,9 @@
+*.local.json
+*.log
+.env
+artifacts/
+dist/
+desktop/bin/
+desktop/obj/
+.DS_Store
+*.app/

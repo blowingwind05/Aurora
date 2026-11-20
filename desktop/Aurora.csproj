@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net9.0</TargetFramework>
+    <RuntimeIdentifiers>win-x64;osx-arm64;osx-x64</RuntimeIdentifiers>
+    <AssemblyName>Aurora</AssemblyName>
+    <Version>0.8.0</Version>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Remove="Main.cs" />
+    <EmbeddedResource Include="Read-SunshineCertificate.ps1" LogicalName="Aurora.ReadSunshineCertificate.ps1" />
+    <EmbeddedResource Include="SunshineOptions.json" LogicalName="Aurora.SunshineOptions.json" />
+    <None Include="../THIRD-PARTY-NOTICES.txt" Link="THIRD-PARTY-NOTICES.txt" CopyToPublishDirectory="PreserveNewest" Condition="!$(RuntimeIdentifier.StartsWith('osx-'))" />
+    <PackageReference Include="Avalonia.Desktop" Version="11.3.18" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="11.3.18" />
+    <PackageReference Include="Zeroconf" Version="3.7.16" />
+  </ItemGroup>
+</Project>

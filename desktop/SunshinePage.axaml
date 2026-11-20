@@ -1,0 +1,73 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="Aurora.SunshinePage">
+  <Grid>
+  <Grid x:Name="Overview" RowDefinitions="*,Auto" RowSpacing="8">
+    <ScrollViewer>
+    <StackPanel Spacing="10" Margin="0,0,8,0">
+    <StackPanel Spacing="5">
+      <TextBlock x:Name="Subtitle" Text="正在检查本机 Sunshine…" Classes="muted" TextWrapping="Wrap" />
+    </StackPanel>
+        <Border x:Name="AccountPanel" IsVisible="False" Background="White" CornerRadius="12" Padding="16">
+          <StackPanel Spacing="9">
+            <TextBlock x:Name="AccountTitle" FontSize="17" FontWeight="SemiBold" />
+            <TextBox x:Name="Username" Watermark="Sunshine 管理用户名" AutomationProperties.Name="管理用户名" />
+            <TextBox x:Name="Password" Watermark="Sunshine 管理密码" AutomationProperties.Name="管理密码" PasswordChar="●" IsUndoEnabled="False" />
+            <TextBox x:Name="Confirmation" Watermark="再次输入密码" AutomationProperties.Name="确认密码" PasswordChar="●" IsUndoEnabled="False" />
+            <CheckBox x:Name="RememberLogin" Content="记住登录（保存在 Windows 凭据管理器）" IsChecked="False" />
+            <Button x:Name="AccountAction" Classes="action accent" />
+          </StackPanel>
+        </Border>
+        <StackPanel x:Name="SettingsPanel" IsVisible="False" Spacing="12">
+          <Border Background="White" CornerRadius="12" Padding="16">
+            <StackPanel Spacing="9">
+              <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                <TextBlock Text="常用设置" FontSize="17" FontWeight="SemiBold" VerticalAlignment="Center" />
+                <Button x:Name="DetailedSettings" Grid.Column="1" Classes="action" Content="全部配置项" />
+              </Grid>
+              <TextBox x:Name="HostName" Watermark="被控电脑显示名（留空用系统名称）" AutomationProperties.Name="被控电脑显示名" />
+              <CheckBox x:Name="StreamAudio" Content="将本机声音发送到主控端" />
+              <TextBlock Text="保存不会中断串流。重启 Sunshine 后生效，重启会断开正在进行的会话。" Classes="muted" TextWrapping="Wrap" />
+              <StackPanel Orientation="Horizontal" Spacing="8">
+                <Button x:Name="Save" Classes="action accent" Content="保存设置" />
+                <Button x:Name="Restart" Classes="action" Content="重启 Sunshine" />
+              </StackPanel>
+            </StackPanel>
+          </Border>
+          <Border Background="White" CornerRadius="12" Padding="16">
+            <StackPanel Spacing="9">
+              <TextBlock Text="设备连接" FontSize="17" FontWeight="SemiBold" />
+              <CheckBox x:Name="AutoPairToggle" Content="允许自己的 Tailscale 设备自动配对" />
+              <TextBlock x:Name="AutoPairStatus" Classes="muted" TextWrapping="Wrap"
+                         Text="开启后，对端极光点「连接桌面」即可。被控电脑需运行极光。" />
+            </StackPanel>
+          </Border>
+          <Expander Header="兼容旧串流客户端 · 手动配对" HorizontalAlignment="Stretch">
+            <StackPanel Spacing="9">
+              <TextBlock x:Name="PairHint" Text="在主控端发起配对，再刷新待确认请求。" Classes="muted" TextWrapping="Wrap" />
+              <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                <ComboBox x:Name="Pairings" PlaceholderText="选择配对请求" HorizontalAlignment="Stretch" AutomationProperties.Name="待确认配对" />
+                <Button x:Name="ReloadPairs" Grid.Column="1" Classes="action" Content="刷新请求" />
+              </Grid>
+              <Grid ColumnDefinitions="*,110" ColumnSpacing="8">
+                <TextBox x:Name="ClientName" Watermark="给主控设备命名" AutomationProperties.Name="主控设备名称" />
+                <TextBox x:Name="Pin" Grid.Column="1" Watermark="4 位 PIN" AutomationProperties.Name="配对 PIN" MaxLength="4" />
+              </Grid>
+              <Button x:Name="ApprovePair" Classes="action accent" Content="确认配对" />
+            </StackPanel>
+          </Expander>
+        </StackPanel>
+      </StackPanel>
+    </ScrollViewer>
+    <StackPanel Grid.Row="1" Spacing="8">
+      <TextBlock x:Name="Feedback" Classes="muted" TextWrapping="Wrap" />
+      <WrapPanel>
+        <Button x:Name="ImportCert" Classes="action accent" Content="导入公开证书指纹" IsVisible="False" Margin="0,0,8,0" />
+        <Button x:Name="OriginalPage" Classes="action" Content="打开 Sunshine 原版设置" Margin="0,0,8,0" />
+        <Button x:Name="ForgetLogin" Classes="action" Content="忘记已保存的登录" IsVisible="False" />
+      </WrapPanel>
+    </StackPanel>
+  </Grid>
+    <ContentControl x:Name="Options" HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch" IsVisible="False" />
+  </Grid>
+</UserControl>
