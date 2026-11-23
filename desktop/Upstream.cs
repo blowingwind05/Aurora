@@ -548,12 +548,12 @@ namespace Aurora
             throw new InvalidOperationException("内置 Tailscale 需要新版 Aurora 串流组件，请使用完整的集成包。");
         }
 
-        internal static async Task<(int ExitCode, string Output)> ListMoonlight(StreamHost route, CancellationToken token)
+        internal static async Task<(int ExitCode, string Output)> ListMoonlight(string runtime, EmbeddedTailnet.StreamLease stream,
+            CancellationToken token)
         {
-            var path = FindMoonlight();
-            if (route?.ViaEmbeddedTailnet == true) await RequireRelayRuntime(path, token);
-            using var stream = await EmbeddedTailnet.OpenStream(route, token);
-            return await RunMoonlight(path, new[] { "list", stream.Route.Endpoint.ToString() }, token, stream.Route);
+            var route = stream.Route;
+            if (route.ViaEmbeddedTailnet) await RequireRelayRuntime(runtime, token);
+            return await RunMoonlight(runtime, new[] { "list", route.Endpoint.ToString() }, token, route);
         }
 
         internal static async Task<(bool Reachable, byte[] Preview)> ReadWallpaper(

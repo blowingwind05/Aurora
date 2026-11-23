@@ -59,6 +59,8 @@ internal sealed class StreamSessionWindow : Window
     private readonly Popup fullscreenControls;
     private readonly MenuFlyout controlMenu;
     private readonly MenuItem fullscreenItem = new();
+    private readonly MenuItem statsItem = new() { Header = "切换性能统计", IsVisible = false };
+    private EventWaitHandle statsSignal;
     private readonly MenuItem privacyStatus = new() { IsEnabled = false };
     private readonly MenuItem privacyAction = new() { StaysOpenOnClick = true };
     private Func<SessionPrivacyCommand, Task<SessionPrivacyState>> privacyRequest;
@@ -122,6 +124,7 @@ internal sealed class StreamSessionWindow : Window
             Header = "Ctrl+Alt+Shift+M 切换鼠标模式", IsEnabled = false
         };
         fullscreenItem.Click += (_, _) => ToggleFullscreen();
+        statsItem.Click += (_, _) => statsSignal?.Set();
         var security = new MenuItem { Header = "安全", Items = { privacyStatus, privacyAction } };
         security.SubmenuOpened += async (_, _) => await UpdatePrivacy(SessionPrivacyCommand.Status);
         privacyAction.Click += async (_, _) => await UpdatePrivacy(privacyState switch
@@ -135,7 +138,7 @@ internal sealed class StreamSessionWindow : Window
         controlMenu = new MenuFlyout
         {
             Placement = PlacementMode.BottomEdgeAlignedRight,
-            Items = { fullscreenItem, security, mouseHelp, new Separator(), disconnectItem }
+            Items = { fullscreenItem, statsItem, security, mouseHelp, new Separator(), disconnectItem }
         };
         controls.Flyout = controlMenu;
         var floatingControls = new Button
@@ -434,6 +437,8 @@ internal sealed class StreamSessionWindow : Window
             using var ready = new EventWaitHandle(false, EventResetMode.ManualReset, @"Local\" + SessionName + ".ready");
             using var disconnectSignal = new EventWaitHandle(false, EventResetMode.ManualReset, @"Local\" + SessionName + ".stop");
             using var fullscreenSignal = new EventWaitHandle(false, EventResetMode.AutoReset, @"Local\" + SessionName + ".fullscreen");
+            using var toggleStats = new EventWaitHandle(false, EventResetMode.AutoReset, @"Local\" + SessionName + ".stats");
+            using var statsAvailable = new EventWaitHandle(false, EventResetMode.ManualReset, @"Local\" + SessionName + ".stats-available");
             var invitation = FormattableString.Invariant($"{hwnd.ToInt64()}:{Environment.ProcessId}:{id}");
             cancellation.ThrowIfCancellationRequested();
             using var process = Upstream.LaunchMoonlight(runtime, route, pair: false, invitation);
@@ -451,7 +456,15 @@ internal sealed class StreamSessionWindow : Window
                 while (!exit.IsCompleted)
                 {
                     cancellation.ThrowIfCancellationRequested();
-                    if (!connected && ready.WaitOne(0)) ShowVideo();
+                    if (!connected && ready.WaitOne(0))
+                    {
+                        if (statsAvailable.WaitOne(0))
+                        {
+                            statsSignal = toggleStats;
+                            statsItem.IsVisible = true;
+                        }
+                        ShowVideo();
+                    }
                     if (fullscreenSignal.WaitOne(0)) ToggleFullscreen();
                     await Task.WhenAny(exit, Task.Delay(80, cancellation));
                 }
@@ -462,6 +475,8 @@ internal sealed class StreamSessionWindow : Window
             }
             finally
             {
+                statsSignal = null;
+                statsItem.IsVisible = false;
                 privacyRequest = null;
                 privacyBusy = false;
                 privacyState = SessionPrivacyState.Unavailable;

@@ -1,0 +1,59 @@
+Subject: [PATCH] Toggle Windows embedded performance statistics during a stream
+
+diff --git a/app/streaming/auroraembedded.h b/app/streaming/auroraembedded.h
+--- a/app/streaming/auroraembedded.h
++++ b/app/streaming/auroraembedded.h
+@@ -41,6 +41,13 @@
+         m_Ready = openEvent(QStringLiteral(".ready"), EVENT_MODIFY_STATE);
+         m_Stop = openEvent(QStringLiteral(".stop"), SYNCHRONIZE);
+         m_Fullscreen = openEvent(QStringLiteral(".fullscreen"), EVENT_MODIFY_STATE);
++        m_ToggleStats = openEvent(QStringLiteral(".stats"), SYNCHRONIZE);
++        if (m_ToggleStats) {
++            if (auto available = openEvent(QStringLiteral(".stats-available"), EVENT_MODIFY_STATE)) {
++                SetEvent(available);
++                CloseHandle(available);
++            }
++        }
+         return m_Ready && m_Stop && m_Fullscreen;
+     }
+ 
+@@ -143,6 +150,10 @@
+ 
+     void ready() const { SetEvent(m_Ready); }
+     void toggleFullscreen() const { SetEvent(m_Fullscreen); }
++    bool statsToggleRequested() const
++    {
++        return m_ToggleStats && WaitForSingleObject(m_ToggleStats, 0) == WAIT_OBJECT_0;
++    }
+     void minimize() const { PostMessageW(GetAncestor(m_Parent, GA_ROOT), WM_SYSCOMMAND, SC_MINIMIZE, 0); }
+ 
+ private:
+@@ -151,6 +162,7 @@
+         if (m_Ready) CloseHandle(m_Ready);
+         if (m_Stop) CloseHandle(m_Stop);
+         if (m_Fullscreen) CloseHandle(m_Fullscreen);
++        if (m_ToggleStats) CloseHandle(m_ToggleStats);
+     }
+ 
+     bool hasHost() const
+@@ -195,6 +207,7 @@
+     HANDLE m_Ready = nullptr;
+     HANDLE m_Stop = nullptr;
+     HANDLE m_Fullscreen = nullptr;
++    HANDLE m_ToggleStats = nullptr;
+     bool m_AttachmentFailed = false;
+ };
+ 
+diff --git a/app/streaming/session.cpp b/app/streaming/session.cpp
+--- a/app/streaming/session.cpp
++++ b/app/streaming/session.cpp
+@@ -1926,6 +1926,9 @@
+                 goto DispatchDeferredCleanup;
+             }
+             embedded.resize();
++            if (embedded.statsToggleRequested()) {
++                m_OverlayManager.setOverlayState(Overlay::OverlayDebug, !m_OverlayManager.isOverlayEnabled(Overlay::OverlayDebug));
++            }
+             nextEmbeddedPoll = SDL_GetTicks() + 80;
+         }
+ #endif

@@ -1,6 +1,6 @@
 # 开发 Aurora
 
-[项目首页](README.md) · [视觉与交互规范](docs/visual-design.md)
+[项目首页](README.md) · [视觉与交互规范](docs/visual-design.md) · [串流运行时](docs/streaming.md)
 
 ## 开发环境
 
