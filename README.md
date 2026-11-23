@@ -15,11 +15,11 @@ Windows 和 macOS 13 及更新版本会在极光首次运行时登记登录自�
 
 「我的设备」会发现局域网和同一 Tailscale 账号下正在运行极光的设备。已识别过的同账号设备离线后仍可显示。离线壁纸叠加一层近白色薄雾，重新上线后恢复原图。设备记录存于当前用户的极光数据目录 `KnownDevices/`，局域网设备的本机标识存为 `presence-id`。
 
-在「Tailscale 账户」选择极光使用内置节点或系统客户端。内置节点有自己的设备名称、地址和登录状态，使用 Tailscale 官方网页授权。切换运行方式只影响极光选用的网络，两套节点可以同时在线。首次启用内置节点，或该节点登录过期时，需要在浏览器授权。切回已登录的节点直接恢复。系统模式下，账号菜单可选择系统客户端已经登录的账号，该操作会改变系统客户端自身的活动账号。
+macOS 版极光使用内置 Tailscale 节点。Windows 版可以在「Tailscale 账户」中选择内置节点或系统客户端。内置节点有自己的设备名称、地址和登录状态，首次使用或登录过期时通过 Tailscale 官方网页授权。切换运行方式只影响极光自己的选择，两套节点可以同时在线。Windows 的系统模式可以从已登录的账号中选择，该操作会切换系统客户端的活动账号。
 
 后台配对需要两端极光登录同一 Tailscale 账号，并启用本机被控。极光通过所选网络核验设备身份，Moonlight 继续验证 Sunshine 的配对证书。集成版串流组件包含[后台配对改动](desktop/upstream/moonlight-qt/0001-aurora-background-pair.patch)。原版 Moonlight 的待处理 PIN 请求在「本机被控」中确认。
 
-连接后，设备列表与远控会话各有自己的窗口。Windows 会话窗由极光显示设备名、状态、全屏和断开，串流组件直接在窗内渲染。macOS 集成版默认以普通窗口打开串流，标题栏提供全屏、统计和断开；可以在极光设置中选择其他显示模式。
+连接后，设备列表与远控会话各有自己的窗口。Windows 会话窗由极光显示设备名、状态、全屏和断开，串流组件直接在窗内渲染。macOS 窗口化会话将原生窗控、设备名、连接状态和会话操作放在同一条顶栏，统计与释放鼠标可从「控制中心」打开。串流设置会保存在当前用户的设置目录。
 
 Windows 和 macOS 集成版启用「本机被控」后，会保存主屏幕壁纸的缩略图。已配对的极光通过局域网或 Tailscale 获取预览，并保存在本地。主控只在「我的设备」位于前台时检查更新，每台设备通常间隔两分钟，退出远控后额外检查一次。壁纸没变时无需重传，连不上时沿用上次缓存。预览只处理系统能提供的壁纸图片，不采集桌面画面。
 
@@ -102,7 +102,7 @@ pwsh -NoProfile -File ./Aurora.ps1 Stream '目标设备名' -AppName 'Steam Big 
 
 | 组件 | 原型怎么用 |
 | --- | --- |
-| [Tailscale](https://github.com/tailscale/tailscale) | Windows 和 macOS 的应用内节点使用从源码构建的 `tsnet`。极光也可选用系统客户端。 |
+| [Tailscale](https://github.com/tailscale/tailscale) | Windows 和 macOS 的应用内节点使用从源码构建的 `tsnet`。Windows 版也可选用系统客户端。 |
 | [Moonlight PC](https://github.com/moonlight-stream/moonlight-qt) | 调用官方程序的配对、应用列表及串流入口；沿用 Moonlight 的配对记录、解码和输入。 |
 | [Sunshine](https://github.com/SunshineStream/Sunshine) | Windows 集成版从源码编译被控组件，复用采集、编码和远程输入。 |
 

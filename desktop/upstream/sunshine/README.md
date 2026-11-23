@@ -1,5 +1,7 @@
 # Aurora 的 Sunshine 宿主组件
 
+极光会保存「允许本机被控」的选择，并在下次启动时尝试恢复内置宿主。退出极光时，当前被控进程和远控连接随之结束。
+
 ## Windows
 
 Windows 宿主从 [Sunshine v2026.914.233613](https://github.com/SunshineStream/Sunshine/tree/v2026.914.233613) 的提交 `63d35f702ee9e362e43263742981836ec0710384` 编译。极光复用 Sunshine 的采集、编码、输入及配对实现。仓库中的补丁让极光指定用户配置目录和退出事件，并将 HTTPS 管理端口限制在本机回环地址。

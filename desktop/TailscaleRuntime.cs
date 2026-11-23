@@ -47,7 +47,8 @@ internal static class TailscaleRuntime
         {
             if (next == mode) return;
             if (next == TailscaleMode.System && !HasSystemRuntime)
-                throw new InvalidOperationException("系统 Tailscale 暂不可用。");
+                throw new InvalidOperationException(OperatingSystem.IsMacOS()
+                    ? "macOS 版 Aurora 使用内置 Tailscale。" : "系统 Tailscale 暂不可用。");
             BeginTransition();
             if (next == TailscaleMode.Embedded) await EmbeddedTailnet.Request("status");
             await Task.Run(() => SaveMode(next));
@@ -96,6 +97,7 @@ internal static class TailscaleRuntime
 
     private static TailscaleMode ReadMode()
     {
+        if (OperatingSystem.IsMacOS()) return TailscaleMode.Embedded;
         try
         {
             if (File.Exists(SettingsPath))

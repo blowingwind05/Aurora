@@ -54,6 +54,8 @@ public sealed partial class AuroraWindow : Window
     private readonly Func<HostStatus> readHost;
     private readonly Func<Task> startManagedHost;
     private readonly Func<Task> stopManagedHost;
+    private readonly ManagedHostPreference managedHostPreference;
+    private bool allowManagedHostOnLaunch;
     private HostStatus host;
     private SunshinePage sunshinePage;
     private TailscalePage tailscalePage;
@@ -69,13 +71,20 @@ public sealed partial class AuroraWindow : Window
     private bool stoppingHost;
     private bool canClose;
 
-    public AuroraWindow() : this(Upstream.ReadHost, Upstream.StartSunshine, BundledSunshine.StopAsync) { }
+    public AuroraWindow() : this(Upstream.ReadHost, Upstream.StartSunshine, BundledSunshine.StopAsync,
+        ManagedHostPreference.ForCurrentUser()) { }
 
     internal AuroraWindow(Func<HostStatus> readHost, Func<Task> startManagedHost, Func<Task> stopManagedHost)
+        : this(readHost, startManagedHost, stopManagedHost, null) { }
+
+    internal AuroraWindow(Func<HostStatus> readHost, Func<Task> startManagedHost, Func<Task> stopManagedHost,
+        ManagedHostPreference managedHostPreference)
     {
         this.readHost = readHost;
         this.startManagedHost = startManagedHost;
         this.stopManagedHost = stopManagedHost;
+        this.managedHostPreference = managedHostPreference;
+        allowManagedHostOnLaunch = managedHostPreference?.Enabled == true;
         InitializeComponent();
         InitializeGamepadDriver();
         var windows = OperatingSystem.IsWindows();
@@ -154,6 +163,7 @@ public sealed partial class AuroraWindow : Window
             presence ??= new AuroraPresence();
             timer.Start();
             await RefreshDevices();
+            await RestoreManagedHost();
         };
         Closing += async (_, args) =>
         {
@@ -608,16 +618,17 @@ public sealed partial class AuroraWindow : Window
         var ready = host?.SettingsAvailable == true;
         var changing = changingManagedHost.HasValue;
         syncingHostSwitch = true;
-        AllowManagedHost.IsChecked = managed && running;
+        AllowManagedHost.IsChecked = managed && (running || allowManagedHostOnLaunch);
         syncingHostSwitch = false;
         ManagedHostRow.IsVisible = managed;
-        HostAction.IsVisible = !managed;
+        HostAction.IsVisible = !managed || (allowManagedHostOnLaunch && !running && !changing);
+        HostAction.Content = managed ? "重试启动" : "重新检测";
         LocalAddress.Text = HostConnectionAddress(lan?.Address) ?? "—";
         LocalTailnetAddress.Text = HostConnectionAddress(network?.LocalAddress) ?? "—";
         HostSettings.IsVisible = running;
         HostSettings.IsEnabled = !changing;
         HostAddresses.IsVisible = managed ? ready : running;
-        HostSetup.IsVisible = changing || managedHostError != null || error != null || (!ready && (!managed || running));
+        HostSetup.IsVisible = changing || managedHostError != null || error != null || (!ready && (!managed || running || allowManagedHostOnLaunch));
         HostDot.Fill = Brush.Parse(ready && !changing ? "#244FC5" : "#79879B");
         HostBadge.Foreground = Brush.Parse(ready && !changing ? "#244FC5" : "#526176");
         HostBadge.Text = changingManagedHost switch
@@ -625,7 +636,7 @@ public sealed partial class AuroraWindow : Window
             true => "正在启动",
             false => "正在关闭",
             _ when ready => "运行中",
-            _ when managed => running ? "正在就绪" : "未启用",
+            _ when managed => running ? "正在就绪" : allowManagedHostOnLaunch ? "未就绪" : "未启用",
             _ => host == null ? "状态未知" : running ? "未就绪" : "未启用"
         };
         HostHint.Text = changingManagedHost switch
@@ -633,13 +644,19 @@ public sealed partial class AuroraWindow : Window
             true => "正在启动内置被控组件…",
             false => "正在关闭本机被控…",
             _ => managedHostError ?? error ?? (host == null ? "暂时无法检查 Sunshine。" :
-                running ? "Sunshine 就绪后，可在这里管理配置和配对。" : "此版本缺少内置被控组件。")
+                running ? "Sunshine 就绪后，可在这里管理配置和配对。" :
+                managed && allowManagedHostOnLaunch ? "已保存允许被控的设置，可重试启动。" : "此版本缺少内置被控组件。")
         };
     }
 
     private async Task DetectHost()
     {
         if (changingManagedHost.HasValue) return;
+        if (allowManagedHostOnLaunch && host is { Managed: true, Installed: false })
+        {
+            await RestoreManagedHost();
+            return;
+        }
         if (host?.Installed == true)
         {
             OpenHostSettings();
@@ -648,11 +665,27 @@ public sealed partial class AuroraWindow : Window
         await RefreshDevices();
     }
 
+    private Task RestoreManagedHost()
+    {
+        if (closed || managedHostPreference == null) return Task.CompletedTask;
+        var enabled = managedHostPreference.Enabled;
+        if (allowManagedHostOnLaunch != enabled)
+        {
+            allowManagedHostOnLaunch = enabled;
+            RenderHost();
+        }
+        return allowManagedHostOnLaunch && host is { Managed: true, Installed: false }
+            ? ChangeManagedHost(true) : Task.CompletedTask;
+    }
+
+    private bool CanChangeManagedHost(bool enable) =>
+        host?.Managed == true && !changingManagedHost.HasValue &&
+        (host.Installed != enable || managedHostPreference != null && allowManagedHostOnLaunch != enable);
+
     private async Task RequestManagedHostChange(bool enable)
     {
         RenderHost();
-        if (host?.Managed != true || host.Installed == enable || changingManagedHost.HasValue)
-            return;
+        if (!CanChangeManagedHost(enable)) return;
         if (enable)
         {
             await ChangeManagedHost(true);
@@ -666,7 +699,7 @@ public sealed partial class AuroraWindow : Window
 
     private async Task ChangeManagedHost(bool enable)
     {
-        if (host?.Managed != true || host.Installed == enable || changingManagedHost.HasValue) return;
+        if (!CanChangeManagedHost(enable)) return;
         if (sunshinePage?.IsBusy == true)
         {
             managedHostError = "请等本机被控设置处理完成后再试。";
@@ -682,10 +715,26 @@ public sealed partial class AuroraWindow : Window
         var applied = false;
         try
         {
-            if (enable) await startManagedHost();
-            else
+            if (!enable && sunshinePage != null && !await sunshinePage.FinishSettingsAsync()) return;
+            if (managedHostPreference != null)
             {
-                if (sunshinePage != null && !await sunshinePage.FinishSettingsAsync()) return;
+                try
+                {
+                    if (managedHostPreference.Enabled != enable) managedHostPreference.SetEnabled(enable);
+                    allowManagedHostOnLaunch = enable;
+                }
+                catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+                {
+                    managedHostError = "无法保存允许本机被控的设置。" + error.Message;
+                    if (enable) return;
+                }
+            }
+            if (enable)
+            {
+                if (!host.Installed) await startManagedHost();
+            }
+            else if (host.Installed)
+            {
                 sunshinePage?.SuspendManagedPairing();
                 await stopManagedHost();
             }
@@ -693,7 +742,7 @@ public sealed partial class AuroraWindow : Window
         }
         catch (Exception error)
         {
-            managedHostError = (enable ? "启动本机被控失败。" : "关闭本机被控失败。") + error.Message;
+            managedHostError ??= (enable ? "启动本机被控失败。" : "关闭本机被控失败。") + error.Message;
         }
         finally
         {

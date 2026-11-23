@@ -18,6 +18,11 @@ internal sealed class StreamSettingsPage : UserControl
     private static readonly IBrush Ink = Brush.Parse("#19283F");
 
     private readonly RadioButton[] tabs = new RadioButton[4];
+    private readonly TextBlock saveWarning = new()
+    {
+        Text = "无法保存串流设置。改动会在本次运行中生效。",
+        Classes = { "muted" }, FontSize = 12, TextWrapping = TextWrapping.Wrap, IsVisible = false
+    };
     private readonly ScrollViewer scroll = new()
     {
         VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
@@ -61,7 +66,7 @@ internal sealed class StreamSettingsPage : UserControl
         };
         reset.Click += (_, _) =>
         {
-            StreamPreferences.Reset();
+            ShowSaveResult(StreamPreferences.Reset());
             var trayChangeFailed = !TrayResidency.TrySetCloseToTray(true);
             var sleepChangeFailed = !TrySetSleepMode(HostSleepMode.System);
             BuildPanels(trayChangeFailed, sleepChangeFailed);
@@ -93,7 +98,8 @@ internal sealed class StreamSettingsPage : UserControl
         };
 
         var root = new Grid { RowDefinitions = new RowDefinitions("Auto,*"), RowSpacing = 11 };
-        root.Children.Add(header);
+        AutomationProperties.SetLiveSetting(saveWarning, AutomationLiveSetting.Polite);
+        root.Children.Add(new StackPanel { Spacing = 6, Children = { header, saveWarning } });
         Grid.SetRow(scroll, 1);
         root.Children.Add(scroll);
         Content = root;
@@ -104,6 +110,8 @@ internal sealed class StreamSettingsPage : UserControl
         };
         tabs[0].IsChecked = true;
     }
+
+    private void ShowSaveResult(bool saved) => saveWarning.IsVisible = !saved;
 
     private void BuildPanels(bool trayChangeFailed = false, bool sleepChangeFailed = false)
     {
@@ -137,7 +145,7 @@ internal sealed class StreamSettingsPage : UserControl
         scroll.Offset = default;
     }
 
-    private static Control Quality(Action refreshBitrate)
+    private Control Quality(Action refreshBitrate)
     {
         var resolution = Choice("分辨率", "resolution", ("720p · 1280 × 720", "1280x720"),
             ("1080p · 1920 × 1080", "1920x1080"), ("1440p · 2560 × 1440", "2560x1440"),
@@ -154,10 +162,10 @@ internal sealed class StreamSettingsPage : UserControl
             Row("串流窗口模式", displayMode)));
     }
 
-    private static Control PlaybackSettings(Control bitrate)
+    private Control PlaybackSettings(Control bitrate)
     {
         var pacing = MakeToggle("帧速调节", StreamPreferences.GetToggle("frame-pacing"),
-            value => StreamPreferences.SetToggle("frame-pacing", value));
+            value => ShowSaveResult(StreamPreferences.SetToggle("frame-pacing", value)));
         void UpdatePacing(bool vsyncEnabled)
         {
             pacing.IsEnabled = false;
@@ -167,7 +175,7 @@ internal sealed class StreamSettingsPage : UserControl
 
         var vsync = MakeToggle("垂直同步", StreamPreferences.GetToggle("vsync"), value =>
         {
-            StreamPreferences.SetToggle("vsync", value);
+            ShowSaveResult(StreamPreferences.SetToggle("vsync", value));
             UpdatePacing(value);
         });
         UpdatePacing(vsync.IsChecked == true);
@@ -179,10 +187,10 @@ internal sealed class StreamSettingsPage : UserControl
             ToggleRow("串流时保持屏幕开启", "keep-awake"));
     }
 
-    private static Control Audio() => Panel(Card("音频播放",
+    private Control Audio() => Panel(Card("音频播放",
         Row("串流时将目标电脑的扬声器静音", MakeToggle("串流时将目标电脑的扬声器静音",
             !StreamPreferences.GetToggle("audio-on-host"),
-            value => StreamPreferences.SetToggle("audio-on-host", !value)), stretchEditor: false)));
+            value => ShowSaveResult(StreamPreferences.SetToggle("audio-on-host", !value))), stretchEditor: false)));
 
     internal void RefreshStartup() => refreshStartup?.Invoke();
 
@@ -301,7 +309,7 @@ internal sealed class StreamSettingsPage : UserControl
         }
     }
 
-    private static Control[] InputSettings()
+    private Control[] InputSettings()
     {
         const string option = "capture-system-keys";
         var current = StreamPreferences.Get(option);
@@ -312,12 +320,12 @@ internal sealed class StreamSettingsPage : UserControl
         var shortcut = MakeToggle("捕获系统快捷键", capture, value =>
         {
             scope.IsEnabled = value;
-            StreamPreferences.Set(option, value ? Scope() : "never");
+            ShowSaveResult(StreamPreferences.Set(option, value ? Scope() : "never"));
         });
         scope.IsEnabled = capture;
         scope.SelectionChanged += (_, _) =>
         {
-            if (scope.IsEnabled) StreamPreferences.Set(option, Scope());
+            if (scope.IsEnabled) ShowSaveResult(StreamPreferences.Set(option, Scope()));
         };
         var shortcuts = InlineEditors(scope, shortcut, minInlineWidth: 145);
 
@@ -333,7 +341,7 @@ internal sealed class StreamSettingsPage : UserControl
                 ToggleRow("后台接收手柄输入", "background-gamepad"))];
     }
 
-    private static Control Advanced(Control bitrate)
+    private Control Advanced(Control bitrate)
     {
         const string option = "video-decoder";
         var values = new[] { "auto", "hardware", "software" };
@@ -347,13 +355,14 @@ internal sealed class StreamSettingsPage : UserControl
         }
         decoder.SelectionChanged += (_, _) =>
         {
-            if (decoder.IsEnabled && decoder.SelectedIndex >= 0) StreamPreferences.Set(option, values[decoder.SelectedIndex]);
+            if (decoder.IsEnabled && decoder.SelectedIndex >= 0)
+                ShowSaveResult(StreamPreferences.Set(option, values[decoder.SelectedIndex]));
         };
 
         var initialHdr = StreamPreferences.GetToggle("hdr");
         var hdr = MakeToggle("启用 HDR（实验）", initialHdr, value =>
         {
-            StreamPreferences.SetToggle("hdr", value);
+            ShowSaveResult(StreamPreferences.SetToggle("hdr", value));
             UpdateDecoder(value);
         });
         UpdateDecoder(initialHdr);
@@ -375,7 +384,7 @@ internal sealed class StreamSettingsPage : UserControl
                 ToggleRow("串流结束后退出目标电脑上的应用", "quit-after"))]);
     }
 
-    private static Control Bitrate(out Action refresh)
+    private Control Bitrate(out Action refresh)
     {
         var slider = new Slider
         {
@@ -395,7 +404,7 @@ internal sealed class StreamSettingsPage : UserControl
         slider.ValueChanged += (_, _) =>
         {
             var kbps = (int)Math.Round(slider.Value * 1000);
-            if (kbps != StreamPreferences.GetBitrate()) StreamPreferences.SetBitrate(kbps);
+            if (kbps != StreamPreferences.GetBitrate()) ShowSaveResult(StreamPreferences.SetBitrate(kbps));
             UpdateReadout();
         };
         refresh = () => slider.Value = StreamPreferences.GetBitrate() / 1000.0;
@@ -428,14 +437,14 @@ internal sealed class StreamSettingsPage : UserControl
         return layout;
     }
 
-    private static ComboBox Choice(string label, string option, params (string Label, string Value)[] choices)
+    private ComboBox Choice(string label, string option, params (string Label, string Value)[] choices)
     {
         var combo = Combo(label, choices.Select(choice => choice.Label).ToArray());
         var selected = StreamPreferences.Get(option);
         combo.SelectedIndex = Array.FindIndex(choices, choice => choice.Value == selected);
         combo.SelectionChanged += (_, _) =>
         {
-            if (combo.SelectedIndex >= 0) StreamPreferences.Set(option, choices[combo.SelectedIndex].Value);
+            if (combo.SelectedIndex >= 0) ShowSaveResult(StreamPreferences.Set(option, choices[combo.SelectedIndex].Value));
         };
         return combo;
     }
@@ -452,9 +461,9 @@ internal sealed class StreamSettingsPage : UserControl
         return combo;
     }
 
-    private static Control ToggleRow(string label, string option) => Row(label,
+    private Control ToggleRow(string label, string option) => Row(label,
         MakeToggle(label, StreamPreferences.GetToggle(option),
-            value => StreamPreferences.SetToggle(option, value)), stretchEditor: false);
+            value => ShowSaveResult(StreamPreferences.SetToggle(option, value))), stretchEditor: false);
 
     private static ToggleSwitch MakeToggle(string label, bool initial, Action<bool> change = null)
     {
