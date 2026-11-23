@@ -39,11 +39,15 @@ jobs:
           cache: false
 
       - uses: jurplel/install-qt-action@v4
+        env:
+          AQT_CONFIG: ${{ github.workspace }}/.github/aqt-macos.ini
         with:
           version: '6.6.3'
           host: mac
           target: desktop
           arch: clang_64
+          cache: true
+          cache-key-prefix: install-qt-action-macos-${{ matrix.architecture }}
 
       - uses: actions/setup-python@v5
         with:
