@@ -31,9 +31,14 @@ revision='e7a2d9f44d7b43fe7f6d2e0f08bf55b7cca48818'
 echo '获取 Moonlight 源码和固定版本的依赖…'
 git clone --depth 1 --branch v6.0.0 --recurse-submodules https://github.com/moonlight-stream/moonlight-qt.git "$source"
 [[ "$(git -C "$source" rev-parse HEAD)" == "$revision" ]] || { echo 'Unexpected Moonlight revision.' >&2; exit 1; }
-git -C "$source" apply "$here/0001-aurora-background-pair.patch"
-git -C "$source" apply "$here/0002-aurora-stream-runtime.patch"
+patches=()
+for patch in "$here"/*.patch; do
+  [[ "$(basename "$patch")" != *-windows-* ]] || continue
+  tr -d '\r' < "$patch" | git -C "$source" apply -
+  patches+=("$patch")
+done
 cp "$here/AuroraStreamEntry.h" "$source/app/"
+cp "$here/../../Assets/Aurora.icns" "$source/app/moonlight.icns"
 
 echo '编译极光串流组件…'
 mkdir "$build"
@@ -64,7 +69,7 @@ done
 notices="$destination/Resources/ThirdParty/Moonlight"
 mkdir -p "$notices"
 cp "$source/LICENSE" "$notices/LICENSE"
-cp "$here/0001-aurora-background-pair.patch" "$here/0002-aurora-stream-runtime.patch" "$here/AuroraStreamEntry.h" "$notices/"
+cp "${patches[@]}" "$here/AuroraStreamEntry.h" "$notices/"
 printf '%s\n' 'https://github.com/moonlight-stream/moonlight-qt' "$revision" > "$notices/SOURCE.txt"
 git -C "$source" submodule status --recursive >> "$notices/SOURCE.txt"
 (

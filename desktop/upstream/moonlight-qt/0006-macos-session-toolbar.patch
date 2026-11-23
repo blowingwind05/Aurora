@@ -1,0 +1,308 @@
+diff --git a/app/app.pro b/app/app.pro
+--- a/app/app.pro
++++ b/app/app.pro
+@@ -384,6 +384,11 @@
+ macx {
+     message(VideoToolbox renderer selected)
+ 
++    contains(DEFINES, AURORA_STREAM_RUNTIME) {
++        SOURCES += streaming/aurora-session-toolbar.mm
++        HEADERS += streaming/aurora-session-toolbar.h
++    }
++
+     SOURCES += \
+         streaming/video/ffmpeg-renderers/vt_avsamplelayer.mm \
+         streaming/video/ffmpeg-renderers/vt_metal.mm
+diff --git a/app/streaming/session.cpp b/app/streaming/session.cpp
+--- a/app/streaming/session.cpp
++++ b/app/streaming/session.cpp
+@@ -6,6 +6,10 @@
+ #include <Limelight.h>
+ #include <SDL.h>
+ #include "utils.h"
++
++#if defined(Q_OS_DARWIN) && defined(AURORA_STREAM_RUNTIME)
++#include "aurora-session-toolbar.h"
++#endif
+ 
+ #ifdef HAVE_FFMPEG
+ #include "video/ffmpeg.h"
+@@ -1663,7 +1667,11 @@
+     // We use only the computer name on macOS to match Apple conventions where the
+     // app name is featured in the menu bar and the document name is in the title bar.
+ #ifdef Q_OS_DARWIN
++#ifdef AURORA_STREAM_RUNTIME
++    std::string windowName = (QStringLiteral("Aurora — ") + m_Computer->name).toUtf8().toStdString();
++#else
+     std::string windowName = QString(m_Computer->name).toStdString();
++#endif
+ #else
+     std::string windowName = QString(m_Computer->name + " - Moonlight").toStdString();
+ #endif
+@@ -1742,6 +1750,10 @@
+ #endif
+ 
+     m_InputHandler->setWindow(m_Window);
++
++#if defined(Q_OS_DARWIN) && defined(AURORA_STREAM_RUNTIME)
++    const bool hasWindowedToolbar = !m_IsFullScreen && installAuroraSessionToolbar(m_Window);
++#endif
+ 
+     QSvgRenderer svgIconRenderer(QString(":/res/moonlight.svg"));
+     QImage svgImage(ICON_SIZE, ICON_SIZE, QImage::Format_RGBA8888);
+@@ -1805,7 +1817,13 @@
+     }
+     else {
+         // X11/XWayland: Capture after decoder creation
++#if defined(Q_OS_DARWIN) && defined(AURORA_STREAM_RUNTIME)
++        // Start with a usable pointer in the windowed viewer. A click in the
++        // video uses Moonlight's existing capture path.
++        needsPostDecoderCreationCapture = !hasWindowedToolbar;
++#else
+         needsPostDecoderCreationCapture = true;
++#endif
+     }
+ 
+     // Stop text input. SDL enables it by default
+@@ -1884,6 +1902,25 @@
+ 
+         case SDL_USEREVENT:
+             switch (event.user.code) {
++#if defined(Q_OS_DARWIN) && defined(AURORA_STREAM_RUNTIME)
++            case static_cast<Sint32>(AuroraToolbarAction::Disconnect):
++                if (event.user.windowID == SDL_GetWindowID(m_Window)) {
++                    goto DispatchDeferredCleanup;
++                }
++                break;
++            case static_cast<Sint32>(AuroraToolbarAction::ToggleFullscreen):
++                if (event.user.windowID == SDL_GetWindowID(m_Window)) {
++                    toggleFullscreen();
++                    m_InputHandler->raiseAllKeys();
++                }
++                break;
++            case static_cast<Sint32>(AuroraToolbarAction::ToggleStats):
++                if (event.user.windowID == SDL_GetWindowID(m_Window)) {
++                    m_OverlayManager.setOverlayState(Overlay::OverlayDebug,
++                                                     !m_OverlayManager.isOverlayEnabled(Overlay::OverlayDebug));
++                }
++                break;
++#endif
+             case SDL_CODE_FRAME_READY:
+                 if (m_VideoDecoder != nullptr) {
+                     m_VideoDecoder->renderFrameOnMainThread();
+@@ -2119,6 +2156,9 @@
+             m_InputHandler->updatePointerRegionLock();
+ 
+             SDL_AtomicUnlock(&m_DecoderLock);
++#if defined(Q_OS_DARWIN) && defined(AURORA_STREAM_RUNTIME)
++            installAuroraSessionToolbar(m_Window);
++#endif
+             break;
+ 
+         case SDL_KEYUP:
+diff --git a/app/streaming/input/input.h b/app/streaming/input/input.h
+--- a/app/streaming/input/input.h
++++ b/app/streaming/input/input.h
+@@ -121,6 +121,11 @@
+     QString getUnmappedGamepads();
+ 
+ private:
++#if defined(Q_OS_DARWIN) && defined(AURORA_STREAM_RUNTIME)
++    void raiseAllMouseButtons();
++    Uint32 m_RemoteMouseButtons = 0;
++#endif
++
+     enum KeyCombo {
+         KeyComboQuit,
+         KeyComboUngrabInput,
+diff --git a/app/streaming/input/input.cpp b/app/streaming/input/input.cpp
+--- a/app/streaming/input/input.cpp
++++ b/app/streaming/input/input.cpp
+@@ -283,6 +283,18 @@
+     }
+ }
+ 
++#if defined(Q_OS_DARWIN) && defined(AURORA_STREAM_RUNTIME)
++void SdlInputHandler::raiseAllMouseButtons()
++{
++    for (int button = BUTTON_LEFT; button <= BUTTON_X2; ++button) {
++        if (m_RemoteMouseButtons & SDL_BUTTON(button)) {
++            LiSendMouseButtonEvent(BUTTON_ACTION_RELEASE, button);
++        }
++    }
++    m_RemoteMouseButtons = 0;
++}
++#endif
++
+ void SdlInputHandler::notifyFocusLost()
+ {
+     // Release mouse cursor when another window is activated (e.g. by using ALT+TAB).
+@@ -292,6 +304,10 @@
+     if (!(SDL_GetWindowFlags(m_Window) & SDL_WINDOW_FULLSCREEN) && !m_AbsoluteMouseMode) {
+         setCaptureActive(false);
+     }
++
++#if defined(Q_OS_DARWIN) && defined(AURORA_STREAM_RUNTIME)
++    raiseAllMouseButtons();
++#endif
+ 
+     // Raise all keys that are currently pressed. If we don't do this, certain keys
+     // used in shortcuts that cause focus loss (such as Alt+Tab) may get stuck down.
+@@ -399,6 +415,12 @@
+         }
+     }
+     else {
++#if defined(Q_OS_DARWIN) && defined(AURORA_STREAM_RUNTIME)
++        raiseAllMouseButtons();
++        SDL_CaptureMouse(SDL_FALSE);
++        m_PendingMouseButtonsAllUpOnVideoRegionLeave = false;
++        m_MouseWasInVideoRegion = false;
++#endif
+         if (m_FakeCaptureActive) {
+             // Display the cursor again
+             SDL_ShowCursor(SDL_ENABLE);
+diff --git a/app/streaming/input/mouse.cpp b/app/streaming/input/mouse.cpp
+--- a/app/streaming/input/mouse.cpp
++++ b/app/streaming/input/mouse.cpp
+@@ -61,6 +61,20 @@
+         else if (button == BUTTON_LEFT)
+             button = BUTTON_RIGHT;
+     }
++
++#if defined(Q_OS_DARWIN) && defined(AURORA_STREAM_RUNTIME)
++    const Uint32 mask = SDL_BUTTON(button);
++    if (event->state == SDL_PRESSED) {
++        m_RemoteMouseButtons |= mask;
++    }
++    else {
++        // Capture release or focus loss may already have released this button.
++        if (!(m_RemoteMouseButtons & mask)) {
++            return;
++        }
++        m_RemoteMouseButtons &= ~mask;
++    }
++#endif
+ 
+     LiSendMouseButtonEvent(event->state == SDL_PRESSED ?
+                                BUTTON_ACTION_PRESS :
+diff --git a/app/streaming/aurora-session-toolbar.h b/app/streaming/aurora-session-toolbar.h
+new file mode 100644
+--- /dev/null
++++ b/app/streaming/aurora-session-toolbar.h
+@@ -0,0 +1,12 @@
++#pragma once
++
++#include <SDL.h>
++
++// Reserved alongside Session's SDL_USEREVENT codes.
++enum class AuroraToolbarAction : Sint32 {
++    Disconnect = 105,
++    ToggleFullscreen,
++    ToggleStats,
++};
++
++bool installAuroraSessionToolbar(SDL_Window* window);
+diff --git a/app/streaming/aurora-session-toolbar.mm b/app/streaming/aurora-session-toolbar.mm
+new file mode 100644
+--- /dev/null
++++ b/app/streaming/aurora-session-toolbar.mm
+@@ -0,0 +1,99 @@
++#include "aurora-session-toolbar.h"
++
++#import <AppKit/AppKit.h>
++#include <SDL_syswm.h>
++
++@interface AuroraSessionToolbarController : NSTitlebarAccessoryViewController {
++@public
++    Uint32 streamWindowId;
++}
++@end
++
++@implementation AuroraSessionToolbarController
++
++- (void)sendAction:(NSButton*)sender
++{
++    SDL_Event event = {};
++    event.type = SDL_USEREVENT;
++    event.user.timestamp = SDL_GetTicks();
++    event.user.windowID = streamWindowId;
++    event.user.code = static_cast<Sint32>(sender.tag);
++    if (SDL_PushEvent(&event) != 1) {
++        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "Could not enqueue Aurora toolbar action");
++    }
++}
++
++- (void)loadView
++{
++    NSView* strip = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 400, 36)];
++    self.view = strip;
++    [strip release];
++
++    NSButton* fullscreen = [NSButton buttonWithTitle:@"全屏" target:self action:@selector(sendAction:)];
++    NSButton* stats = [NSButton buttonWithTitle:@"统计" target:self action:@selector(sendAction:)];
++    NSButton* disconnect = [NSButton buttonWithTitle:@"断开" target:self action:@selector(sendAction:)];
++    fullscreen.tag = static_cast<NSInteger>(AuroraToolbarAction::ToggleFullscreen);
++    stats.tag = static_cast<NSInteger>(AuroraToolbarAction::ToggleStats);
++    disconnect.tag = static_cast<NSInteger>(AuroraToolbarAction::Disconnect);
++    for (NSButton* button in @[fullscreen, stats, disconnect]) {
++        button.refusesFirstResponder = YES;
++        [button setContentCompressionResistancePriority:NSLayoutPriorityRequired
++                                         forOrientation:NSLayoutConstraintOrientationHorizontal];
++    }
++
++    NSTextField* hint = [NSTextField labelWithString:@"释放鼠标  ⌃⌥⇧Z"];
++    hint.font = [NSFont systemFontOfSize:[NSFont smallSystemFontSize]];
++    hint.textColor = [NSColor secondaryLabelColor];
++    hint.lineBreakMode = NSLineBreakByTruncatingTail;
++    [hint setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
++                                   forOrientation:NSLayoutConstraintOrientationHorizontal];
++
++    NSStackView* row = [NSStackView stackViewWithViews:@[fullscreen, stats, disconnect, hint]];
++    row.orientation = NSUserInterfaceLayoutOrientationHorizontal;
++    row.alignment = NSLayoutAttributeCenterY;
++    row.spacing = 8;
++    row.translatesAutoresizingMaskIntoConstraints = NO;
++    [strip addSubview:row];
++    [NSLayoutConstraint activateConstraints:@[
++        [row.leadingAnchor constraintEqualToAnchor:strip.leadingAnchor constant:12],
++        [row.trailingAnchor constraintLessThanOrEqualToAnchor:strip.trailingAnchor constant:-12],
++        [row.centerYAnchor constraintEqualToAnchor:strip.centerYAnchor],
++    ]];
++}
++
++@end
++
++bool installAuroraSessionToolbar(SDL_Window* window)
++{
++    if (![NSThread isMainThread] || (SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN)) {
++        return false;
++    }
++
++    SDL_SysWMinfo info = {};
++    SDL_VERSION(&info.version);
++    if (!SDL_GetWindowWMInfo(window, &info) || info.subsystem != SDL_SYSWM_COCOA) {
++        return false;
++    }
++
++    NSWindow* nativeWindow = info.info.cocoa.window;
++    if (!(nativeWindow.styleMask & NSWindowStyleMaskTitled) ||
++        (nativeWindow.styleMask & NSWindowStyleMaskFullSizeContentView)) {
++        return false;
++    }
++
++    for (NSTitlebarAccessoryViewController* accessory in nativeWindow.titlebarAccessoryViewControllers) {
++        if ([accessory isKindOfClass:[AuroraSessionToolbarController class]]) {
++            return true;
++        }
++    }
++
++    // NSWindow owns the accessory and its controls. It can be installed again
++    // if SDL recreates the Cocoa window for a different renderer.
++    AuroraSessionToolbarController* controller = [[AuroraSessionToolbarController alloc] init];
++    controller->streamWindowId = SDL_GetWindowID(window);
++    controller.layoutAttribute = NSLayoutAttributeBottom;
++    controller.fullScreenMinHeight = 0;
++    [nativeWindow addTitlebarAccessoryViewController:controller];
++    [controller release];
++    return true;
++}

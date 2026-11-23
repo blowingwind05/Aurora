@@ -16,7 +16,7 @@ jobs:
   build:
     name: macOS ${{ matrix.architecture }}
     runs-on: ${{ matrix.architecture == 'arm64' && 'macos-15' || 'macos-15-intel' }}
-    timeout-minutes: 45
+    timeout-minutes: 75
     strategy:
       fail-fast: false
       matrix:
@@ -33,6 +33,11 @@ jobs:
         with:
           dotnet-version: 9.0.x
 
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.4'
+          cache: false
+
       - uses: jurplel/install-qt-action@v4
         with:
           version: '6.6.3'
@@ -40,10 +45,23 @@ jobs:
           target: desktop
           arch: clang_64
 
-      - name: Build and sign Aurora.app
-        run: pwsh -NoProfile -File ./desktop/Build-Mac.ps1 -Architecture "$AURORA_ARCHITECTURE" -Qmake "$QT_ROOT_DIR/bin/qmake"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
 
-      - name: Verify the packaged streaming component
+      - name: Install Sunshine build dependencies
+        run: |
+          brew install cmake node pkgconf icu4c@78 miniupnpc openssl@3 opus
+          python -m venv "$RUNNER_TEMP/aurora-host-python"
+          "$RUNNER_TEMP/aurora-host-python/bin/python" -m pip install 'Jinja2==3.1.6'
+          echo "$RUNNER_TEMP/aurora-host-python/bin" >> "$GITHUB_PATH"
+
+      - name: Build and sign Aurora.app
+        run: |
+          pwsh -NoProfile -File ./desktop/upstream/tsnet/Build-Tailnet.ps1 -Runtime "osx-$AURORA_ARCHITECTURE" -OutputDirectory "$RUNNER_TEMP/aurora-tailnet" -RunTests
+          pwsh -NoProfile -File ./desktop/Build-Mac.ps1 -Architecture "$AURORA_ARCHITECTURE" -Qmake "$QT_ROOT_DIR/bin/qmake" -TailscaleDirectory "$RUNNER_TEMP/aurora-tailnet"
+
+      - name: Verify the packaged streamer and host
         run: |
           zip="dist/Aurora-macOS-${AURORA_ARCHITECTURE}-integrated.zip"
           check="$(mktemp -d)"
@@ -53,6 +71,17 @@ jobs:
           runtime="$app/Contents/MacOS/AuroraStream"
           test -x "$runtime"
           test "$("$runtime" --aurora-runtime-info)" = aurora-stream/1
+          test "$("$runtime" --aurora-gamestream-relay-info)" = aurora-gamestream-relay/1
+          tailnet="$app/Contents/MacOS/AuroraTailnet"
+          test -x "$tailnet"
+          test "$("$tailnet" --aurora-runtime-info)" = aurora-tailnet/1
+          test -f "$app/Contents/Resources/Tailscale/licenses/SOURCE.txt"
+          host="$app/Contents/Helpers/AuroraHost.app"
+          test -x "$host/Contents/MacOS/AuroraHost"
+          test "$("$host/Contents/MacOS/AuroraHost" --aurora-runtime-info)" = aurora-host/1
+          codesign --verify --deep --strict "$host"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$host/Contents/Info.plist")" = org.aurora-remote.desktop.host
+          test -f "$host/Contents/Resources/licenses/SOURCE.txt"
 
       - uses: actions/upload-artifact@v4
         with:

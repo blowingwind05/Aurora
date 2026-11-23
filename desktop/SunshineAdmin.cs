@@ -20,9 +20,18 @@ namespace Aurora;
 internal enum SunshineAccess { Setup, Login, SignedIn }
 internal sealed record SunshinePairing(string Id, string Name, string Address)
 {
+    internal int? SourcePort { get; init; }
+
     public override string ToString() => $"{Name} · {Address}";
 }
 internal sealed record SunshinePreferences(string Name, bool StreamAudio);
+internal sealed record SunshinePrivacyDisplay(string Id, string Name)
+{
+    public override string ToString() => Name;
+}
+internal sealed record SunshineDisplaySelection(string Id, bool Exclusive);
+internal sealed record SunshinePrivacySettings(SunshineDisplaySelection Saved, SunshineDisplaySelection Active,
+    bool SupportsExtended, SunshinePrivacyDisplay[] Displays);
 
 internal sealed class SunshineLoginRejectedException()
     : InvalidOperationException("无法登录 Sunshine，请检查账号和密码。");
@@ -35,6 +44,7 @@ internal sealed class SunshineAdmin : IDisposable
     private AuthenticationHeaderValue authorization;
     public string SettingsUrl => http.BaseAddress.AbsoluteUri;
     public string CredentialScope { get; private init; }
+    internal bool IsManaged { get; private init; }
 
     internal SunshineAdmin(HttpMessageHandler handler, Uri endpoint)
     {
@@ -51,38 +61,41 @@ internal sealed class SunshineAdmin : IDisposable
     public static SunshineAdmin OpenLocal()
         => OpenLocal(null);
 
-    public static SunshineAdmin OpenLocal(byte[] importedPin)
+    public static SunshineAdmin OpenLocal(byte[] importedPin) => Open(bundled: false, importedPin);
+
+    internal static SunshineAdmin OpenBundled()
     {
-        if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException();
-        using var service = Registry.LocalMachine.OpenSubKey(@"SYSTEM\CurrentControlSet\Services\SunshineService");
-        var command = service?.GetValue("ImagePath") as string ?? "";
-        var match = Regex.Match(command, "^(?:\"([^\"]+)\"|([^\"\\r\\n]+?\\.exe))(?:\\s|$)", RegexOptions.IgnoreCase);
-        var executable = match.Success ? (match.Groups[1].Success ? match.Groups[1].Value : match.Groups[2].Value) : null;
-        if (executable != null) executable = Environment.ExpandEnvironmentVariables(executable);
-        if (executable == null || !Path.IsPathFullyQualified(executable) || executable.StartsWith(@"\\", StringComparison.Ordinal) ||
-            !string.Equals(Path.GetFileName(executable), "sunshinesvc.exe", StringComparison.OrdinalIgnoreCase))
-            throw new InvalidOperationException("没有找到可验证的 Windows Sunshine 服务安装。便携版请使用 Sunshine 自带设置页。");
-        var directory = Path.Combine(Directory.GetParent(Path.GetDirectoryName(executable)).FullName, "config");
-        var configPath = Path.Combine(directory, "sunshine.conf");
-        var options = File.Exists(configPath) ? File.ReadLines(configPath)
+        var password = BundledSunshine.ReadAdminPassword();
+        var admin = Open(bundled: true, importedPin: null);
+        admin.authorization = BasicAuthorization(BundledSunshine.AdminUsername, password);
+        return admin;
+    }
+
+    private static SunshineAdmin Open(bool bundled, byte[] importedPin)
+    {
+        var configPath = bundled ? BundledSunshine.ConfigPath : OperatingSystem.IsWindows()
+            ? InstalledConfiguration() : throw new PlatformNotSupportedException();
+        var directory = Path.GetDirectoryName(configPath);
+        var options = !bundled && File.Exists(configPath) ? File.ReadLines(configPath)
             .Select(line => line.Split('=', 2))
             .Where(parts => parts.Length == 2 && parts[0].Trim() is "cert" or "port")
             .GroupBy(parts => parts[0].Trim())
             .ToDictionary(group => group.Key, group => group.First()[1].Split('#', 2)[0].Trim()) : new();
         var defaultCertificatePath = Path.Combine(directory, "credentials", "cacert.pem");
-        var certificatePath = options.GetValueOrDefault("cert", Path.Combine("credentials", "cacert.pem"));
+        var certificatePath = bundled ? BundledSunshine.CertificatePath
+            : options.GetValueOrDefault("cert", Path.Combine("credentials", "cacert.pem"));
         if (string.IsNullOrWhiteSpace(certificatePath)) certificatePath = Path.Combine("credentials", "cacert.pem");
         certificatePath = Path.GetFullPath(certificatePath, directory);
         if (certificatePath.StartsWith(@"\\", StringComparison.Ordinal))
             throw new InvalidOperationException("Sunshine 管理只使用本机的公开证书。");
         var port = 47989;
-        if (options.TryGetValue("port", out var configured) &&
+        if (!bundled && options.TryGetValue("port", out var configured) &&
             (!int.TryParse(configured, out port) || port is < 1 or > 65534))
             throw new InvalidOperationException("Sunshine 的管理端口配置无法识别。");
-        var endpoint = new Uri($"https://127.0.0.1:{port + 1}/");
-        var scope = SunshineTrust.Scope(certificatePath, endpoint.Port);
+        var endpoint = bundled ? BundledSunshine.AdminEndpoint : new Uri($"https://127.0.0.1:{port + 1}/");
+        var scope = OperatingSystem.IsWindows() && !bundled ? SunshineTrust.Scope(certificatePath, endpoint.Port) : null;
         byte[] expected;
-        var supportsImport = string.Equals(certificatePath, defaultCertificatePath, StringComparison.OrdinalIgnoreCase);
+        var supportsImport = !bundled && string.Equals(certificatePath, defaultCertificatePath, StringComparison.OrdinalIgnoreCase);
         if (importedPin != null)
         {
             if (!supportsImport || importedPin.Length != 32) throw new SunshineCertificateAccessException();
@@ -95,7 +108,8 @@ internal sealed class SunshineAdmin : IDisposable
         }
         catch (UnauthorizedAccessException)
         {
-            if (!supportsImport)
+            if (bundled) throw new InvalidOperationException("Aurora 无法读取内置 Sunshine 的公开证书。");
+            if (!OperatingSystem.IsWindows() || !supportsImport)
                 throw new InvalidOperationException("当前账号无法读取自定义的 Sunshine 公开证书。请让管理员只开放该公开证书的读取权限。");
             expected = SunshineTrust.ReadPin(scope) ?? throw new SunshineCertificateAccessException();
         }
@@ -114,10 +128,26 @@ internal sealed class SunshineAdmin : IDisposable
         return new SunshineAdmin(handler, endpoint)
         {
             CredentialScope = $"{endpoint.Port}/{Convert.ToHexString(expected)}",
+            IsManaged = bundled,
             TrustScope = scope,
             SupportsCertificateImport = supportsImport,
             VerifiedCertificateHash = expected
         };
+    }
+
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    private static string InstalledConfiguration()
+    {
+        using var service = Registry.LocalMachine.OpenSubKey(@"SYSTEM\CurrentControlSet\Services\SunshineService");
+        var command = service?.GetValue("ImagePath") as string ?? "";
+        var match = Regex.Match(command, "^(?:\"([^\"]+)\"|([^\"\\r\\n]+?\\.exe))(?:\\s|$)", RegexOptions.IgnoreCase);
+        var executable = match.Success ? (match.Groups[1].Success ? match.Groups[1].Value : match.Groups[2].Value) : null;
+        if (executable != null) executable = Environment.ExpandEnvironmentVariables(executable);
+        if (executable == null || !Path.IsPathFullyQualified(executable) || executable.StartsWith(@"\\", StringComparison.Ordinal) ||
+            !string.Equals(Path.GetFileName(executable), "sunshinesvc.exe", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("没有找到可验证的 Windows Sunshine 服务安装。");
+        var directory = Path.Combine(Directory.GetParent(Path.GetDirectoryName(executable)).FullName, "config");
+        return Path.Combine(directory, "sunshine.conf");
     }
 
     internal static bool MatchesLocalCertificate(Uri endpoint, Uri request, byte[] expected, X509Certificate2 presented) =>
@@ -150,8 +180,7 @@ internal sealed class SunshineAdmin : IDisposable
     public async Task Login(string username, string password)
     {
         ValidateAccount(username, password);
-        authorization = new AuthenticationHeaderValue("Basic",
-            Convert.ToBase64String(Encoding.UTF8.GetBytes(username + ":" + password)));
+        authorization = BasicAuthorization(username, password);
         try
         {
             if (await CheckAccess() != SunshineAccess.SignedIn)
@@ -163,6 +192,9 @@ internal sealed class SunshineAdmin : IDisposable
             throw;
         }
     }
+
+    private static AuthenticationHeaderValue BasicAuthorization(string username, string password) =>
+        new("Basic", Convert.ToBase64String(Encoding.UTF8.GetBytes(username + ":" + password)));
 
     public async Task CreateAccount(string username, string password, string confirmation)
     {
@@ -216,16 +248,51 @@ internal sealed class SunshineAdmin : IDisposable
             throw new InvalidOperationException("回读结果与提交值不同，请检查当前 Sunshine 设置。");
     }
 
-    public async Task SavePreferences(string name, bool streamAudio)
+    internal async Task<SunshinePrivacySettings> ReadPrivacySettings()
+    {
+        if (!IsManaged || !OperatingSystem.IsWindows()) return null;
+        using var response = await Send(HttpMethod.Get, "api/aurora/privacy");
+        if (response.StatusCode == HttpStatusCode.NotFound) return null;
+        var root = await ReadSuccess(response);
+        var displays = root.GetProperty("displays").EnumerateArray()
+            .Select(item => new SunshinePrivacyDisplay(ReadText(item, "id"), ReadText(item, "name")))
+            .Where(display => Guid.TryParseExact(display.Id, "B", out _)).ToArray();
+        var supportsExtended = root.TryGetProperty("saved_exclusive", out var exclusive);
+        var savedId = ReadText(root, "saved");
+        var activeId = ReadText(root, "active");
+        return new(
+            new(savedId, savedId.Length != 0 && (!supportsExtended || exclusive.ValueKind == JsonValueKind.True)),
+            new(activeId, activeId.Length != 0 && (!supportsExtended ||
+                root.TryGetProperty("active_exclusive", out var activeExclusive) && activeExclusive.ValueKind == JsonValueKind.True)),
+            supportsExtended, displays);
+    }
+
+    public async Task SavePreferences(string name, bool streamAudio, SunshineDisplaySelection display = null)
     {
         ValidateName(name, allowEmpty: true);
         using var response = await Send(HttpMethod.Get, "api/config");
         var current = await ReadSuccess(response);
         var payload = MergePreferences(current, name, streamAudio);
+        if (display != null)
+        {
+            var privacy = await ReadPrivacySettings() ??
+                throw new InvalidOperationException("请先更新内置被控组件。");
+            if (display != privacy.Saved && display.Id.Length != 0 &&
+                !privacy.Displays.Any(candidate => candidate.Id == display.Id))
+                throw new InvalidOperationException("所选虚拟显示器已不可用，请重新打开设置。");
+            if (display.Id.Length != 0 && !display.Exclusive && !privacy.SupportsExtended)
+                throw new InvalidOperationException("请更新被控组件以保留本地显示器。");
+            payload.Remove("aurora_privacy_display_id");
+            payload.Remove("aurora_virtual_display_id");
+            if (display.Id.Length != 0)
+                payload[display.Exclusive ? "aurora_privacy_display_id" : "aurora_virtual_display_id"] = display.Id;
+        }
         await Post("api/config", payload);
         var saved = await ReadPreferences();
         if (saved.Name != name || saved.StreamAudio != streamAudio)
             throw new InvalidOperationException("Sunshine 没有返回刚保存的值，请重新读取设置。");
+        if (display != null && (await ReadPrivacySettings())?.Saved != display)
+            throw new InvalidOperationException("无法确认已保存的显示设置，请重新读取设置。");
     }
 
     internal static Dictionary<string, object> MergePreferences(JsonElement current, string name, bool streamAudio)
@@ -255,10 +322,18 @@ internal sealed class SunshineAdmin : IDisposable
         response.EnsureSuccessStatusCode();
         var root = await ReadJson(response);
         if (!root.TryGetProperty("pairings", out var items) || items.ValueKind != JsonValueKind.Array)
-            throw new InvalidOperationException("当前 Sunshine 不支持在极光内选择待确认的配对。");
-        return items.EnumerateArray()
-            .Select(item => new SunshinePairing(ReadText(item, "id"), ReadText(item, "name"), ReadText(item, "address")))
-            .Where(item => Regex.IsMatch(item.Id, @"\A[0-9a-fA-F]{32}\z")).ToArray();
+            throw new InvalidOperationException("当前 Sunshine 不支持在 Aurora 内选择待确认的配对。");
+        return items.EnumerateArray().Select(ParsePendingPairing).Where(item => item != null).ToArray();
+    }
+
+    internal static SunshinePairing ParsePendingPairing(JsonElement item)
+    {
+        if (item.ValueKind != JsonValueKind.Object) return null;
+        var id = ReadText(item, "id");
+        if (!Regex.IsMatch(id, @"\A[0-9a-fA-F]{32}\z")) return null;
+        int? sourcePort = item.TryGetProperty("sourcePort", out var value) && value.ValueKind == JsonValueKind.Number &&
+            value.TryGetInt32(out var port) && port is > 0 and <= IPEndPoint.MaxPort ? port : null;
+        return new(id, ReadText(item, "name"), ReadText(item, "address")) { SourcePort = sourcePort };
     }
 
     public Task Pair(SunshinePairing pairing, string pin, string name) => Pair(pairing, pin, name, CancellationToken.None);

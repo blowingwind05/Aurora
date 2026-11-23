@@ -7,3 +7,5 @@ desktop/bin/
 desktop/obj/
 .DS_Store
 *.app/
+tests/windows-visual/bin/
+tests/windows-visual/obj/

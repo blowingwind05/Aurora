@@ -1,0 +1,290 @@
+diff --git a/app/backend/computermanager.cpp b/app/backend/computermanager.cpp
+--- a/app/backend/computermanager.cpp
++++ b/app/backend/computermanager.cpp
+@@ -828,7 +828,8 @@
+             if (!m_Mdns) {
+                 unsigned int portTestResult;
+ 
+-                if (m_ComputerManager->m_Prefs->detectNetworkBlocking) {
++                if (NvHTTP::gameStreamRelayBase(m_Address) == 0 &&
++                    m_ComputerManager->m_Prefs->detectNetworkBlocking) {
+                     // We failed to connect to the specified PC. Let's test to make sure this network
+                     // isn't blocking Moonlight, so we can tell the user about it.
+                     portTestResult = LiTestClientConnectivity("qt.conntest.moonlight-stream.org", 443,
+@@ -913,7 +914,7 @@
+                 newComputer->ipv6Address = m_MdnsIpv6Address;
+             }
+         }
+-        else {
++        else if (NvHTTP::gameStreamRelayBase(m_Address) == 0) {
+             newComputer->manualAddress = m_Address;
+         }
+ 
+diff --git a/app/backend/computerseeker.cpp b/app/backend/computerseeker.cpp
+--- a/app/backend/computerseeker.cpp
++++ b/app/backend/computerseeker.cpp
+@@ -1,5 +1,6 @@
+ #include "computerseeker.h"
+ #include "computermanager.h"
++#include "nvhttp.h"
+ #include <QPointer>
+ #include <QTimer>
+ 
+@@ -9,7 +10,7 @@
+ {
+     // If we know this computer, send a WOL packet to wake it up in case it is asleep.
+     for (NvComputer * computer: m_ComputerManager->getComputers()) {
+-        if (this->matchComputer(computer)) {
++        if (NvHTTP::gameStreamRelayAddress().isNull() && this->matchComputer(computer)) {
+             computer->wake();
+         }
+     }
+@@ -24,6 +25,12 @@
+ void ComputerSeeker::start(int timeout)
+ {
+     m_TimeoutTimer->start(timeout);
++    const auto relayAddress = NvHTTP::gameStreamRelayAddress();
++    if (!relayAddress.isNull()) {
++        m_ComputerManager->addNewHostManually(relayAddress.toString());
++        return;
++    }
++
+     // Seek desired computer by both connecting to it directly (this may fail
+     // if m_ComputerName is UUID, or the name that doesn't resolve to an IP
+     // address) and by polling it using mDNS, hopefully one of these methods
+@@ -38,7 +45,9 @@
+         return;
+     }
+     if (matchComputer(computer) && isOnline(computer)) {
+-        m_ComputerManager->stopPollingAsync();
++        if (NvHTTP::gameStreamRelayAddress().isNull()) {
++            m_ComputerManager->stopPollingAsync();
++        }
+         m_TimeoutTimer->stop();
+         if (m_LoadApps) {
+             QPointer<ComputerSeeker> self(this);
+@@ -51,6 +60,11 @@
+ 
+ bool ComputerSeeker::matchComputer(NvComputer *computer) const
+ {
++    const auto relayAddress = NvHTTP::gameStreamRelayAddress();
++    if (!relayAddress.isNull()) {
++        return computer->activeAddress == relayAddress &&
++               computer->uuid == qEnvironmentVariable("AURORA_GAMESTREAM_HOST_UUID");
++    }
+     QString value = m_ComputerName.toLower();
+ 
+     if (computer->name.toLower() == value || computer->uuid.toLower() == value) {
+@@ -74,6 +88,8 @@
+ void ComputerSeeker::onTimeout()
+ {
+     m_TimeoutTimer->stop();
+-    m_ComputerManager->stopPollingAsync();
++    if (NvHTTP::gameStreamRelayAddress().isNull()) {
++        m_ComputerManager->stopPollingAsync();
++    }
+     emit errorTimeout();
+ }
+diff --git a/app/backend/nvcomputer.cpp b/app/backend/nvcomputer.cpp
+--- a/app/backend/nvcomputer.cpp
++++ b/app/backend/nvcomputer.cpp
+@@ -193,6 +193,14 @@
+         this->remoteAddress = NvAddress(remoteAddress, this->externalPort);
+     }
+     else {
++        this->remoteAddress = NvAddress();
++    }
++
++    if (NvHTTP::gameStreamRelayBase(http.address()) != 0) {
++        // The active route belongs to this process. Persist the real UUID and
++        // certificate without saving loopback or the addresses seen by the relay host.
++        this->activeHttpsPort = http.httpsPort();
++        this->localAddress = NvAddress();
+         this->remoteAddress = NvAddress();
+     }
+ 
+diff --git a/app/backend/nvhttp.cpp b/app/backend/nvhttp.cpp
+--- a/app/backend/nvhttp.cpp
++++ b/app/backend/nvhttp.cpp
+@@ -1,4 +1,7 @@
+ #include "nvcomputer.h"
++#ifdef AURORA_STREAM_RUNTIME
++#include "../AuroraStreamEntry.h"
++#endif
+ #include <Limelight.h>
+ 
+ #include <QDebug>
+@@ -20,7 +23,7 @@
+ 
+ NvHTTP::NvHTTP(NvAddress address, uint16_t httpsPort, QSslCertificate serverCert, bool exactEndpoint) :
+     m_ServerCert(serverCert),
+-    m_ExactEndpoint(exactEndpoint)
++    m_ExactEndpoint(exactEndpoint || gameStreamRelayBase(address) != 0)
+ {
+     m_BaseUrlHttp.setScheme("http");
+     m_BaseUrlHttps.setScheme("https");
+@@ -58,9 +61,27 @@
+     m_BaseUrlHttp.setPort(address.port());
+ }
+ 
++NvAddress NvHTTP::gameStreamRelayAddress()
++{
++#ifdef AURORA_STREAM_RUNTIME
++    const int base = auroraGameStreamRelayBase();
++    if (base > 0) {
++        return NvAddress(QStringLiteral("127.0.0.1"), static_cast<uint16_t>(base));
++    }
++#endif
++    return NvAddress();
++}
++
++uint16_t NvHTTP::gameStreamRelayBase(const NvAddress& address)
++{
++    const auto relayAddress = gameStreamRelayAddress();
++    return !relayAddress.isNull() && address == relayAddress ? relayAddress.port() : 0;
++}
++
+ void NvHTTP::setHttpsPort(uint16_t port)
+ {
+-    m_BaseUrlHttps.setPort(port);
++    const auto relayBase = gameStreamRelayBase(m_Address);
++    m_BaseUrlHttps.setPort(relayBase != 0 ? relayBase - 5 : port);
+ }
+ 
+ NvAddress NvHTTP::address()
+@@ -184,6 +205,10 @@
+         }
+     }
+ 
++    if (gameStreamRelayBase(m_Address) != 0 &&
++        getXmlString(serverInfo, "uniqueid") != qEnvironmentVariable("AURORA_GAMESTREAM_HOST_UUID")) {
++        throw GfeHttpResponseException(409, QStringLiteral("GameStream relay reached an unexpected host UUID"));
++    }
+     return serverInfo;
+ }
+ 
+diff --git a/app/backend/nvhttp.h b/app/backend/nvhttp.h
+--- a/app/backend/nvhttp.h
++++ b/app/backend/nvhttp.h
+@@ -149,6 +149,9 @@
+     NvAddress address();
+ 
+     QSslCertificate serverCert();
++
++    static NvAddress gameStreamRelayAddress();
++    static uint16_t gameStreamRelayBase(const NvAddress& address);
+ 
+     uint16_t httpPort();
+ 
+diff --git a/app/main.cpp b/app/main.cpp
+--- a/app/main.cpp
++++ b/app/main.cpp
+@@ -333,6 +333,10 @@
+     IdentityManager::get();
+     ComputerManager manager(StreamingPreferences::get(), true);
+     const auto address = parser.getAuroraPairAddress();
++    if (!NvHTTP::gameStreamRelayAddress().isNull() && NvHTTP::gameStreamRelayBase(address) == 0) {
++        fputs("Aurora pairing address does not match its GameStream relay.\n", stderr);
++        return 1;
++    }
+     CliPair::Launcher launcher(address.toString(), parser.getPredefinedPin(), nullptr,
+                                QStringLiteral("aurora-") + parser.getAuroraPairId(), address);
+ 
+diff --git a/app/streaming/session.cpp b/app/streaming/session.cpp
+--- a/app/streaming/session.cpp
++++ b/app/streaming/session.cpp
+@@ -1449,7 +1449,8 @@
+     QByteArray hostnameStr = m_Computer->activeAddress.address().toLatin1();
+     QByteArray siAppVersion = m_Computer->appVersion.toLatin1();
+ 
+-    SERVER_INFORMATION hostInfo;
++    SERVER_INFORMATION hostInfo = {};
++    hostInfo.auroraRelayBasePort = NvHTTP::gameStreamRelayBase(m_Computer->activeAddress);
+     hostInfo.address = hostnameStr.data();
+     hostInfo.serverInfoAppVersion = siAppVersion.data();
+     hostInfo.serverCodecModeSupport = m_Computer->serverCodecModeSupport;
+@@ -1470,7 +1471,13 @@
+         hostInfo.rtspSessionUrl = rtspSessionUrlStr.data();
+     }
+ 
+-    if (m_Preferences->packetSize != 0) {
++    if (hostInfo.auroraRelayBasePort != 0) {
++        // Loopback hides the overlay MTU from the normal reachability test.
++        m_StreamConfig.streamingRemotely = STREAM_CFG_REMOTE;
++        m_StreamConfig.packetSize = m_Preferences->packetSize > 0 ?
++                qMin(m_Preferences->packetSize, 1024) : 1024;
++    }
++    else if (m_Preferences->packetSize != 0) {
+         // Override default packet size and remote streaming detection
+         // NB: Using STREAM_CFG_AUTO will cap our packet size at 1024 for remote hosts.
+         m_StreamConfig.streamingRemotely = STREAM_CFG_LOCAL;
+diff --git a/moonlight-common-c/moonlight-common-c/src/Connection.c b/moonlight-common-c/moonlight-common-c/src/Connection.c
+--- a/moonlight-common-c/moonlight-common-c/src/Connection.c
++++ b/moonlight-common-c/moonlight-common-c/src/Connection.c
+@@ -269,7 +269,13 @@
+     AudioPortNumber = 0;
+ 
+     // Parse RTSP port number from RTSP session URL
+-    if (!parseRtspPortNumberFromUrl(serverInfo->rtspSessionUrl, &RtspPortNumber)) {
++    if (serverInfo->auroraRelayBasePort != 0) {
++        // Keep sessionUrl0 intact for RTSP requests and encryption negotiation.
++        // Use the local relay port only for the actual TCP connection.
++        RtspPortNumber = serverInfo->auroraRelayBasePort + 21;
++        Limelog("Aurora relay RTSP port: %u\n", RtspPortNumber);
++    }
++    else if (!parseRtspPortNumberFromUrl(serverInfo->rtspSessionUrl, &RtspPortNumber)) {
+         // Use the well known port if parsing fails
+         RtspPortNumber = 48010;
+ 
+diff --git a/moonlight-common-c/moonlight-common-c/src/Limelight.h b/moonlight-common-c/moonlight-common-c/src/Limelight.h
+--- a/moonlight-common-c/moonlight-common-c/src/Limelight.h
++++ b/moonlight-common-c/moonlight-common-c/src/Limelight.h
+@@ -512,6 +512,9 @@
+ 
+     // Specifies the 'ServerCodecModeSupport' from the /serverinfo response.
+     int serverCodecModeSupport;
++
++    // Local Aurora relay HTTP base, or zero for direct GameStream connections.
++    unsigned short auroraRelayBasePort;
+ } SERVER_INFORMATION, *PSERVER_INFORMATION;
+ 
+ // Use this function to zero the server information when allocated on the stack or heap
+diff --git a/moonlight-common-c/moonlight-common-c/src/RtspConnection.c b/moonlight-common-c/moonlight-common-c/src/RtspConnection.c
+--- a/moonlight-common-c/moonlight-common-c/src/RtspConnection.c
++++ b/moonlight-common-c/moonlight-common-c/src/RtspConnection.c
+@@ -1144,7 +1144,10 @@
+ 
+         // Parse the audio port out of the RTSP SETUP response
+         LC_ASSERT(AudioPortNumber == 0);
+-        if (!parseServerPortFromTransport(&response, &AudioPortNumber)) {
++        if (serverInfo->auroraRelayBasePort != 0) {
++            AudioPortNumber = serverInfo->auroraRelayBasePort + 11;
++        }
++        else if (!parseServerPortFromTransport(&response, &AudioPortNumber)) {
+             // Use the well known port if parsing fails
+             AudioPortNumber = 48000;
+ 
+@@ -1220,7 +1223,10 @@
+ 
+         // Parse the video port out of the RTSP SETUP response
+         LC_ASSERT(VideoPortNumber == 0);
+-        if (!parseServerPortFromTransport(&response, &VideoPortNumber)) {
++        if (serverInfo->auroraRelayBasePort != 0) {
++            VideoPortNumber = serverInfo->auroraRelayBasePort + 9;
++        }
++        else if (!parseServerPortFromTransport(&response, &VideoPortNumber)) {
+             // Use the well known port if parsing fails
+             VideoPortNumber = 47998;
+ 
+@@ -1264,7 +1270,10 @@
+ 
+         // Parse the control port out of the RTSP SETUP response
+         LC_ASSERT(ControlPortNumber == 0);
+-        if (!parseServerPortFromTransport(&response, &ControlPortNumber)) {
++        if (serverInfo->auroraRelayBasePort != 0) {
++            ControlPortNumber = serverInfo->auroraRelayBasePort + 10;
++        }
++        else if (!parseServerPortFromTransport(&response, &ControlPortNumber)) {
+             // Use the well known port if parsing fails
+             ControlPortNumber = 47999;
+ 

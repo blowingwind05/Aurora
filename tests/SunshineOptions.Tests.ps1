@@ -1,6 +1,6 @@
 #Requires -Version 7.3
 
-param([string] $AssemblyPath = (Join-Path $PSScriptRoot '../dist/Avalonia-0.7/Aurora.dll'))
+param([Parameter(Mandatory)][string] $AssemblyPath)
 
 $ErrorActionPreference = 'Stop'
 $assembly = [Reflection.Assembly]::LoadFrom((Resolve-Path -LiteralPath $AssemblyPath).Path)

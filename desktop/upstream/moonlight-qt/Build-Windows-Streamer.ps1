@@ -34,12 +34,14 @@ $source = (Resolve-Path -LiteralPath $SourceDirectory).Path
 if ((git -C $source rev-parse HEAD) -ne $revision -or $LASTEXITCODE -ne 0) { throw 'Unexpected Moonlight source revision.' }
 git -C $source diff --quiet HEAD
 if ($LASTEXITCODE -ne 0) { throw 'Use an unmodified Moonlight v6.0.0 source checkout.' }
-$patches = Get-ChildItem -LiteralPath $PSScriptRoot -Filter '*.patch' | Sort-Object Name
+$patches = Get-ChildItem -LiteralPath $PSScriptRoot -Filter '*.patch' |
+    Where-Object Name -NotLike '*-macos-*' | Sort-Object Name
 foreach ($patch in $patches) {
     git -C $source apply $patch.FullName
     if ($LASTEXITCODE -ne 0) { throw "Cannot apply $($patch.Name) to the Moonlight source." }
 }
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'AuroraStreamEntry.h') -Destination (Join-Path $source 'app')
+Copy-Item -LiteralPath (Join-Path $desktop 'Assets/Aurora.ico') -Destination (Join-Path $source 'app/moonlight.ico') -Force
 
 $previousPath = $env:PATH
 $env:PATH = "$qtBin;$previousPath"

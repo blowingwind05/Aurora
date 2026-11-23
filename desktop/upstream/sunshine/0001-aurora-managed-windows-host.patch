@@ -1,0 +1,238 @@
+diff --git a/cmake/packaging/windows.cmake b/cmake/packaging/windows.cmake
+index 27a33d4..c0e5b73 100644
+--- a/cmake/packaging/windows.cmake
++++ b/cmake/packaging/windows.cmake
+@@ -99,5 +99,7 @@ set(CPACK_COMPONENT_FIREWALL_DESCRIPTION "Scripts to enable or disable firewall
+ set(CPACK_COMPONENT_FIREWALL_GROUP "Scripts")
+ 
+ # include specific packaging
+-include(${CMAKE_MODULE_PATH}/packaging/windows_nsis.cmake)
+-include(${CMAKE_MODULE_PATH}/packaging/windows_wix.cmake)
++if(NOT AURORA_SUNSHINE_HOST)
++    include(${CMAKE_MODULE_PATH}/packaging/windows_nsis.cmake)
++    include(${CMAKE_MODULE_PATH}/packaging/windows_wix.cmake)
++endif()
+diff --git a/cmake/targets/windows.cmake b/cmake/targets/windows.cmake
+index d5807aa..1a7812f 100644
+--- a/cmake/targets/windows.cmake
++++ b/cmake/targets/windows.cmake
+@@ -1,4 +1,8 @@
+ # windows specific target definitions
++option(AURORA_SUNSHINE_HOST "Build the Windows host companion managed by Aurora" OFF)
++if(AURORA_SUNSHINE_HOST)
++    target_compile_definitions(sunshine PRIVATE AURORA_SUNSHINE_HOST=1)
++endif()
+ set_target_properties(sunshine PROPERTIES LINK_SEARCH_START_STATIC 1)
+ set(CMAKE_FIND_LIBRARY_SUFFIXES ".dll")
+ find_library(ZLIB ZLIB1)
+diff --git a/src/confighttp.cpp b/src/confighttp.cpp
+index 1b47397..75b47ff 100644
+--- a/src/confighttp.cpp
++++ b/src/confighttp.cpp
+@@ -2315,7 +2315,6 @@ namespace confighttp {
+     const auto shutdown_event = mail::man->event<bool>(mail::shutdown);
+ 
+     const auto port_https = net::map_port(PORT_HTTPS);
+-    const auto address_family = net::af_from_enum_string(config::sunshine.address_family);
+ 
+     https_server_t server {config::nvhttp.cert, config::nvhttp.pkey};
+ 
+@@ -2387,10 +2386,15 @@ namespace confighttp {
+     server.resource["^/assets\\/.+$"]["GET"] = getAsset;
+ 
+     server.config.reuse_address = true;
+-    server.config.address = net::get_bind_address(address_family);
+-    server.config.port = port_https;
+-
++#ifdef AURORA_SUNSHINE_HOST
++    // Only the configuration interface is loopback-only; GameStream still uses the streaming interfaces.
++    server.config.address = "127.0.0.1";
++    const auto display_addr = server.config.address;
++#else
++    server.config.address = net::get_bind_address(net::af_from_enum_string(config::sunshine.address_family));
+     const auto display_addr = net::get_bind_address_url_host();
++#endif
++    server.config.port = port_https;
+ 
+     auto accept_and_run = [&](auto *server) {
+       try {
+diff --git a/src/main.cpp b/src/main.cpp
+index f349a23..6821e4c 100644
+--- a/src/main.cpp
++++ b/src/main.cpp
+@@ -182,6 +182,20 @@ void mainThreadLoop(const std::shared_ptr<safe::event_t<bool>> &shutdown_event)
+  * @return Process or platform callback exit code.
+  */
+ int main(int argc, char *argv[]) {
++#ifdef AURORA_SUNSHINE_HOST
++  wchar_t stop_name[128];
++  const auto stop_name_length = GetEnvironmentVariableW(L"AURORA_SUNSHINE_STOP_EVENT", stop_name, _countof(stop_name));
++  if (platf::aurora_profile().empty() || stop_name_length == 0 || stop_name_length >= _countof(stop_name)) {
++    return 1;
++  }
++  const auto aurora_stop = OpenEventW(SYNCHRONIZE, FALSE, stop_name);
++  if (!aurora_stop) {
++    return 1;
++  }
++  const auto close_aurora_stop = util::fail_guard([&]() { CloseHandle(aurora_stop); });
++  SetEnvironmentVariableW(L"AURORA_SUNSHINE_PROFILE", nullptr);
++  SetEnvironmentVariableW(L"AURORA_SUNSHINE_STOP_EVENT", nullptr);
++#endif
+ #ifdef __linux__
+   const bool privileged_execution = getauxval(AT_SECURE) != 0 || platf::has_elevated_privileges(true);
+   if (privileged_execution && !platf::sanitize_process_environment()) {
+@@ -239,6 +253,10 @@ int main(int argc, char *argv[]) {
+   SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_APPLICATION_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);
+ 
+   setlocale(LC_ALL, "C");
++#ifdef AURORA_SUNSHINE_HOST
++  // Sunshine uses narrow file APIs for parts of the profile under LocalAppData.
++  setlocale(LC_CTYPE, ".UTF-8");
++#endif
+ #endif
+ 
+ #pragma GCC diagnostic push
+@@ -253,6 +271,9 @@ int main(int argc, char *argv[]) {
+   if (config::parse(argc, argv)) {
+     return 0;
+   }
++#ifdef AURORA_SUNSHINE_HOST
++  config::sunshine.flags.reset(config::flag::UPNP);
++#endif
+ 
+   auto log_deinit_guard = logging::init(config::sunshine.min_log_level, config::sunshine.log_file);
+   if (!log_deinit_guard) {
+@@ -516,6 +537,19 @@ int main(int argc, char *argv[]) {
+ #endif
+   }
+ 
++#ifdef AURORA_SUNSHINE_HOST
++  std::jthread aurora_shutdown {[&](std::stop_token stop) {
++    while (!stop.stop_requested() && !shutdown_event->peek()) {
++      const auto result = WaitForSingleObject(aurora_stop, 200);
++      if (result != WAIT_TIMEOUT) {
++        if (!shutdown_event->peek()) {
++          lifetime::exit_sunshine(0, true);
++        }
++        break;
++      }
++    }
++  }};
++#endif
+   mainThreadLoop(shutdown_event);
+ 
+   httpThread.join();
+diff --git a/src/platform/common.h b/src/platform/common.h
+index 325f913..5b8d466 100644
+--- a/src/platform/common.h
++++ b/src/platform/common.h
+@@ -878,6 +878,11 @@ namespace platf {
+ 
+   std::filesystem::path appdata();
+ 
++#ifdef AURORA_SUNSHINE_HOST
++  const std::filesystem::path &aurora_profile();
++  inline constexpr int AURORA_RESTART_EXIT_CODE = 42;
++#endif
++
+   /**
+    * @brief Return the hardware MAC address associated with a network address.
+    *
+diff --git a/src/platform/windows/misc.cpp b/src/platform/windows/misc.cpp
+index a03f56d..b5e5421 100644
+--- a/src/platform/windows/misc.cpp
++++ b/src/platform/windows/misc.cpp
+@@ -144,7 +144,37 @@ namespace platf {
+   decltype(WlanEnumInterfaces) *fn_WlanEnumInterfaces = nullptr;  ///< Fn wlan enum interfaces.
+   decltype(WlanSetInterface) *fn_WlanSetInterface = nullptr;  ///< Fn wlan set interface.
+ 
++#ifdef AURORA_SUNSHINE_HOST
++  const std::filesystem::path &aurora_profile() {
++    static const auto path = []() -> std::filesystem::path {
++      constexpr auto variable = L"AURORA_SUNSHINE_PROFILE";
++      const auto size = GetEnvironmentVariableW(variable, nullptr, 0);
++      if (size == 0) {
++        return {};
++      }
++      std::wstring value(size, L'\0');
++      const auto length = GetEnvironmentVariableW(variable, value.data(), size);
++      if (length == 0 || length >= size) {
++        return {};
++      }
++      value.resize(length);
++      const std::filesystem::path directory {value};
++      const auto drive = directory.root_name().native();
++      if (!directory.is_absolute() || drive.size() != 2 || drive[1] != L':') {
++        return {};
++      }
++      return directory;
++    }();
++    return path;
++  }
++#endif
++
+   std::filesystem::path appdata() {
++#ifdef AURORA_SUNSHINE_HOST
++    if (!aurora_profile().empty()) {
++      return aurora_profile();
++    }
++#endif
+     WCHAR sunshine_path[MAX_PATH];
+     GetModuleFileNameW(nullptr, sunshine_path, _countof(sunshine_path));
+     return std::filesystem::path {sunshine_path}.remove_filename() / L"config"sv;
+@@ -1311,6 +1341,9 @@ namespace platf {
+   }
+ 
+   void restart() {
++#ifdef AURORA_SUNSHINE_HOST
++    lifetime::exit_sunshine(AURORA_RESTART_EXIT_CODE, true);
++#else
+     // If we're running standalone, we have to respawn ourselves via CreateProcess().
+     // If we're running from the service, we should just exit and let it respawn us.
+     if (GetConsoleWindow() != nullptr) {
+@@ -1320,6 +1353,7 @@ namespace platf {
+ 
+     // We use an async exit call here because we can't block the HTTP thread or we'll hang shutdown.
+     lifetime::exit_sunshine(0, true);
++#endif
+   }
+ 
+   /**
+diff --git a/src/platform/windows/nvprefs/nvprefs_interface.cpp b/src/platform/windows/nvprefs/nvprefs_interface.cpp
+index 09ad072..7dc17df 100644
+--- a/src/platform/windows/nvprefs/nvprefs_interface.cpp
++++ b/src/platform/windows/nvprefs/nvprefs_interface.cpp
+@@ -10,12 +10,14 @@
+ #include "nvprefs_interface.h"
+ #include "undo_file.h"
+ 
++#ifndef AURORA_SUNSHINE_HOST
+ namespace {
+ 
+   const auto sunshine_program_data_folder = "Sunshine";
+   const auto nvprefs_undo_file_name = "nvprefs_undo.json";
+ 
+ }  // namespace
++#endif
+ 
+ namespace nvprefs {
+ 
+@@ -43,6 +45,10 @@ namespace nvprefs {
+   }
+ 
+   bool nvprefs_interface::load() {
++#ifdef AURORA_SUNSHINE_HOST
++    // The companion leaves the installed Sunshine application's NVIDIA settings and undo file alone.
++    return false;
++#else
+     if (!pimpl->loaded) {
+       // Check %ProgramData% variable, need it for storing undo file
+       wchar_t program_data_env[MAX_PATH];
+@@ -61,6 +67,7 @@ namespace nvprefs {
+     }
+ 
+     return pimpl->loaded;
++#endif
+   }
+ 
+   void nvprefs_interface::unload() {

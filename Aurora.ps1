@@ -21,8 +21,8 @@ try {
         throw 'This Aurora prototype supports Windows only.'
     }
 
-    . (Join-Path $PSScriptRoot 'src/Tailscale.ps1')
-    . (Join-Path $PSScriptRoot 'src/Moonlight.ps1')
+    . (Join-Path $PSScriptRoot 'cli/Tailscale.ps1')
+    . (Join-Path $PSScriptRoot 'cli/Moonlight.ps1')
 
     $needsTarget = $Command -in 'Pair', 'Apps', 'Stream'
     if ($needsTarget -and [string]::IsNullOrWhiteSpace($Target)) {

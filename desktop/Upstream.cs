@@ -20,6 +20,8 @@ namespace Aurora
         public string Name;
         public string Platform;
         public IPAddress Address;
+        public IPAddress AlternateAddress;
+        public IPAddress LanAddress;
         public bool Online;
         public StreamHost Lan;
         public StreamHost Tailnet;
@@ -32,13 +34,17 @@ namespace Aurora
         public IPAddress LocalAddress;
         public long Owner;
         public string LocalId;
+        public TailscaleMode Mode;
+        public int Generation;
         public List<Device> Devices = new List<Device>();
+        public bool IsAuthenticated => Owner > 0 && !string.IsNullOrWhiteSpace(LocalId) && LocalAddress != null;
     }
 
     internal sealed class HostStatus
     {
         public bool Installed;
         public bool SettingsAvailable;
+        public bool Managed;
     }
 
     internal sealed class MoonlightNotFoundException : InvalidOperationException
@@ -90,19 +96,8 @@ namespace Aurora
             return null;
         }
 
-        private static string RunHidden(string executable, string arguments, int timeout, bool tailscaleMode = false)
+        private static string RunHidden(ProcessStartInfo options, int timeout)
         {
-            var options = new ProcessStartInfo(executable, arguments)
-            {
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                StandardOutputEncoding = Encoding.UTF8,
-                StandardErrorEncoding = Encoding.UTF8
-            };
-            if (tailscaleMode && OperatingSystem.IsMacOS())
-                options.Environment["TAILSCALE_BE_CLI"] = "1";
             using (var process = Process.Start(options))
             {
                 var output = process.StandardOutput.ReadToEndAsync();
@@ -122,52 +117,200 @@ namespace Aurora
             }
         }
 
-        private static string FindTailscale() =>
+        internal static bool HasSystemTailscale => FindSystemTailscale() != null;
+
+        private static string FindSystemTailscale() =>
             OperatingSystem.IsMacOS() ? MacTailscaleCandidates().FirstOrDefault(File.Exists)
-                : FindProgram(@"Tailscale\tailscale.exe", "tailscale.exe");
+                : BundledTailscale.FindWindowsCli(TailscaleMode.System);
 
         public static NetworkSnapshot ReadNetwork()
         {
-            var path = FindTailscale();
-            if (path == null) throw new InvalidOperationException("找不到 Tailscale，请先安装并登录。");
-            return ParseNetwork(RunHidden(path, "status --json", 8000, tailscaleMode: true));
+            var mode = TailscaleRuntime.Mode;
+            var generation = TailscaleRuntime.Generation;
+            VerifyActiveMode(mode);
+            var snapshot = ParseNetwork(ReadStatusJson(mode));
+            VerifyActiveMode(mode);
+            if (generation != TailscaleRuntime.Generation) throw new InvalidOperationException("Tailscale 账号已切换，请重新连接。");
+            snapshot.Mode = mode;
+            snapshot.Generation = generation;
+            return snapshot;
         }
 
-        internal static Process StartTailscale(params string[] arguments)
+        private static void VerifyActiveMode(TailscaleMode mode)
         {
-            var path = FindTailscale() ?? throw new InvalidOperationException("请先安装 Tailscale。");
+            if (TailscaleRuntime.IsTransitioning || mode != TailscaleRuntime.Mode)
+                throw new InvalidOperationException("Tailscale 连接方式或账号正在切换，请稍后重试。");
+        }
+
+        private static ProcessStartInfo TailscaleCommand(TailscaleMode mode, string[] arguments)
+        {
+            if (mode != TailscaleMode.System) throw new InvalidOperationException("内置 Tailscale 通过 Aurora 网络组件连接。");
+            var path = FindSystemTailscale() ?? throw new InvalidOperationException("请在「Tailscale 账户」中启用 Tailscale。");
             var options = new ProcessStartInfo(path)
             {
                 UseShellExecute = false, CreateNoWindow = true,
-                RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true
+                RedirectStandardOutput = true, RedirectStandardError = true,
+                StandardOutputEncoding = Encoding.UTF8, StandardErrorEncoding = Encoding.UTF8
             };
             if (OperatingSystem.IsMacOS()) options.Environment["TAILSCALE_BE_CLI"] = "1";
+            // Windows pipe names are case-insensitive. Spelling out the name in lowercase also
+            // keeps the upstream CLI from falling back to its per-user development pipe.
+            if (OperatingSystem.IsWindows()) options.ArgumentList.Add(@"--socket=\\.\pipe\" + BundledTailscale.SystemPipe.ToLowerInvariant());
             foreach (var argument in arguments) options.ArgumentList.Add(argument);
+            return options;
+        }
+
+        private static string RunTailscale(TailscaleMode mode, int timeout, params string[] arguments) =>
+            RunHidden(TailscaleCommand(mode, arguments), timeout);
+
+        private static string ReadStatusJson(TailscaleMode mode) => mode == TailscaleMode.Embedded
+            ? EmbeddedTailnet.ReadStatus() : RunTailscale(mode, 8000, "status", "--json");
+
+        internal static Process StartTailscale(NetworkSnapshot network, params string[] arguments)
+        {
+            VerifyActiveMode(network.Mode);
+            if (network.Generation != TailscaleRuntime.Generation)
+                throw new InvalidOperationException("Tailscale 账号已切换，请重新连接。");
+            var options = TailscaleCommand(network.Mode, arguments);
+            options.RedirectStandardInput = true;
             var process = Process.Start(options);
             process.ErrorDataReceived += (_, _) => { };
             process.BeginErrorReadLine();
             return process;
         }
 
-        public static TailscaleStatus ReadTailscale()
+        public static TailscaleStatus ReadTailscale() => ReadTailscaleSnapshot().Status;
+
+        internal static (TailscaleStatus Status, NetworkSnapshot Network) ReadAccountNetwork()
         {
-            var path = FindTailscale();
-            if (path == null) return new(TailscaleState.NotInstalled);
-            return TailscaleStatus.Parse(RunHidden(path, "status --json", 8000, tailscaleMode: true));
+            var mode = TailscaleRuntime.Mode;
+            var generation = TailscaleRuntime.Generation;
+            var (status, json) = ReadTailscaleSnapshot(mode);
+            if (status.State != TailscaleState.Connected) return (status, null);
+            var network = ParseNetwork(json);
+            network.Mode = mode;
+            network.Generation = generation;
+            VerifyActiveMode(mode);
+            if (generation != TailscaleRuntime.Generation) return (new(TailscaleState.Starting), null);
+            return (status, network.IsAuthenticated ? network : null);
+        }
+
+        private static (TailscaleStatus Status, string Json) ReadTailscaleSnapshot(TailscaleMode? selected = null)
+        {
+            var mode = selected ?? TailscaleRuntime.Mode;
+            if (TailscaleRuntime.IsTransitioning || mode != TailscaleRuntime.Mode) return (new(TailscaleState.Starting), null);
+            if (mode == TailscaleMode.Embedded && !EmbeddedTailnet.IsAvailable || mode == TailscaleMode.System && !HasSystemTailscale)
+                return (new(TailscaleState.NotInstalled), null);
+            if (OperatingSystem.IsWindows() && mode == TailscaleMode.System)
+            {
+                var service = BundledTailscale.ReadWindowsService(mode);
+                if (service == WindowsServiceState.Starting) return (new(TailscaleState.Starting), null);
+                if (service == WindowsServiceState.Stopped) return (new(TailscaleState.Stopped), null);
+            }
+            var json = ReadStatusJson(mode);
+            return (TailscaleStatus.Parse(json), json);
+        }
+
+        internal static void LogoutTailscale()
+        {
+            var mode = TailscaleRuntime.Mode;
+            VerifyActiveMode(mode);
+            if (mode == TailscaleMode.Embedded) EmbeddedTailnet.Request("logout").GetAwaiter().GetResult();
+            else RunTailscale(mode, 8000, "logout");
         }
 
         public static void RequestTailscaleConnection()
         {
-            var path = FindTailscale() ?? throw new InvalidOperationException("请先安装 Tailscale。");
-            try { RunHidden(path, "up", 5000, tailscaleMode: true); }
+            var mode = TailscaleRuntime.Mode;
+            VerifyActiveMode(mode);
+            if (mode == TailscaleMode.Embedded)
+            {
+                EmbeddedTailnet.Request("login").GetAwaiter().GetResult();
+                return;
+            }
+            try { RunTailscale(mode, 5000, "up"); }
             catch (System.TimeoutException) { }
         }
 
-        public static void InstallTailscale()
+        internal static TailscaleProfile[] ReadSystemTailscaleProfiles()
         {
-            if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException();
-            if (FindTailscale() != null) return;
-            InstallWindowsPackage("Tailscale.Tailscale");
+            if (!HasSystemTailscale || OperatingSystem.IsWindows() &&
+                BundledTailscale.ReadWindowsService(TailscaleMode.System) != WindowsServiceState.Running)
+                return Array.Empty<TailscaleProfile>();
+
+            try { return ParseTailscaleProfiles(RunTailscale(TailscaleMode.System, 8000, "switch", "--list", "--json")); }
+            catch (InvalidOperationException error) when (error.Message.Contains("flag provided but not defined", StringComparison.Ordinal)
+                && error.Message.Contains("json", StringComparison.Ordinal))
+            {
+                return ParseLegacyTailscaleProfiles(RunTailscale(TailscaleMode.System, 8000, "switch", "--list"));
+            }
+        }
+
+        internal static void SwitchSystemTailscaleProfile(string profileId)
+        {
+            ValidateProfileId(profileId);
+            try { RunTailscale(TailscaleMode.System, 12000, "switch", "--", profileId); }
+            catch (Exception error) when (error is InvalidOperationException or TimeoutException)
+            {
+                // The CLI may report a timeout after changing the profile while the new tailnet starts.
+                if (!ReadSystemTailscaleProfiles().Any(profile => profile.Id == profileId && profile.IsCurrent)) throw;
+            }
+        }
+
+        internal static TailscaleProfile[] ParseTailscaleProfiles(string json)
+        {
+            using var document = JsonDocument.Parse(json);
+            if (document.RootElement.ValueKind != JsonValueKind.Array)
+                throw new InvalidOperationException("无法读取系统 Tailscale 返回的账号列表。");
+            var profiles = new List<TailscaleProfile>();
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var item in document.RootElement.EnumerateArray())
+            {
+                if (item.ValueKind != JsonValueKind.Object) continue;
+                var id = ReadString(item, "id");
+                var login = ReadString(item, "account");
+                if (!ValidProfileId(id) || string.IsNullOrWhiteSpace(login) || !seen.Add(id)) continue;
+                profiles.Add(new(id, ReadString(item, "nickname"), login, ReadString(item, "tailnet"),
+                    item.TryGetProperty("selected", out var selected) && selected.ValueKind == JsonValueKind.True));
+            }
+            return profiles.ToArray();
+
+            static string ReadString(JsonElement item, string name) =>
+                item.TryGetProperty(name, out var data) && data.ValueKind == JsonValueKind.String ? data.GetString() : null;
+        }
+
+        private static bool ValidProfileId(string id) => id is { Length: > 0 and <= 128 } &&
+            char.IsAsciiLetterOrDigit(id[0]) && id.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_' or '.');
+
+        internal static TailscaleProfile[] ParseLegacyTailscaleProfiles(string output)
+        {
+            // Older clients print an aligned ID / Tailnet / Account table and mark the
+            // selected account with an asterisk. Use the header to preserve spaces in names.
+            using var reader = new StringReader(output);
+            var header = reader.ReadLine() ?? "";
+            var tailnetColumn = header.IndexOf("Tailnet", StringComparison.Ordinal);
+            var accountColumn = header.IndexOf("Account", StringComparison.Ordinal);
+            if (!header.StartsWith("ID", StringComparison.Ordinal) || tailnetColumn < 2 || accountColumn <= tailnetColumn)
+                throw new InvalidOperationException("当前系统 Tailscale 的账号列表格式无法识别。");
+            var profiles = new List<TailscaleProfile>();
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            for (var line = reader.ReadLine(); line != null; line = reader.ReadLine())
+            {
+                if (line.Length <= accountColumn) continue;
+                var id = line[..tailnetColumn].Trim();
+                var tailnet = line[tailnetColumn..accountColumn].Trim();
+                var account = line[accountColumn..].Trim();
+                var selected = account.EndsWith('*');
+                if (selected) account = account[..^1].TrimEnd();
+                if (ValidProfileId(id) && account.Length != 0 && seen.Add(id))
+                    profiles.Add(new(id, null, account, tailnet, selected));
+            }
+            return profiles.ToArray();
+        }
+
+        private static void ValidateProfileId(string id)
+        {
+            if (!ValidProfileId(id)) throw new InvalidOperationException("系统 Tailscale 账号标识无效。");
         }
 
         private static object Field(IDictionary<string, object> data, string key)
@@ -200,7 +343,7 @@ namespace Aurora
             return tags != null && tags.Count > 0;
         }
 
-        private static IPAddress PickAddress(object value)
+        private static IPAddress PickAddress(object value, bool ipv6Only = false)
         {
             var candidates = value as IEnumerable;
             IPAddress ipv6 = null;
@@ -213,6 +356,7 @@ namespace Aurora
                 var bytes = address.GetAddressBytes();
                 if (address.AddressFamily == AddressFamily.InterNetwork)
                 {
+                    if (ipv6Only) continue;
                     if (literal != address.ToString() || bytes[0] != 100 || (bytes[1] & 192) != 64) continue;
                     if ((bytes[1] == 100 && (bytes[2] == 0 || bytes[2] == 100)) ||
                         (bytes[1] == 115 && (bytes[2] == 92 || bytes[2] == 93)) ||
@@ -259,6 +403,8 @@ namespace Aurora
                 snapshot.Devices.Add(new Device
                 {
                     Id = id, Name = name.Length == 0 ? id : name, Address = address,
+                    AlternateAddress = address.AddressFamily == AddressFamily.InterNetwork
+                        ? PickAddress(Field(peer, "TailscaleIPs"), ipv6Only: true) : null,
                     Online = Flag(peer, "Online"), Platform = Text(peer, "OS")
                 });
             }
@@ -288,9 +434,15 @@ namespace Aurora
             }
         }
 
+        public static bool SupportsHost => OperatingSystem.IsWindows() || BundledSunshine.IsAvailable;
+
         public static HostStatus ReadHost()
         {
-            if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException();
+            if (BundledSunshine.IsRunning)
+                return new HostStatus { Managed = true, Installed = true, SettingsAvailable = BundledSunshine.IsReady() };
+            if (BundledSunshine.IsAvailable)
+                return new HostStatus { Managed = true };
+            if (!OperatingSystem.IsWindows()) return new HostStatus();
             using var service = Registry.LocalMachine.OpenSubKey(@"SYSTEM\CurrentControlSet\Services\SunshineService");
             var processes = Process.GetProcessesByName("sunshine");
             var running = processes.Length != 0;
@@ -315,34 +467,25 @@ namespace Aurora
             return new HostStatus { Installed = installed };
         }
 
-        public static void InstallSunshine()
+        public static Task StartSunshine()
         {
-            if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException();
-            if (ReadHost().Installed) throw new InvalidOperationException("已检测到 Sunshine，不会覆盖安装。请刷新状态。");
-            InstallWindowsPackage("LizardByte.Sunshine");
+            return BundledSunshine.StartAsync();
         }
 
-        private static void InstallWindowsPackage(string packageId)
-        {
-            var local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-            var alias = Path.Combine(local, @"Microsoft\WindowsApps\winget.exe");
-            var winget = File.Exists(alias) ? alias : FindProgram("winget.exe", "winget.exe");
-            if (winget == null) throw new InvalidOperationException("未找到 WinGet。请更新 Microsoft Store 的「应用安装程序」，或使用官方下载。");
-            RunHidden(winget, $"install --id {packageId} --exact --source winget --interactive --disable-interactivity", -1);
-        }
-
-        private static string FindMoonlight()
+        internal static string FindMoonlight()
         {
             var mac = OperatingSystem.IsMacOS();
             var integrated = mac
                 ? Path.Combine(AppContext.BaseDirectory, "AuroraStream")
-                : Path.Combine(AppContext.BaseDirectory, "Streamer", "AuroraStream.exe");
+                : Path.Combine(AppContext.BaseDirectory, "Components", "Moonlight", "AuroraStream.exe");
             if (File.Exists(integrated)) return integrated;
             var bundle = mac ? FindMacApplication("Moonlight") : null;
             var path = mac ? bundle == null ? null : Path.Combine(bundle, "Contents", "MacOS", "Moonlight")
                 : FindProgram(@"Moonlight Game Streaming\Moonlight.exe", "Moonlight.exe");
             if (!mac)
             {
+                var oldIntegrated = Path.Combine(AppContext.BaseDirectory, "Streamer", "AuroraStream.exe");
+                if (File.Exists(oldIntegrated)) return oldIntegrated;
                 var separate = Path.Combine(AppContext.BaseDirectory, "Moonlight", "Moonlight.exe");
                 if (File.Exists(separate)) path = separate;
             }
@@ -350,10 +493,19 @@ namespace Aurora
             return path;
         }
 
-        public static Process LaunchMoonlight(StreamHost route, bool pair) =>
-            StartMoonlight(FindMoonlight(), MoonlightArguments(route, pair), redirect: false);
+        internal static Process LaunchMoonlight(string path, StreamHost route, bool pair, string embeddedSession = null)
+        {
+            var arguments = MoonlightArguments(route, pair);
+            if (!pair)
+            {
+                var bundledMacViewer = OperatingSystem.IsMacOS() && Path.GetFileName(path) == "AuroraStream";
+                arguments = arguments.Concat(StreamPreferences.Arguments(bundledMacViewer || embeddedSession != null)).ToArray();
+            }
+            return StartMoonlight(path, arguments, redirect: false, embeddedSession, route);
+        }
 
-        internal static Process StartMoonlight(string path, string[] arguments, bool redirect)
+        internal static Process StartMoonlight(string path, string[] arguments, bool redirect, string embeddedSession = null,
+            StreamHost streamRoute = null)
         {
             var options = new ProcessStartInfo(path)
             {
@@ -363,17 +515,72 @@ namespace Aurora
                 RedirectStandardOutput = redirect,
                 RedirectStandardError = redirect
             };
+            if (OperatingSystem.IsWindows())
+            {
+                options.Environment.Remove("AURORA_EMBEDDED_SESSION");
+                if (embeddedSession != null) options.Environment["AURORA_EMBEDDED_SESSION"] = embeddedSession;
+            }
+            options.Environment.Remove("AURORA_GAMESTREAM_RELAY_BASE");
+            options.Environment.Remove("AURORA_GAMESTREAM_HOST_UUID");
+            if (streamRoute?.ViaEmbeddedTailnet == true)
+            {
+                if (Path.GetFileNameWithoutExtension(path) != "AuroraStream" ||
+                    !IPAddress.Loopback.Equals(streamRoute.Endpoint.Address) || string.IsNullOrWhiteSpace(streamRoute.Id))
+                    throw new InvalidOperationException("内置 Tailscale 需要随 Aurora 打包的串流组件。");
+                options.Environment["AURORA_GAMESTREAM_RELAY_BASE"] = streamRoute.Endpoint.Port.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                options.Environment["AURORA_GAMESTREAM_HOST_UUID"] = streamRoute.Id;
+            }
             foreach (var argument in StreamRuntimeArguments(path, arguments)) options.ArgumentList.Add(argument);
             return Process.Start(options);
         }
 
         internal static string[] StreamRuntimeArguments(string path, string[] arguments) =>
-            Path.GetFileNameWithoutExtension(path) == "AuroraStream"
+            Path.GetFileNameWithoutExtension(path) == "AuroraStream" &&
+            !(arguments.Length == 1 && arguments[0] is "--aurora-embedded-info" or "--aurora-gamestream-relay-info")
                 ? new[] { "--aurora-runtime" }.Concat(arguments).ToArray()
                 : arguments;
 
-        internal static Task<(int ExitCode, string Output)> ListMoonlight(StreamHost route, CancellationToken token) =>
-            RunMoonlight(FindMoonlight(), new[] { "list", "--csv", route.Endpoint.ToString() }, token);
+        internal static async Task RequireRelayRuntime(string path, CancellationToken token)
+        {
+            if (Path.GetFileNameWithoutExtension(path) == "AuroraStream")
+            {
+                using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
+                timeout.CancelAfter(TimeSpan.FromSeconds(4));
+                var (exit, output) = await RunMoonlight(path, new[] { "--aurora-gamestream-relay-info" }, timeout.Token);
+                if (exit == 0 && output.Trim() == "aurora-gamestream-relay/1") return;
+            }
+            throw new InvalidOperationException("内置 Tailscale 需要新版 Aurora 串流组件，请使用完整的集成包。");
+        }
+
+        internal static async Task<(int ExitCode, string Output)> ListMoonlight(StreamHost route, CancellationToken token)
+        {
+            var path = FindMoonlight();
+            if (route?.ViaEmbeddedTailnet == true) await RequireRelayRuntime(path, token);
+            using var stream = await EmbeddedTailnet.OpenStream(route, token);
+            return await RunMoonlight(path, new[] { "list", stream.Route.Endpoint.ToString() }, token, stream.Route);
+        }
+
+        internal static async Task<(bool Reachable, byte[] Preview)> ReadWallpaper(
+            StreamHost route, string revision, CancellationToken cancellation)
+        {
+            var path = FindMoonlight();
+            if (Path.GetFileNameWithoutExtension(path) != "AuroraStream") return default;
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
+            timeout.CancelAfter(TimeSpan.FromSeconds(5));
+            try
+            {
+                using var stream = await EmbeddedTailnet.OpenStream(route, timeout.Token);
+                var (exit, output) = await RunMoonlight(path, new[] { "wallpaper", stream.Route.Endpoint.ToString(), route.Id,
+                    revision.Length == 0 ? "-" : revision }, timeout.Token, stream.Route);
+                if (exit != 0) return default;
+                var payload = output.Trim();
+                if (payload == "=") return (true, null);
+                if (payload.Length == 0 || payload.Length > (DesktopWallpaper.MaxPreviewBytes + 2) / 3 * 4) return default;
+                var preview = Convert.FromBase64String(payload);
+                return preview.Length <= DesktopWallpaper.MaxPreviewBytes ? (true, preview) : default;
+            }
+            catch (OperationCanceledException) when (!cancellation.IsCancellationRequested) { return default; }
+        }
 
         internal static async Task<string> FindBackgroundMoonlight(CancellationToken token)
         {
@@ -381,13 +588,14 @@ namespace Aurora
             var (exit, output) = await RunMoonlight(path, new[] { "pair", "--help" }, token);
             if (exit != 0 || !output.Contains("--aurora-background", StringComparison.Ordinal) ||
                 !output.Contains("--aurora-pair-id", StringComparison.Ordinal))
-                throw new InvalidOperationException("本机串流组件还不支持后台配对。首次连接需要带后台配对功能的极光串流组件。");
+                throw new InvalidOperationException("本机串流组件还不支持后台配对。首次连接需要带后台配对功能的 Aurora 串流组件。");
             return path;
         }
 
-        internal static async Task<(int ExitCode, string Output)> RunMoonlight(string path, string[] arguments, CancellationToken token)
+        internal static async Task<(int ExitCode, string Output)> RunMoonlight(string path, string[] arguments, CancellationToken token,
+            StreamHost streamRoute = null)
         {
-            using var process = StartMoonlight(path, arguments, redirect: true);
+            using var process = StartMoonlight(path, arguments, redirect: true, streamRoute: streamRoute);
             var output = process.StandardOutput.ReadToEndAsync(token);
             var error = process.StandardError.BaseStream.CopyToAsync(Stream.Null, token);
             try

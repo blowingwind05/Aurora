@@ -1,7 +1,7 @@
 #Requires -Version 7.3
 
 $ErrorActionPreference = 'Stop'
-. (Join-Path $PSScriptRoot '../src/Tailscale.ps1')
+. (Join-Path $PSScriptRoot '../cli/Tailscale.ps1')
 
 function Assert-Equal {
     param($Actual, $Expected, [string] $Because)

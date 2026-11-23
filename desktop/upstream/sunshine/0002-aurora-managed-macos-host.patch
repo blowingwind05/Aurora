@@ -1,0 +1,166 @@
+diff --git a/cmake/targets/macos.cmake b/cmake/targets/macos.cmake
+--- a/cmake/targets/macos.cmake
++++ b/cmake/targets/macos.cmake
+@@ -1,4 +1,8 @@
+ # macos specific target definitions
++option(AURORA_SUNSHINE_HOST "Build the macOS host companion managed by Aurora" OFF)
++if(AURORA_SUNSHINE_HOST)
++    target_compile_definitions(sunshine PRIVATE AURORA_SUNSHINE_HOST=1)
++endif()
+ 
+ if (SUNSHINE_BUILD_HOMEBREW)
+     target_link_options(sunshine PRIVATE LINKER:-sectcreate,__TEXT,__info_plist,${APPLE_PLIST_FILE})
+diff --git a/src/confighttp.cpp b/src/confighttp.cpp
+--- a/src/confighttp.cpp
++++ b/src/confighttp.cpp
+@@ -2387,10 +2387,15 @@
+     server.resource["^/assets\\/.+$"]["GET"] = getAsset;
+ 
+     server.config.reuse_address = true;
++#ifdef AURORA_SUNSHINE_HOST
++    // Limit the configuration UI to loopback and keep GameStream routable.
++    server.config.address = "127.0.0.1";
++    const auto display_addr = server.config.address;
++#else
+     server.config.address = net::get_bind_address(address_family);
++    const auto display_addr = net::get_bind_address_url_host();
++#endif
+     server.config.port = port_https;
+-
+-    const auto display_addr = net::get_bind_address_url_host();
+ 
+     auto accept_and_run = [&](auto *server) {
+       try {
+diff --git a/src/platform/macos/misc.mm b/src/platform/macos/misc.mm
+--- a/src/platform/macos/misc.mm
++++ b/src/platform/macos/misc.mm
+@@ -18,6 +18,9 @@
+ 
+ // platform includes
+ #include <arpa/inet.h>
++#ifdef AURORA_SUNSHINE_HOST
++  #include <ApplicationServices/ApplicationServices.h>
++#endif
+ #include <dlfcn.h>
+ #include <Foundation/Foundation.h>
+ #include <mach-o/dyld.h>
+@@ -97,18 +100,37 @@
+       return nullptr;
+     }
+ #pragma clang diagnostic pop
++#ifdef AURORA_SUNSHINE_HOST
++    if (!AXIsProcessTrusted()) {
++      const void *keys[] = {kAXTrustedCheckOptionPrompt};
++      const void *values[] = {kCFBooleanTrue};
++      if (const auto options = CFDictionaryCreate(nullptr, keys, values, 1, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks)) {
++        AXIsProcessTrustedWithOptions(options);
++        CFRelease(options);
++      }
++    }
++#endif
+     // Record that we determined that we have the screen capture permission.
+     screen_capture_allowed = true;
+     return std::make_unique<deinit_t>();
+   }
+ 
+   fs::path appdata() {
++#ifdef AURORA_SUNSHINE_HOST
++    static const auto profile = [] {
++      const auto *value = getenv("AURORA_SUNSHINE_PROFILE");
++      const auto path = value ? fs::path {value} : fs::path {};
++      return path.is_absolute() ? path : fs::path {};
++    }();
++    return profile;
++#else
+     const char *homedir;
+     if ((homedir = getenv("HOME")) == nullptr) {
+       homedir = getpwuid(geteuid())->pw_dir;
+     }
+ 
+     return fs::path {homedir} / ".config/sunshine"sv;
++#endif
+   }
+ 
+   using ifaddr_t = util::safe_ptr<ifaddrs, freeifaddrs>;
+@@ -357,9 +379,13 @@
+   }
+ 
+   void restart() {
++#ifdef AURORA_SUNSHINE_HOST
++    lifetime::exit_sunshine(42, true);
++#else
+     // Gracefully clean up and restart ourselves instead of exiting
+     atexit(restart_on_exit);
+     lifetime::exit_sunshine(0, true);
++#endif
+   }
+ 
+   bool request_process_group_exit(std::uintptr_t native_handle) {
+diff --git a/src/main.cpp b/src/main.cpp
+--- a/src/main.cpp
++++ b/src/main.cpp
+@@ -14,6 +14,12 @@
+ // platform includes
+ #ifdef __APPLE__
+   #include <mach-o/dyld.h>
++  #ifdef AURORA_SUNSHINE_HOST
++    #include <fcntl.h>
++    #include <poll.h>
++    #include <sys/stat.h>
++    #include <unistd.h>
++  #endif
+ #endif
+ #ifdef __linux__
+   #include "platform/linux/graphics.h"
+@@ -182,6 +188,19 @@
+  * @return Process or platform callback exit code.
+  */
+ int main(int argc, char *argv[]) {
++#ifdef AURORA_SUNSHINE_HOST
++  if (argc == 2 && std::strcmp(argv[1], "--aurora-runtime-info") == 0) {
++    std::cout << "aurora-host/1" << std::endl;
++    return 0;
++  }
++  struct stat aurora_pipe {};
++  if (platf::appdata().empty() || fstat(STDIN_FILENO, &aurora_pipe) != 0 || !S_ISFIFO(aurora_pipe.st_mode)) {
++    return 1;
++  }
++  unsetenv("AURORA_SUNSHINE_PROFILE");
++  // Keep the parent pipe out of programs launched by Sunshine.
++  if (fcntl(STDIN_FILENO, F_SETFD, FD_CLOEXEC) == -1) return 1;
++#endif
+ #ifdef __linux__
+   const bool privileged_execution = getauxval(AT_SECURE) != 0 || platf::has_elevated_privileges(true);
+   if (privileged_execution && !platf::sanitize_process_environment()) {
+@@ -253,6 +272,10 @@
+   if (config::parse(argc, argv)) {
+     return 0;
+   }
++
++#ifdef AURORA_SUNSHINE_HOST
++  config::sunshine.flags.reset(config::flag::UPNP);
++#endif
+ 
+   auto log_deinit_guard = logging::init(config::sunshine.min_log_level, config::sunshine.log_file);
+   if (!log_deinit_guard) {
+@@ -516,6 +539,20 @@
+ #endif
+   }
+ 
++#ifdef AURORA_SUNSHINE_HOST
++  std::jthread aurora_shutdown {[&](std::stop_token stop) {
++    // Closing the parent pipe also covers an unexpected exit of Aurora.
++    while (!stop.stop_requested() && !shutdown_event->peek()) {
++      pollfd descriptor {STDIN_FILENO, 0, 0};
++      const auto ready = poll(&descriptor, 1, 200);
++      if ((ready > 0 && (descriptor.revents & (POLLHUP | POLLERR | POLLNVAL))) ||
++          (ready < 0 && errno != EINTR)) {
++        if (!shutdown_event->peek()) lifetime::exit_sunshine(0, true);
++        break;
++      }
++    }
++  }};
++#endif
+   mainThreadLoop(shutdown_event);
+ 
+   httpThread.join();

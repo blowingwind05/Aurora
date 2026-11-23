@@ -16,7 +16,7 @@ internal static class WindowsChildProcess
             AssignProcessToJobObject(job, process.SafeHandle)) return job;
         var error = Marshal.GetLastWin32Error();
         job.Dispose();
-        throw new Win32Exception(error, "无法把 Tailscale 自动配对入口绑定到极光进程。");
+        throw new Win32Exception(error, "无法把 Tailscale 自动配对入口绑定到 Aurora 进程。");
     }
 
     [StructLayout(LayoutKind.Sequential)]

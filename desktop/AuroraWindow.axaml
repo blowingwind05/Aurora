@@ -1,99 +1,204 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="using:Aurora"
         x:Class="Aurora.AuroraWindow" Title="Aurora 远程桌面"
-        Width="1000" Height="720" MinWidth="730" MinHeight="600"
-        Background="#F5F5F1" Foreground="#182842"
+        Width="1000" Height="580" MinWidth="320" MinHeight="400"
+        Background="#EDF1F8" Foreground="#19283F"
         FontFamily="Segoe UI, Microsoft YaHei UI" FontSize="14"
-        WindowStartupLocation="CenterScreen" SystemDecorations="Full">
-  <Grid RowDefinitions="54,*">
-    <Grid Margin="16,4,9,0" ColumnDefinitions="Auto,*,Auto" ColumnSpacing="8">
-      <Border x:Name="DragArea" Grid.ColumnSpan="2" Background="Transparent" />
-      <StackPanel x:Name="CaptionButtons" Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
-        <Button x:Name="MinimizeWindow" Classes="caption" AutomationProperties.Name="最小化" ToolTip.Tip="最小化">
-          <Path Data="M0,5 L10,5" Stroke="#273858" StrokeThickness="1" />
-        </Button>
-        <Button x:Name="MaximizeWindow" Classes="caption" AutomationProperties.Name="最大化" ToolTip.Tip="最大化">
-          <Path x:Name="MaximizeIcon" Data="M0,0 L10,0 L10,10 L0,10 Z" Stroke="#273858" StrokeThickness="1" />
-        </Button>
-        <Button x:Name="CloseWindow" Classes="caption close" AutomationProperties.Name="关闭" ToolTip.Tip="关闭">
-          <Path Data="M0,0 L10,10 M10,0 L0,10" Stroke="#273858" StrokeThickness="1" />
-        </Button>
-      </StackPanel>
-      <Border x:Name="TitleIcon" Width="16" Height="16" CornerRadius="4" Background="#244FC5" VerticalAlignment="Center" IsHitTestVisible="False">
-        <Path Width="10" Height="10" Stretch="Uniform" HorizontalAlignment="Center" VerticalAlignment="Center"
-              Fill="White" Data="M 12,0 L 14.8,8.7 L 24,12 L 14.8,15.3 L 12,24 L 9.2,15.3 L 0,12 L 9.2,8.7 Z" />
-      </Border>
-      <TextBlock Grid.Column="1" Text="Aurora 远程桌面" FontSize="14" FontWeight="Normal"
-                 VerticalAlignment="Center" IsHitTestVisible="False" TextTrimming="CharacterEllipsis" />
-    </Grid>
+        WindowStartupLocation="CenterScreen" SystemDecorations="Full"
+        Icon="avares://Aurora/Assets/Aurora.ico">
+  <Window.Styles>
+    <Style Selector="Border#WindowFrame">
+      <Setter Property="CornerRadius" Value="13" />
+    </Style>
+    <Style Selector="Border#WorkspaceFrame">
+      <Setter Property="CornerRadius" Value="12,12,0,0" />
+    </Style>
+    <Style Selector="Window[WindowState=FullScreen] Border#WindowFrame, Window[WindowState=Maximized] Border#WindowFrame">
+      <Setter Property="CornerRadius" Value="0" />
+    </Style>
+    <Style Selector="Border.devicePlaceholder">
+      <Setter Property="MaxWidth" Value="438" />
+      <Setter Property="Padding" Value="18,26" />
+      <Setter Property="VerticalAlignment" Value="Top" />
+    </Style>
+  </Window.Styles>
 
-    <Grid Grid.Row="1" ColumnDefinitions="156,*">
-      <Border Background="#EDF0F6" BorderBrush="#DCE1EC" BorderThickness="0,0,1,0" Padding="10,14">
-        <ListBox x:Name="Navigation" Classes="navigation" Background="Transparent" SelectedIndex="0" AutomationProperties.Name="主导航">
-          <ListBoxItem Content="我的设备" />
-          <ListBoxItem x:Name="HostNavItem" Content="本机被控" />
-          <ListBoxItem Content="异地连接" />
-        </ListBox>
-      </Border>
-      <Grid Grid.Column="1" Margin="18,14,18,16" RowDefinitions="*,Auto" RowSpacing="10">
-        <Grid x:Name="HostPage" RowDefinitions="Auto,*" IsVisible="False">
-    <Border x:Name="HostSummary" Margin="0,0,0,10" CornerRadius="16" BorderThickness="1" BorderBrush="#CFDAF3" Padding="21,16">
-      <Border.Background>
-        <LinearGradientBrush StartPoint="0%,0%" EndPoint="100%,100%">
-          <GradientStop Color="#E7EFFF" Offset="0" />
-          <GradientStop Color="#F4F4FF" Offset="1" />
-        </LinearGradientBrush>
-      </Border.Background>
-      <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16">
-        <StackPanel Spacing="6">
-          <TextBlock x:Name="HostBadge" Text="这台电脑 · 正在检查" FontSize="12" FontWeight="SemiBold" Foreground="#304FA1" />
-          <TextBlock x:Name="HostTitle" Text="让其他设备连接这台电脑" FontSize="24" FontWeight="SemiBold" TextWrapping="Wrap" />
-          <TextBlock x:Name="HostHint" Text="正在检查本机被控状态…" Classes="muted" TextWrapping="Wrap" />
-          <TextBlock x:Name="LocalAddress" Text="正在获取本机地址…" FontSize="13" Foreground="#354A72" TextTrimming="CharacterEllipsis" />
+  <Border x:Name="WindowFrame" Background="#EDF1F8" BorderBrush="#C6D1E0" BorderThickness="1"
+          ClipToBounds="True" Margin="{Binding $parent[Window].OffScreenMargin}">
+    <Grid RowDefinitions="52,*">
+      <Grid x:Name="TitleBar">
+        <Border x:Name="DragArea" Background="Transparent" />
+        <StackPanel x:Name="Brand" Margin="12,0" Orientation="Horizontal" Spacing="3"
+                    HorizontalAlignment="Left" VerticalAlignment="Center" IsHitTestVisible="False">
+          <Grid Width="32" Height="32">
+            <Image x:Name="BrandIcon" Source="avares://Aurora/Assets/Aurora.png" Width="32" Height="32" Margin="0,1,0,0" />
+          </Grid>
+          <TextBlock VerticalAlignment="Center" LineHeight="20" FontWeight="SemiBold">
+            <Run x:Name="BrandLatin" Text="Aurora" FontSize="15" FontFamily="Segoe UI" /><Run x:Name="BrandChinese" Text="远程桌面" FontSize="14" FontFamily="Microsoft YaHei UI" />
+          </TextBlock>
         </StackPanel>
-        <StackPanel Grid.Column="1" Spacing="8" VerticalAlignment="Center" MinWidth="155">
-          <Button x:Name="HostAction" Classes="action accent" HorizontalAlignment="Stretch" Content="启用本机被控" IsEnabled="False" />
-          <StackPanel Orientation="Horizontal" Spacing="6">
-            <Button x:Name="CopyAddress" Classes="action" Content="复制局域网" IsEnabled="False" />
-            <Button x:Name="CopyTailnet" Classes="action" Content="复制 Tailscale" IsEnabled="False" />
-          </StackPanel>
+        <StackPanel x:Name="CaptionButtons" Margin="0,0,5,0" HorizontalAlignment="Right" VerticalAlignment="Center" Orientation="Horizontal">
+          <Button x:Name="MinimizeWindow" Classes="caption" AutomationProperties.Name="最小化" ToolTip.Tip="最小化" />
+          <Button x:Name="MaximizeWindow" Classes="caption" AutomationProperties.Name="最大化" ToolTip.Tip="最大化" />
+          <Button x:Name="CloseWindow" Classes="caption close" AutomationProperties.Name="关闭" ToolTip.Tip="关闭" />
         </StackPanel>
       </Grid>
-    </Border>
-          <ContentControl x:Name="HostSettings" Grid.Row="1" HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch" />
+
+      <Grid x:Name="Shell" Grid.Row="1" ColumnDefinitions="184,*">
+        <Grid x:Name="Sidebar" RowDefinitions="*,Auto" Margin="13">
+          <StackPanel x:Name="NavigationTop" Spacing="2">
+            <Button x:Name="TailnetNav" Classes="nav" />
+            <Button x:Name="DevicesNav" Classes="nav selected" />
+            <Button x:Name="HostNav" Classes="nav" />
+          </StackPanel>
+          <StackPanel x:Name="NavigationBottom" Grid.Row="1" Spacing="2">
+            <Button x:Name="SettingsNav" Classes="nav" />
+            <Button x:Name="MoreNav" Classes="nav" />
+          </StackPanel>
         </Grid>
 
-    <Border x:Name="DevicesPage" Padding="17,13" CornerRadius="15" BorderThickness="1" BorderBrush="#DCE1EC" Background="#FFFFFF">
-      <Grid RowDefinitions="Auto,*,Auto,Auto" RowSpacing="9">
-        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
-          <StackPanel Spacing="3">
-            <TextBlock Text="我的设备" FontSize="21" FontWeight="SemiBold" />
-            <TextBlock x:Name="DeviceSummary" Text="正在发现同账号设备…" Classes="muted" FontSize="13" TextTrimming="CharacterEllipsis" />
-          </StackPanel>
-          <Button x:Name="Refresh" Grid.Column="1" Classes="action" Content="刷新" VerticalAlignment="Center" />
-        </Grid>
-        <Grid Grid.Row="1" MinHeight="85">
-          <ListBox x:Name="Devices" Background="Transparent" />
-          <StackPanel x:Name="EmptyState" VerticalAlignment="Center" HorizontalAlignment="Center" Spacing="7" MaxWidth="475" Margin="14,8">
-            <TextBlock x:Name="EmptyTitle" Text="正在寻找设备" FontSize="17" FontWeight="SemiBold" TextAlignment="Center" />
-            <TextBlock x:Name="EmptyHint" Text="正在检查局域网和 Tailscale。" Classes="muted" TextWrapping="Wrap" TextAlignment="Center" />
-          </StackPanel>
-        </Grid>
-        <Grid Grid.Row="2" ColumnDefinitions="*,Auto" ColumnSpacing="8">
-          <TextBlock x:Name="SelectionHint" Text="选择在线 Windows 设备后可连接" Classes="muted"
-                     FontSize="13" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
-          <Button x:Name="Connect" Grid.Column="1" Classes="action accent" Content="连接桌面" IsEnabled="False" />
-        </Grid>
-        <Grid x:Name="NetworkNotice" Grid.Row="3" ColumnDefinitions="*,Auto" ColumnSpacing="10" IsVisible="False">
-          <TextBlock x:Name="NetworkMessage" Classes="muted" FontSize="12" VerticalAlignment="Center" TextWrapping="Wrap" />
-          <Button x:Name="NetworkHelp" Grid.Column="1" Content="设置异地连接" FontSize="12"
-                  Classes="action" MinHeight="30" Padding="10,4" VerticalAlignment="Center" />
-        </Grid>
+        <Border x:Name="WorkspaceFrame" Grid.Column="1" Margin="0,0,3,3" Background="#F9FAFC" ClipToBounds="True">
+          <Grid x:Name="Workspace" Margin="21,20,13,20" RowDefinitions="Auto,Auto,*">
+            <Grid x:Name="PageHeader" Margin="0,0,8,15" MinHeight="34" ColumnDefinitions="*,Auto">
+              <TextBlock x:Name="PageTitle" Text="我的设备" Classes="pageTitle" />
+              <StackPanel x:Name="HeaderActions" Grid.Column="1" Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
+                <Button x:Name="Refresh" Classes="icon" />
+                <Button x:Name="Back" Classes="quietAction" IsVisible="False" />
+              </StackPanel>
+            </Grid>
+            <StackPanel Grid.Row="1">
+              <local:RefreshNotice x:Name="Feedback">
+                <TextBlock Margin="0,0,8,10" Classes="muted" FontSize="13" TextWrapping="Wrap" />
+              </local:RefreshNotice>
+              <Border x:Name="GamepadReminder" Classes="panel" Padding="12,8" Margin="0,0,8,10" IsVisible="False">
+                <StackPanel Spacing="4">
+                  <TextBlock x:Name="GamepadReminderText" Classes="muted" FontSize="13" TextWrapping="Wrap" />
+                  <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right">
+                    <Button x:Name="DismissGamepadReminder" Classes="textAction" Content="稍后" />
+                    <Button x:Name="InstallGamepadReminder" Classes="action accent" Content="安装手柄驱动" />
+                  </StackPanel>
+                </StackPanel>
+              </Border>
+            </StackPanel>
+
+            <Grid x:Name="DevicesPage" Grid.Row="2" RowDefinitions="Auto,*">
+              <Grid x:Name="NetworkNotice" ColumnDefinitions="*,Auto" ColumnSpacing="8" Margin="0,0,8,10" IsVisible="False">
+                <TextBlock x:Name="NetworkMessage" Classes="muted" FontSize="12" VerticalAlignment="Center" TextWrapping="Wrap" />
+                <Button x:Name="NetworkHelp" Grid.Column="1" Classes="quietAction" Content="检查 Tailscale" />
+              </Grid>
+              <ScrollViewer x:Name="DeviceScroll" Grid.Row="1" HorizontalScrollBarVisibility="Disabled"
+                            VerticalScrollBarVisibility="Visible">
+                <Grid x:Name="DeviceCards" Margin="0,0,8,0" ColumnSpacing="14" RowSpacing="14" />
+              </ScrollViewer>
+              <ScrollViewer x:Name="DevicePlaceholderScroll" Grid.Row="1" HorizontalScrollBarVisibility="Disabled"
+                            VerticalScrollBarVisibility="Auto">
+                <Grid Margin="0,24,8,1">
+                  <Border x:Name="DeviceSignIn" Classes="panel devicePlaceholder">
+                    <StackPanel Spacing="16">
+                      <StackPanel Spacing="12">
+                        <ContentControl x:Name="DeviceSignInIcon" HorizontalAlignment="Center" />
+                        <StackPanel Spacing="5">
+                          <TextBlock x:Name="DeviceSignInTitle" FontSize="15" FontWeight="650"
+                                     TextAlignment="Center" TextWrapping="Wrap" />
+                          <TextBlock x:Name="DeviceSignInHint" Classes="muted" FontSize="13"
+                                     TextAlignment="Center" TextWrapping="Wrap" />
+                        </StackPanel>
+                      </StackPanel>
+                      <Button x:Name="DeviceSignInAction" Classes="action accent" HorizontalAlignment="Center" />
+                    </StackPanel>
+                  </Border>
+                  <Border x:Name="EmptyState" Classes="panel devicePlaceholder" IsVisible="False">
+                    <StackPanel Spacing="8">
+                      <ContentControl x:Name="EmptyDeviceIcon" HorizontalAlignment="Center" />
+                      <TextBlock Text="还没有发现其他设备" FontSize="15" FontWeight="650"
+                                 TextAlignment="Center" TextWrapping="Wrap" />
+                      <TextBlock Text="在另一台设备上打开 Aurora，然后刷新设备列表。" Classes="muted" FontSize="13"
+                                 TextAlignment="Center" TextWrapping="Wrap" />
+                      <Button x:Name="EmptyNetworkHelp" Classes="action accent" Content="检查 Tailscale" HorizontalAlignment="Center" />
+                    </StackPanel>
+                  </Border>
+                </Grid>
+              </ScrollViewer>
+            </Grid>
+
+            <Grid x:Name="HostPage" Grid.Row="2" RowDefinitions="Auto,*" IsVisible="False">
+              <Border x:Name="HostSummary" Classes="panel" Margin="0,0,8,12">
+                <StackPanel Spacing="12">
+                  <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="10">
+                    <ContentControl x:Name="HostIcon" />
+                    <TextBlock Grid.Column="1" Text="这台电脑" Classes="sectionTitle" />
+                    <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="5" VerticalAlignment="Center">
+                      <Ellipse x:Name="HostDot" Width="7" Height="7" Fill="#79879B" />
+                      <TextBlock x:Name="HostBadge" Text="正在检查" Classes="muted" FontSize="12" />
+                    </StackPanel>
+                  </Grid>
+                  <Grid x:Name="ManagedHostRow" ColumnDefinitions="*,Auto" ColumnSpacing="10" MinHeight="34" IsVisible="False">
+                    <TextBlock Text="允许本机被控" Classes="settingLabel" />
+                    <ToggleSwitch x:Name="AllowManagedHost" Grid.Column="1" Classes="settingSwitch" IsEnabled="False"
+                                  AutomationProperties.Name="允许本机被控" />
+                  </Grid>
+                  <Grid x:Name="HostAddresses" ColumnDefinitions="*,*" ColumnSpacing="14">
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="4">
+                      <StackPanel Spacing="3">
+                        <TextBlock Text="局域网" Classes="muted" FontSize="12" />
+                        <TextBlock x:Name="LocalAddress" Text="—" TextTrimming="CharacterEllipsis" />
+                      </StackPanel>
+                      <Button x:Name="CopyAddress" Grid.Column="1" Classes="icon" />
+                    </Grid>
+                    <Grid Grid.Column="1" ColumnDefinitions="*,Auto" ColumnSpacing="4">
+                      <StackPanel Spacing="3">
+                        <TextBlock Text="Tailscale" Classes="muted" FontSize="12" />
+                        <TextBlock x:Name="LocalTailnetAddress" Text="—" TextTrimming="CharacterEllipsis" />
+                      </StackPanel>
+                      <Button x:Name="CopyTailnet" Grid.Column="1" Classes="icon" />
+                    </Grid>
+                  </Grid>
+                  <StackPanel x:Name="HostSetup" Spacing="8">
+                    <TextBlock x:Name="HostHint" Text="正在检查本机被控状态…" Classes="muted" TextWrapping="Wrap" />
+                    <Button x:Name="HostAction" Classes="action" Content="重新检测" IsEnabled="False" />
+                  </StackPanel>
+                  <Grid x:Name="HostGamepadDriver" ColumnDefinitions="*,Auto" ColumnSpacing="8" IsVisible="False">
+                    <StackPanel Spacing="3" VerticalAlignment="Center">
+                      <TextBlock Text="远程手柄" Classes="settingLabel" />
+                      <TextBlock x:Name="HostGamepadText" Classes="muted" FontSize="12" TextWrapping="Wrap" />
+                    </StackPanel>
+                    <Button x:Name="InstallHostGamepad" Grid.Column="1" Classes="action" Content="安装手柄驱动" />
+                  </Grid>
+                </StackPanel>
+              </Border>
+              <ContentControl x:Name="HostSettings" Grid.Row="1" HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch" />
+            </Grid>
+
+            <ContentControl x:Name="TailnetPage" Grid.Row="2" Margin="0,0,8,0" IsVisible="False"
+                            HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch" />
+            <ContentControl x:Name="SettingsPage" Grid.Row="2" IsVisible="False"
+                            HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch" />
+            <ContentControl x:Name="UtilityPage" Grid.Row="2" IsVisible="False"
+                            HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch" />
+          </Grid>
+        </Border>
       </Grid>
-    </Border>
-        <ContentControl x:Name="TailnetPage" IsVisible="False" HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch" />
-        <TextBlock x:Name="Feedback" Grid.Row="1" Classes="muted" FontSize="12" Text="设备列表每 10 秒自动刷新。" TextTrimming="CharacterEllipsis" />
+      <Border Grid.RowSpan="2" HorizontalAlignment="Center" VerticalAlignment="Center" IsHitTestVisible="False"
+              IsVisible="{Binding #UpdateNotice.IsVisible}" Background="#202631" CornerRadius="12" Padding="16,9">
+        <local:RefreshNotice x:Name="UpdateNotice">
+          <TextBlock Foreground="White" />
+        </local:RefreshNotice>
+      </Border>
+      <Grid x:Name="ConfirmationOverlay" Grid.RowSpan="2" IsVisible="False" Background="#66232D3E">
+        <Border Background="White" BorderBrush="#DBE2ED" BorderThickness="1" CornerRadius="14"
+                Padding="18" Margin="16" MaxWidth="360" HorizontalAlignment="Center" VerticalAlignment="Center">
+          <StackPanel Spacing="12" KeyboardNavigation.TabNavigation="Cycle">
+            <TextBlock x:Name="ConfirmationTitle" Classes="sectionTitle" TextWrapping="Wrap" />
+            <TextBlock x:Name="ConfirmationBody"
+                       Classes="muted" TextWrapping="Wrap" />
+            <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right">
+              <Button x:Name="CancelConfirmation" Classes="action" Content="取消" />
+              <Button x:Name="ApplyConfirmation" Classes="action danger" Content="退出登录" />
+            </StackPanel>
+          </StackPanel>
+        </Border>
       </Grid>
     </Grid>
-  </Grid>
+  </Border>
 </Window>

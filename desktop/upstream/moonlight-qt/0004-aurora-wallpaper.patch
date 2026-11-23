@@ -1,0 +1,193 @@
+diff --git a/app/main.cpp b/app/main.cpp
+--- a/app/main.cpp
++++ b/app/main.cpp
+@@ -315,6 +315,50 @@
+     return result;
+ }
+ 
++#ifdef AURORA_STREAM_RUNTIME
++static int runAuroraWallpaper(int argc, char** argv)
++{
++    if (argc != 5) {
++        return 2;
++    }
++#ifdef Q_OS_MACOS
++    qputenv("QT_SSL_USE_TEMPORARY_KEYCHAIN", "1");
++#endif
++    QCoreApplication app(argc, argv);
++    const auto args = app.arguments();
++    const QUrl url("http://" + args[2]);
++    const auto port = url.port();
++    const QHostAddress address(url.host());
++    if (!url.isValid() || address.isNull() || port != 48989 || args[3].isEmpty()) {
++        return 2;
++    }
++    const auto revision = args[4] == "-" ? QString() : args[4];
++    if (!revision.isEmpty() && !QRegularExpression("^[A-F0-9]{64}$").match(revision).hasMatch()) {
++        return 2;
++    }
++
++    const auto certificate = ComputerManager::readSavedCertificate(args[3]);
++    if (certificate.isNull()) {
++        return 3;
++    }
++    try {
++        NvHTTP http(NvAddress(address, port), port + DEFAULT_HTTPS_PORT - DEFAULT_HTTP_PORT, certificate, true);
++        const auto preview = http.getAuroraWallpaper(revision);
++        puts(preview.isEmpty() ? "=" : preview.toBase64().constData());
++        fflush(stdout);
++        return 0;
++    }
++    catch (const GfeHttpResponseException& error) {
++        fprintf(stderr, "%s\n", qUtf8Printable(error.toQString()));
++        return 4;
++    }
++    catch (const QtNetworkReplyException& error) {
++        fprintf(stderr, "%s\n", qUtf8Printable(error.toQString()));
++        return 4;
++    }
++}
++#endif
++
+ int main(int argc, char *argv[])
+ {
+ #ifdef AURORA_STREAM_RUNTIME
+@@ -347,6 +391,12 @@
+         // Initialize paths for standard installation
+         Path::initialize(false);
+     }
++
++#ifdef AURORA_STREAM_RUNTIME
++    if (argc > 1 && std::strcmp(argv[1], "wallpaper") == 0) {
++        return runAuroraWallpaper(argc, argv);
++    }
++#endif
+ 
+     // Override the default QML cache directory with the one we chose
+     if (qEnvironmentVariableIsEmpty("QML_DISK_CACHE_PATH")) {
+diff --git a/app/backend/computermanager.cpp b/app/backend/computermanager.cpp
+--- a/app/backend/computermanager.cpp
++++ b/app/backend/computermanager.cpp
+@@ -143,6 +143,27 @@
+ private:
+     NvComputer* m_Computer;
+ };
++
++QSslCertificate ComputerManager::readSavedCertificate(const QString& uuid)
++{
++    QSettings settings;
++    int hosts = settings.beginReadArray(SER_HOSTS_BACKUP);
++    if (hosts == 0) {
++        settings.endArray();
++        hosts = settings.beginReadArray(SER_HOSTS);
++    }
++    QSslCertificate certificate;
++    for (int index = 0; index < hosts; ++index) {
++        settings.setArrayIndex(index);
++        NvComputer computer(settings);
++        if (computer.uuid.compare(uuid, Qt::CaseInsensitive) == 0) {
++            certificate = computer.serverCert;
++            break;
++        }
++    }
++    settings.endArray();
++    return certificate;
++}
+ 
+ ComputerManager::ComputerManager(StreamingPreferences* prefs, bool syncHostStorage)
+     : m_Prefs(prefs),
+diff --git a/app/backend/computermanager.h b/app/backend/computermanager.h
+--- a/app/backend/computermanager.h
++++ b/app/backend/computermanager.h
+@@ -242,6 +242,7 @@
+     void quitRunningApp(NvComputer* computer);
+ 
+     QVector<NvComputer*> getComputers();
++    static QSslCertificate readSavedCertificate(const QString& uuid);
+ 
+     // computer is deleted inside this call
+     void deleteHost(NvComputer* computer);
+diff --git a/app/backend/nvhttp.cpp b/app/backend/nvhttp.cpp
+--- a/app/backend/nvhttp.cpp
++++ b/app/backend/nvhttp.cpp
+@@ -382,6 +382,22 @@
+     return image;
+ }
+ 
++QByteArray NvHTTP::getAuroraWallpaper(const QString& revision)
++{
++    constexpr qint64 maxBytes = 512 * 1024;
++    QScopedPointer<QNetworkReply> reply(openConnection(m_BaseUrlHttps, "aurora-wallpaper",
++        "revision=" + revision, 3500, NvLogLevel::NVLL_ERROR, maxBytes));
++    const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
++    if (status == 204) {
++        return {};
++    }
++    if (status != 200 || reply->header(QNetworkRequest::ContentTypeHeader).toString() != "image/jpeg" ||
++        reply->bytesAvailable() <= 0 || reply->bytesAvailable() > maxBytes) {
++        throw GfeHttpResponseException(400, "Invalid wallpaper preview");
++    }
++    return reply->readAll();
++}
++
+ QByteArray
+ NvHTTP::getXmlStringFromHex(QString xml,
+                             QString tagName)
+@@ -468,7 +484,8 @@
+                        QString command,
+                        QString arguments,
+                        int timeoutMs,
+-                       NvLogLevel logLevel)
++                       NvLogLevel logLevel,
++                       qint64 maxBytes)
+ {
+     // Port must be set
+     Q_ASSERT(baseUrl.port(0) != 0);
+@@ -485,6 +502,11 @@
+                  ((arguments != nullptr) ? ("&" + arguments) : ""));
+ 
+     QNetworkRequest request(url);
++    if (maxBytes > 0) {
++        request.setAttribute(QNetworkRequest::Http2AllowedAttribute, false);
++        request.setRawHeader("Accept-Encoding", "identity");
++        request.setRawHeader("Connection", "close");
++    }
+ 
+     if (m_ExactEndpoint) {
+         request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::ManualRedirectPolicy);
+@@ -507,6 +529,13 @@
+ #endif
+ 
+     QNetworkReply* reply = m_Nam.get(request);
++    if (maxBytes > 0) {
++        connect(reply, &QIODevice::readyRead, reply, [reply, maxBytes]() {
++            if (reply->bytesAvailable() > maxBytes) {
++                reply->abort();
++            }
++        });
++    }
+ 
+     // Run the request with a timeout if requested
+     QEventLoop loop;
+diff --git a/app/backend/nvhttp.h b/app/backend/nvhttp.h
+--- a/app/backend/nvhttp.h
++++ b/app/backend/nvhttp.h
+@@ -178,6 +178,8 @@
+     QImage
+     getBoxArt(int appId);
+ 
++    QByteArray getAuroraWallpaper(const QString& revision);
++
+     static
+     QVector<NvDisplayMode>
+     getDisplayModeList(QString serverInfo);
+@@ -193,7 +195,8 @@
+                    QString command,
+                    QString arguments,
+                    int timeoutMs,
+-                   NvLogLevel logLevel);
++                   NvLogLevel logLevel,
++                   qint64 maxBytes = 0);
+ 
+     NvAddress m_Address;
+     QNetworkAccessManager m_Nam;

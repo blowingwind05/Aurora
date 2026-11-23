@@ -1,0 +1,127 @@
+diff --git a/app/backend/computerseeker.h b/app/backend/computerseeker.h
+--- a/app/backend/computerseeker.h
++++ b/app/backend/computerseeker.h
+@@ -10,7 +10,8 @@
+ {
+     Q_OBJECT
+ public:
+-    explicit ComputerSeeker(ComputerManager *manager, QString computerName, QObject *parent = nullptr);
++    explicit ComputerSeeker(ComputerManager *manager, QString computerName, QObject *parent = nullptr,
++                            bool loadApps = false);
+ 
+     void start(int timeout);
+ 
+@@ -30,4 +31,5 @@
+     ComputerManager *m_ComputerManager;
+     QString m_ComputerName;
+     QTimer *m_TimeoutTimer;
++    bool m_LoadApps;
+ };
+diff --git a/app/backend/computerseeker.cpp b/app/backend/computerseeker.cpp
+--- a/app/backend/computerseeker.cpp
++++ b/app/backend/computerseeker.cpp
+@@ -1,10 +1,11 @@
+ #include "computerseeker.h"
+ #include "computermanager.h"
++#include <QPointer>
+ #include <QTimer>
+ 
+-ComputerSeeker::ComputerSeeker(ComputerManager *manager, QString computerName, QObject *parent)
++ComputerSeeker::ComputerSeeker(ComputerManager *manager, QString computerName, QObject *parent, bool loadApps)
+     : QObject(parent), m_ComputerManager(manager), m_ComputerName(computerName),
+-      m_TimeoutTimer(new QTimer(this))
++      m_TimeoutTimer(new QTimer(this)), m_LoadApps(loadApps)
+ {
+     // If we know this computer, send a WOL packet to wake it up in case it is asleep.
+     for (NvComputer * computer: m_ComputerManager->getComputers()) {
+@@ -39,6 +40,11 @@
+     if (matchComputer(computer) && isOnline(computer)) {
+         m_ComputerManager->stopPollingAsync();
+         m_TimeoutTimer->stop();
++        if (m_LoadApps) {
++            QPointer<ComputerSeeker> self(this);
++            computer->loadPairedApps();
++            if (!self) return;
++        }
+         emit computerFound(computer);
+     }
+ }
+diff --git a/app/backend/nvcomputer.h b/app/backend/nvcomputer.h
+--- a/app/backend/nvcomputer.h
++++ b/app/backend/nvcomputer.h
+@@ -52,6 +52,8 @@
+ 
+     bool
+     wake() const;
++
++    void loadPairedApps();
+ 
+     enum ReachabilityType
+     {
+diff --git a/app/backend/nvcomputer.cpp b/app/backend/nvcomputer.cpp
+--- a/app/backend/nvcomputer.cpp
++++ b/app/backend/nvcomputer.cpp
+@@ -454,6 +454,39 @@
+         // If we fail to connect, just pretend that it's not a VPN
+         qWarning() << "Unable to check for reachability within 3 seconds";
+         return ReachabilityType::RI_UNKNOWN;
++    }
++}
++
++void NvComputer::loadPairedApps()
++{
++    NvAddress address;
++    uint16_t port;
++    QSslCertificate certificate;
++    {
++        QReadLocker guard(&lock);
++        if (pairState != PS_PAIRED || !appList.isEmpty()) {
++            return;
++        }
++        address = activeAddress;
++        port = activeHttpsPort;
++        certificate = serverCert;
++    }
++    if (address.isNull() || port == 0 || certificate.isNull()) {
++        return;
++    }
++
++    // Discovery stops polling as soon as it identifies the host. On a first
++    // connection the polling worker may not have loaded its apps yet.
++    try {
++        NvHTTP http(address, port, certificate, true);
++        const auto apps = http.getAppList();
++        QWriteLocker guard(&lock);
++        if (serverCert == certificate && appList.isEmpty()) {
++            updateAppList(apps);
++        }
++    }
++    catch (const std::exception&) {
++        qWarning() << "Could not load apps from the paired host";
+     }
+ }
+ 
+diff --git a/app/cli/startstream.cpp b/app/cli/startstream.cpp
+--- a/app/cli/startstream.cpp
++++ b/app/cli/startstream.cpp
+@@ -61,7 +61,7 @@
+                 m_State = StateSeekComputer;
+                 m_ComputerManager = event.computerManager;
+ 
+-                m_ComputerSeeker = new ComputerSeeker(m_ComputerManager, m_ComputerName, q);
++                m_ComputerSeeker = new ComputerSeeker(m_ComputerManager, m_ComputerName, q, true);
+                 q->connect(m_ComputerSeeker, &ComputerSeeker::computerFound,
+                            q, &Launcher::onComputerFound);
+                 q->connect(m_ComputerSeeker, &ComputerSeeker::errorTimeout,
+diff --git a/app/cli/listapps.cpp b/app/cli/listapps.cpp
+--- a/app/cli/listapps.cpp
++++ b/app/cli/listapps.cpp
+@@ -59,7 +59,7 @@
+                 m_State = StateSeekComputer;
+                 m_ComputerManager = event.computerManager;
+ 
+-                m_ComputerSeeker = new ComputerSeeker(m_ComputerManager, m_ComputerName, q);
++                m_ComputerSeeker = new ComputerSeeker(m_ComputerManager, m_ComputerName, q, true);
+                 q->connect(m_ComputerSeeker, &ComputerSeeker::computerFound,
+                            q, &Launcher::onComputerFound);
+                 q->connect(m_ComputerSeeker, &ComputerSeeker::errorTimeout,

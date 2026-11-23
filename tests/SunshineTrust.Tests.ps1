@@ -1,7 +1,7 @@
 #Requires -Version 7.3
 
 param(
-    [string] $AssemblyPath = (Join-Path $PSScriptRoot '../dist/Avalonia-0.5.1/Aurora.dll'),
+    [Parameter(Mandatory)][string] $AssemblyPath,
     [switch] $CheckInstalledSunshine,
     [switch] $CheckElevatedImport
 )

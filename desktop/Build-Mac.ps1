@@ -5,7 +5,9 @@ param(
     [string] $Architecture = 'arm64',
     [string] $Rcodesign,
     [string] $Qmake,
-    [switch] $WithoutStreamer
+    [string] $TailscaleDirectory,
+    [switch] $WithoutStreamer,
+    [switch] $WithoutHost
 )
 
 $ErrorActionPreference = 'Stop'
@@ -17,7 +19,7 @@ if (-not $IsMacOS -and -not $WithoutStreamer) {
 }
 $project = Join-Path $PSScriptRoot 'Aurora.csproj'
 $repository = Split-Path -Parent $PSScriptRoot
-$variant = if ($WithoutStreamer) { 'shell' } else { 'integrated' }
+$variant = if ($WithoutStreamer) { 'shell' } elseif ($WithoutHost) { 'controller' } else { 'integrated' }
 $output = Join-Path $repository "dist/macos-$Architecture-$variant"
 $bundle = Join-Path $output 'Aurora.app'
 $contents = Join-Path $bundle 'Contents'
@@ -27,6 +29,15 @@ $env:DOTNET_CLI_HOME = Join-Path $PSScriptRoot 'obj/cli'
 $env:NUGET_PACKAGES = Join-Path $PSScriptRoot 'obj/packages'
 $env:DOTNET_CLI_TELEMETRY_OPTOUT = '1'
 $env:DOTNET_GENERATE_ASPNET_CERTIFICATE = 'false'
+
+if ($TailscaleDirectory) {
+    $TailscaleDirectory = (Resolve-Path -LiteralPath $TailscaleDirectory).Path
+    foreach ($file in @('AuroraTailnet', 'licenses/SOURCE.txt')) {
+        if (-not (Test-Path -LiteralPath (Join-Path $TailscaleDirectory $file) -PathType Leaf)) {
+            throw "The Tailscale build is missing $file."
+        }
+    }
+}
 
 if (Test-Path -LiteralPath $bundle) {
     $previous = Join-Path $output ("Aurora-" + [Guid]::NewGuid().ToString('N') + ".app")
@@ -38,12 +49,31 @@ Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'Info.plist') -Destination $cont
 $resources = Join-Path $contents 'Resources'
 $null = New-Item -ItemType Directory -Force -Path $resources
 Copy-Item -LiteralPath (Join-Path $repository 'THIRD-PARTY-NOTICES.txt'), (Join-Path $repository 'LICENSE') -Destination $resources
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'Assets/Aurora.icns') -Destination $resources
+if ($TailscaleDirectory) {
+    $tailnetRuntime = Join-Path $executableDirectory 'AuroraTailnet'
+    Copy-Item -LiteralPath (Join-Path $TailscaleDirectory 'AuroraTailnet') -Destination $tailnetRuntime
+    $tailnetResources = Join-Path $resources 'Tailscale'
+    $null = New-Item -ItemType Directory -Force -Path $tailnetResources
+    Copy-Item -LiteralPath (Join-Path $TailscaleDirectory 'licenses') -Destination $tailnetResources -Recurse
+    if ($IsMacOS) {
+        & /bin/chmod +x $tailnetRuntime
+        if ($LASTEXITCODE -ne 0) { throw 'Could not make AuroraTailnet executable.' }
+        & /usr/bin/codesign --force --sign - $tailnetRuntime
+        if ($LASTEXITCODE -ne 0) { throw 'Signing AuroraTailnet failed.' }
+    }
+}
 if (-not $WithoutStreamer) {
     $builder = Join-Path $PSScriptRoot 'upstream/moonlight-qt/Build-Mac-Streamer.sh'
     & /bin/bash $builder $Architecture $contents $Qmake
     if ($LASTEXITCODE -ne 0) { throw 'The Aurora streaming component could not be built.' }
     & /usr/bin/codesign --force --sign - (Join-Path $executableDirectory 'AuroraStream')
     if ($LASTEXITCODE -ne 0) { throw 'Signing AuroraStream failed.' }
+    if (-not $WithoutHost) {
+        $hostBuilder = Join-Path $PSScriptRoot 'upstream/sunshine/Build-Mac-Sunshine.sh'
+        & /bin/bash $hostBuilder $Architecture $contents
+        if ($LASTEXITCODE -ne 0) { throw 'The Aurora Sunshine host could not be built.' }
+    }
 }
 
 if ($IsMacOS) {

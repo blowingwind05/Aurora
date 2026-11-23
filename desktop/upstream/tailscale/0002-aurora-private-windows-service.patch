@@ -1,0 +1,56 @@
+diff --git a/auroradata/dir.go b/auroradata/dir.go
+--- a/auroradata/dir.go
++++ b/auroradata/dir.go
+@@ -3,5 +3,8 @@
+ // Package auroradata locates Aurora's protected Windows machine data directory.
+ package auroradata
+ 
++// WindowsServiceName identifies the private Aurora service in the Windows SCM.
++const WindowsServiceName = "AuroraTailscale"
++
+ // WindowsMachineDataDir returns the machine data directory of the Aurora build.
+ var WindowsMachineDataDir = func() string { panic("Windows machine data requested on a non-Windows platform") }
+diff --git a/paths/paths.go b/paths/paths.go
+--- a/paths/paths.go
++++ b/paths/paths.go
+@@ -55,7 +55,7 @@
+ // or the empty string if there's no reasonable default.
+ func DefaultTailscaledSocket() string {
+ 	if runtime.GOOS == "windows" {
+-		return WindowsProtectedPipePrefix + `Tailscale\tailscaled`
++		return WindowsProtectedPipePrefix + auroradata.WindowsServiceName + `\tailscaled`
+ 	}
+ 	if runtime.GOOS == "darwin" {
+ 		return "/var/run/tailscaled.socket"
+diff --git a/cmd/tailscaled/tailscaled_windows.go b/cmd/tailscaled/tailscaled_windows.go
+--- a/cmd/tailscaled/tailscaled_windows.go
++++ b/cmd/tailscaled/tailscaled_windows.go
+@@ -42,6 +42,7 @@
+ 	"golang.org/x/sys/windows/svc/eventlog"
+ 	"golang.zx2c4.com/wintun"
+ 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
++	"tailscale.com/auroradata"
+ 	"tailscale.com/drive/driveimpl"
+ 	"tailscale.com/envknob"
+ 	_ "tailscale.com/ipn/auditlog"
+@@ -90,7 +91,7 @@
+ 	}
+ }
+ 
+-const serviceName = "Tailscale"
++const serviceName = auroradata.WindowsServiceName
+ 
+ // Application-defined command codes between 128 and 255
+ // See https://web.archive.org/web/20221007222822/https://learn.microsoft.com/en-us/windows/win32/api/winsvc/nf-winsvc-controlservice
+diff --git a/cmd/tailscaled/install_windows.go b/cmd/tailscaled/install_windows.go
+--- a/cmd/tailscaled/install_windows.go
++++ b/cmd/tailscaled/install_windows.go
+@@ -56,7 +56,7 @@
+ 
+ 	c := mgr.Config{
+ 		ServiceType:  windows.SERVICE_WIN32_OWN_PROCESS,
+-		StartType:    mgr.StartAutomatic,
++		StartType:    mgr.StartDisabled, // Aurora setup selects the active service after registration.
+ 		ErrorControl: mgr.ErrorNormal,
+ 		Dependencies: serviceDependencies,
+ 		DisplayName:  serviceName,

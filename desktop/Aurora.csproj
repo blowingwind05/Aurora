@@ -4,11 +4,12 @@
     <TargetFramework>net9.0</TargetFramework>
     <RuntimeIdentifiers>win-x64;osx-arm64;osx-x64</RuntimeIdentifiers>
     <AssemblyName>Aurora</AssemblyName>
+    <ApplicationIcon Condition="'$(RuntimeIdentifier)' == 'win-x64'">Assets/Aurora.ico</ApplicationIcon>
     <Version>0.8.0</Version>
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
   </PropertyGroup>
   <ItemGroup>
-    <Compile Remove="Main.cs" />
+    <AvaloniaResource Include="Assets/**" Exclude="Assets/Aurora.icns" />
     <EmbeddedResource Include="Read-SunshineCertificate.ps1" LogicalName="Aurora.ReadSunshineCertificate.ps1" />
     <EmbeddedResource Include="SunshineOptions.json" LogicalName="Aurora.SunshineOptions.json" />
     <None Include="../THIRD-PARTY-NOTICES.txt" Link="THIRD-PARTY-NOTICES.txt" CopyToPublishDirectory="PreserveNewest" Condition="!$(RuntimeIdentifier.StartsWith('osx-'))" />

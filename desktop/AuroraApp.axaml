@@ -1,17 +1,84 @@
 <Application xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:local="using:Aurora"
              x:Class="Aurora.AuroraApp" RequestedThemeVariant="Light">
+  <Application.Resources>
+    <Template x:Key="SettingsFocusAdorner">
+      <Border Margin="-4" BorderBrush="#087CF5" BorderThickness="2" CornerRadius="9" IsHitTestVisible="False" />
+    </Template>
+    <Template x:Key="DeviceToolFocusAdorner">
+      <Border Margin="2" BorderBrush="#087CF5" BorderThickness="2" CornerRadius="5" IsHitTestVisible="False" />
+    </Template>
+    <ControlTheme x:Key="SettingsDropdownItem" TargetType="ComboBoxItem">
+      <Setter Property="MinHeight" Value="32" />
+      <Setter Property="Padding" Value="5,4" />
+      <Setter Property="CornerRadius" Value="5" />
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="Foreground" Value="#19283F" />
+      <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+      <Setter Property="VerticalContentAlignment" Value="Center" />
+      <Setter Property="FocusAdorner" Value="{x:Null}" />
+      <Setter Property="Template">
+        <ControlTemplate>
+          <Panel>
+            <Border Background="{TemplateBinding Background}" CornerRadius="{TemplateBinding CornerRadius}"
+                    Padding="{TemplateBinding Padding}">
+              <Grid ColumnDefinitions="*,16" ColumnSpacing="8">
+                <ContentPresenter x:Name="PART_ContentPresenter" Content="{TemplateBinding Content}"
+                                  ContentTemplate="{TemplateBinding ContentTemplate}" Foreground="{TemplateBinding Foreground}"
+                                  HorizontalContentAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                  VerticalContentAlignment="{TemplateBinding VerticalContentAlignment}">
+                  <ContentPresenter.Styles>
+                    <Style Selector="TextBlock">
+                      <Setter Property="TextWrapping" Value="Wrap" />
+                    </Style>
+                  </ContentPresenter.Styles>
+                </ContentPresenter>
+                <Viewbox x:Name="SelectedCheck" Grid.Column="1" Width="16" Height="16" VerticalAlignment="Center"
+                         IsVisible="False" IsHitTestVisible="False">
+                  <Canvas Width="256" Height="256">
+                    <!-- Phosphor Icons Check Bold (MIT), design assets/icons/phosphor/check-bold.svg. -->
+                    <Path Fill="{TemplateBinding Foreground}"
+                          Data="M232.49,80.49l-128,128a12,12,0,0,1-17,0l-56-56a12,12,0,1,1,17-17L96,183,215.51,63.51a12,12,0,0,1,17,17Z" />
+                  </Canvas>
+                </Viewbox>
+              </Grid>
+            </Border>
+            <Border x:Name="ItemFocus" IsVisible="False" IsHitTestVisible="False" BorderBrush="#087CF5"
+                    BorderThickness="2" CornerRadius="{TemplateBinding CornerRadius}" />
+          </Panel>
+        </ControlTemplate>
+      </Setter>
+      <Style Selector="^:pointerover:not(:selected):not(:disabled)">
+        <Setter Property="Background" Value="#E8EDF4" />
+      </Style>
+      <Style Selector="^:selected">
+        <Setter Property="Background" Value="#E2E7EF" />
+        <Setter Property="Foreground" Value="#2350B4" />
+      </Style>
+      <Style Selector="^:selected /template/ Viewbox#SelectedCheck">
+        <Setter Property="IsVisible" Value="True" />
+      </Style>
+      <Style Selector="^:focus-visible /template/ Border#ItemFocus">
+        <Setter Property="IsVisible" Value="True" />
+      </Style>
+      <Style Selector="^:disabled">
+        <Setter Property="Opacity" Value="0.6" />
+      </Style>
+    </ControlTheme>
+  </Application.Resources>
   <Application.Styles>
     <FluentTheme>
       <FluentTheme.Palettes>
-        <ColorPaletteResources x:Key="Light" Accent="#244FC5" />
+        <ColorPaletteResources x:Key="Light" Accent="#087CF5" />
       </FluentTheme.Palettes>
     </FluentTheme>
     <Style Selector="TextBlock.muted">
-      <Setter Property="Foreground" Value="#515D72" />
+      <Setter Property="Foreground" Value="#526176" />
     </Style>
     <Style Selector="Button.caption">
-      <Setter Property="Width" Value="45" />
+      <Setter Property="Width" Value="42" />
+      <Setter Property="Foreground" Value="#48556B" />
       <Setter Property="Height" Value="34" />
       <Setter Property="Padding" Value="0" />
       <Setter Property="Background" Value="Transparent" />
@@ -26,20 +93,312 @@
     <Style Selector="Button.caption.close:pointerover /template/ ContentPresenter#PART_ContentPresenter">
       <Setter Property="Background" Value="#FBE4E6" />
     </Style>
-    <Style Selector="ListBox.navigation ListBoxItem">
-      <Setter Property="MinHeight" Value="43" />
-      <Setter Property="Padding" Value="13,8" />
+    <Style Selector="TextBlock.pageTitle">
+      <Setter Property="FontSize" Value="26" />
+      <Setter Property="FontWeight" Value="650" />
+      <Setter Property="VerticalAlignment" Value="Center" />
+      <Setter Property="TextTrimming" Value="CharacterEllipsis" />
     </Style>
-    <Style Selector="ListBox.navigation ListBoxItem:selected /template/ ContentPresenter#PART_ContentPresenter">
-      <Setter Property="Background" Value="#DBE5FF" />
-      <Setter Property="Foreground" Value="#1D3FAB" />
+    <Style Selector="TextBlock.sectionTitle">
+      <Setter Property="FontSize" Value="15" />
+      <Setter Property="FontWeight" Value="650" />
+      <Setter Property="Foreground" Value="#19283F" />
+      <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+    <Style Selector="TextBlock.settingLabel">
+      <Setter Property="Foreground" Value="#19283F" />
+      <Setter Property="FontSize" Value="13" />
+      <Setter Property="FontWeight" Value="Normal" />
+      <Setter Property="VerticalAlignment" Value="Center" />
+      <Setter Property="TextWrapping" Value="Wrap" />
+    </Style>
+    <Style Selector="Border.panel">
+      <Setter Property="Background" Value="#FFFFFF" />
+      <Setter Property="BorderBrush" Value="#DBE2ED" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="CornerRadius" Value="11" />
+      <Setter Property="Padding" Value="14,12" />
+    </Style>
+    <Style Selector="Border.settingsGroup">
+      <Setter Property="Padding" Value="14,4" />
+    </Style>
+    <Style Selector="Grid.settingsCompact Border.settingsGroup">
+      <Setter Property="Padding" Value="8,4" />
+    </Style>
+    <Style Selector="StackPanel.hostActions">
+      <Setter Property="Grid.Column" Value="1" />
+    </Style>
+    <Style Selector="Grid.settingsCompact StackPanel.hostActions">
+      <Setter Property="Grid.Row" Value="1" />
+      <Setter Property="Grid.Column" Value="0" />
+      <Setter Property="Grid.ColumnSpan" Value="2" />
+    </Style>
+    <Style Selector="TextBox.settingField">
+      <Setter Property="MinHeight" Value="30" />
+      <Setter Property="CornerRadius" Value="5" />
+      <Setter Property="Background" Value="#FFFFFF" />
+      <Setter Property="BorderBrush" Value="#D0D9E8" />
+    </Style>
+    <Style Selector="ComboBox.settingField">
+      <Setter Property="MinHeight" Value="34" />
+      <Setter Property="Padding" Value="9,4,0,4" />
+      <Setter Property="CornerRadius" Value="6" />
+      <Setter Property="FontSize" Value="13" />
+      <Setter Property="Foreground" Value="#19283F" />
+      <Setter Property="Background" Value="#FFFFFF" />
+      <Setter Property="BorderBrush" Value="#CDD7E6" />
+      <Setter Property="MaxDropDownHeight" Value="248" />
+      <Setter Property="ItemContainerTheme" Value="{StaticResource SettingsDropdownItem}" />
+    </Style>
+    <!-- Keep Fluent's ComboBox template, popup and selection handling. -->
+    <Style Selector="ComboBox.settingField /template/ PathIcon#DropDownGlyph">
+      <Setter Property="Width" Value="14" />
+      <Setter Property="Height" Value="14" />
+      <Setter Property="Foreground" Value="#526176" />
+      <Setter Property="Template">
+        <ControlTemplate>
+          <Viewbox>
+            <Canvas Width="24" Height="24">
+              <Path Data="M6 9L12 15L18 9" Stroke="{TemplateBinding Foreground}"
+                    StrokeThickness="2" StrokeLineCap="Round" StrokeJoin="Round" />
+            </Canvas>
+          </Viewbox>
+        </ControlTemplate>
+      </Setter>
+    </Style>
+    <Style Selector="ComboBox.settingField:pointerover:not(:disabled) /template/ Border#Background">
+      <Setter Property="Background" Value="#FFFFFF" />
+      <Setter Property="BorderBrush" Value="#A8B8CE" />
+    </Style>
+    <Style Selector="ComboBox.settingField:dropdownopen /template/ Border#Background">
+      <Setter Property="Background" Value="#FFFFFF" />
+      <Setter Property="BorderBrush" Value="#087CF5" />
+    </Style>
+    <Style Selector="ComboBox.settingField:dropdownopen /template/ PathIcon#DropDownGlyph">
+      <Setter Property="RenderTransform" Value="rotate(180deg)" />
+    </Style>
+    <Style Selector="ComboBox.settingField:focus-visible /template/ Border#HighlightBackground">
+      <Setter Property="BorderBrush" Value="#087CF5" />
+    </Style>
+    <Style Selector="ComboBox.settingField:disabled /template/ Border#Background">
+      <Setter Property="Background" Value="#F3F5F8" />
+    </Style>
+    <Style Selector="ComboBox.settingField /template/ Popup#PART_Popup">
+      <Setter Property="Placement" Value="BottomEdgeAlignedRight" />
+      <Setter Property="MaxWidth" Value="268" />
+    </Style>
+    <Style Selector="ComboBox.settingField /template/ Border#PopupBorder">
+      <Setter Property="Background" Value="#FFFFFF" />
+      <Setter Property="BorderBrush" Value="#CDD7E6" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="CornerRadius" Value="8" />
+      <Setter Property="Padding" Value="4" />
+      <Setter Property="Margin" Value="0,4" />
+      <Setter Property="BoxShadow" Value="0 5 16 #2619283F" />
+    </Style>
+    <Style Selector="ComboBox.settingField /template/ ItemsPresenter#PART_ItemsPresenter">
+      <Setter Property="Margin" Value="0" />
+    </Style>
+    <Style Selector="Button.nav, Button.icon, :is(Button).quietAction, Button.textAction, ToggleButton.textAction, Button.deviceTool, Button.deviceHero">
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="BorderThickness" Value="0" />
+      <Setter Property="Foreground" Value="#19283F" />
+      <Setter Property="CornerRadius" Value="7" />
+      <Setter Property="Padding" Value="0" />
+      <Setter Property="HorizontalContentAlignment" Value="Center" />
+      <Setter Property="VerticalContentAlignment" Value="Center" />
+      <Setter Property="Cursor" Value="Hand" />
+    </Style>
+    <Style Selector="Button.nav">
+      <Setter Property="MinHeight" Value="50" />
+      <Setter Property="HorizontalAlignment" Value="Stretch" />
+      <Setter Property="HorizontalContentAlignment" Value="Left" />
+      <Setter Property="Padding" Value="12,0" />
+      <Setter Property="Foreground" Value="#354664" />
+      <Setter Property="FocusAdorner" Value="{StaticResource SettingsFocusAdorner}" />
+    </Style>
+    <Style Selector="Button.nav.tailnet">
+      <Setter Property="Foreground" Value="#141414" />
+    </Style>
+    <Style Selector="Button.nav.compact">
+      <Setter Property="MinHeight" Value="38" />
+      <Setter Property="Padding" Value="0" />
+      <Setter Property="HorizontalContentAlignment" Value="Center" />
+    </Style>
+    <Style Selector="TextBlock.navLabel">
+      <Setter Property="FontSize" Value="14" />
+      <Setter Property="Foreground" Value="#354664" />
+    </Style>
+    <Style Selector="Button.nav.selected TextBlock.navLabel">
+      <Setter Property="Foreground" Value="#087CF5" />
       <Setter Property="FontWeight" Value="SemiBold" />
     </Style>
+    <Style Selector="Button.nav:pointerover:not(.selected):not(.tailnet), Button.nav:focus-visible:not(.selected):not(.tailnet), Button.deviceTool:pointerover:not(:disabled), Button.deviceTool:focus-visible:not(:disabled)">
+      <Setter Property="Foreground" Value="#252A31" />
+    </Style>
+    <Style Selector="Button.nav:pointerover:not(.selected) /template/ ContentPresenter#PART_ContentPresenter, Button.nav:focus-visible:not(.selected) /template/ ContentPresenter#PART_ContentPresenter, Button.deviceTool:pointerover:not(:disabled) /template/ ContentPresenter#PART_ContentPresenter, Button.deviceTool:focus-visible:not(:disabled) /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="#E8EDF4" />
+    </Style>
+    <Style Selector="Button.nav.selected">
+      <Setter Property="Background" Value="#E2E7EF" />
+      <Setter Property="Foreground" Value="#087CF5" />
+    </Style>
+    <Style Selector="Button.nav.selected:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="#E2E7EF" />
+      <Setter Property="Foreground" Value="#087CF5" />
+    </Style>
+    <Style Selector="Button.icon">
+      <Setter Property="Width" Value="34" />
+      <Setter Property="Height" Value="34" />
+    </Style>
+    <Style Selector="Button.icon, :is(Button).quietAction">
+      <Setter Property="Foreground" Value="#526176" />
+    </Style>
+    <Style Selector=":is(Button).quietAction">
+      <Setter Property="MinHeight" Value="34" />
+      <Setter Property="Padding" Value="5,0" />
+      <Setter Property="FocusAdorner" Value="{StaticResource SettingsFocusAdorner}" />
+    </Style>
+    <Style Selector="ToggleButton.quietAction:checked /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="Foreground" Value="#526176" />
+    </Style>
+    <Style Selector="Button.icon:pointerover:not(:disabled), Button.icon:focus-visible:not(:disabled), :is(Button).quietAction:pointerover:not(:disabled), :is(Button).quietAction:focus-visible:not(:disabled), :is(Button).quietAction:pressed:not(:disabled)">
+      <Setter Property="Foreground" Value="#087CF5" />
+    </Style>
+    <Style Selector="Button.icon:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="Transparent" />
+    </Style>
+    <Style Selector=":is(Button).quietAction:pointerover:not(:disabled) /template/ ContentPresenter#PART_ContentPresenter, :is(Button).quietAction:focus-visible:not(:disabled) /template/ ContentPresenter#PART_ContentPresenter, :is(Button).quietAction:pressed:not(:disabled) /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="Foreground" Value="#087CF5" />
+    </Style>
+    <Style Selector="ToolTip.iconTip">
+      <Setter Property="Background" Value="#1A1C1F" />
+      <Setter Property="Foreground" Value="#FFFFFF" />
+      <Setter Property="FontSize" Value="14" />
+      <Setter Property="FontWeight" Value="SemiBold" />
+      <Setter Property="Template">
+        <ControlTemplate>
+          <Border Margin="18,12,18,21" Padding="12,5" CornerRadius="14" Background="{TemplateBinding Background}"
+                  BoxShadow="0 8 18 0 #330F172A">
+            <ContentPresenter Content="{TemplateBinding Content}" Foreground="{TemplateBinding Foreground}"
+                              FontSize="{TemplateBinding FontSize}" FontWeight="{TemplateBinding FontWeight}" />
+          </Border>
+        </ControlTemplate>
+      </Setter>
+    </Style>
+    <Style Selector="Button.icon:disabled /template/ ContentPresenter#PART_ContentPresenter, :is(Button).quietAction:disabled /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="Opacity" Value="0.5" />
+    </Style>
+    <Style Selector="Button.textAction, ToggleButton.textAction">
+      <Setter Property="Foreground" Value="#2350B4" />
+      <Setter Property="MinHeight" Value="34" />
+      <Setter Property="Padding" Value="5,0" />
+      <Setter Property="FocusAdorner" Value="{StaticResource SettingsFocusAdorner}" />
+    </Style>
+    <Style Selector="ToggleButton.textAction:checked /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="Foreground" Value="#2350B4" />
+    </Style>
+    <Style Selector="Button.textAction:pointerover:not(:disabled) /template/ ContentPresenter#PART_ContentPresenter, ToggleButton.textAction:pointerover:not(:disabled) /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="#EDF2FC" />
+      <Setter Property="Foreground" Value="#2350B4" />
+    </Style>
+    <Style Selector="RadioButton.configTab">
+      <Setter Property="FontSize" Value="15" />
+      <Setter Property="MinHeight" Value="40" />
+      <Setter Property="MinWidth" Value="40" />
+      <Setter Property="Padding" Value="6,3,6,9" />
+      <Setter Property="Foreground" Value="#526176" />
+      <Setter Property="FocusAdorner" Value="{StaticResource SettingsFocusAdorner}" />
+      <Setter Property="Template">
+        <ControlTemplate>
+          <Grid Background="Transparent">
+            <ContentPresenter x:Name="TabLabel" Content="{TemplateBinding Content}" Padding="{TemplateBinding Padding}"
+                              Foreground="{TemplateBinding Foreground}" FontSize="{TemplateBinding FontSize}"
+                              FontWeight="{TemplateBinding FontWeight}"
+                              HorizontalContentAlignment="Center" VerticalContentAlignment="Center" />
+            <Border x:Name="SelectionLine" IsVisible="False" Height="3" Width="18" CornerRadius="2"
+                    Margin="0,0,0,2" Background="#087CF5" HorizontalAlignment="Center" VerticalAlignment="Bottom" />
+          </Grid>
+        </ControlTemplate>
+      </Setter>
+    </Style>
+    <Style Selector="RadioButton.configTab:pointerover:not(:disabled), RadioButton.configTab:checked">
+      <Setter Property="Foreground" Value="#19283F" />
+    </Style>
+    <Style Selector="RadioButton.configTab:checked">
+      <Setter Property="FontWeight" Value="650" />
+    </Style>
+    <Style Selector="RadioButton.configTab:checked /template/ Border#SelectionLine">
+      <Setter Property="IsVisible" Value="True" />
+    </Style>
+    <Style Selector="RadioButton.configTab:disabled /template/ Grid">
+      <Setter Property="Opacity" Value="0.55" />
+    </Style>
+    <Style Selector="ToggleSwitch.settingSwitch">
+      <Setter Property="Width" Value="32" />
+      <Setter Property="Height" Value="18" />
+      <Setter Property="MinWidth" Value="32" />
+      <Setter Property="MinHeight" Value="18" />
+      <Setter Property="Padding" Value="0" />
+      <Setter Property="HorizontalAlignment" Value="Right" />
+      <Setter Property="VerticalAlignment" Value="Center" />
+      <Setter Property="FocusAdorner" Value="{StaticResource SettingsFocusAdorner}" />
+      <Setter Property="Template">
+        <ControlTemplate>
+          <Grid x:Name="SwitchBody" Background="Transparent">
+            <Border x:Name="SwitchTrack" CornerRadius="9" BorderThickness="1"
+                    Background="#F0F3F7" BorderBrush="#8E9BB0" />
+            <Grid x:Name="PART_SwitchKnob" Width="14" Margin="3,0,0,0" HorizontalAlignment="Left">
+              <Canvas>
+                <Panel x:Name="PART_MovingKnobs" Canvas.Top="3" Width="12" Height="12" Background="Transparent">
+                  <Ellipse x:Name="SwitchDot" Fill="#6D7C92" IsHitTestVisible="False" />
+                </Panel>
+              </Canvas>
+            </Grid>
+          </Grid>
+        </ControlTemplate>
+      </Setter>
+    </Style>
+    <Style Selector="ToggleSwitch.settingSwitch:checked /template/ Border#SwitchTrack">
+      <Setter Property="Background" Value="#087CF5" />
+      <Setter Property="BorderBrush" Value="#087CF5" />
+    </Style>
+    <Style Selector="ToggleSwitch.settingSwitch:checked /template/ Ellipse#SwitchDot">
+      <Setter Property="Fill" Value="#FFFFFF" />
+    </Style>
+    <Style Selector="ToggleSwitch.settingSwitch:disabled /template/ Grid#SwitchBody">
+      <Setter Property="Opacity" Value="0.55" />
+    </Style>
+    <Style Selector="Button.deviceHero">
+      <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+      <Setter Property="VerticalContentAlignment" Value="Stretch" />
+      <Setter Property="CornerRadius" Value="0" />
+    </Style>
+    <Style Selector="Button.deviceHero:disabled /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Opacity" Value="1" />
+    </Style>
+    <Style Selector="Button.deviceTool">
+      <Setter Property="FocusAdorner" Value="{StaticResource DeviceToolFocusAdorner}" />
+      <Setter Property="MinHeight" Value="44" />
+      <Setter Property="HorizontalAlignment" Value="Stretch" />
+    </Style>
+    <Style Selector="Button.deviceTool:disabled">
+      <Setter Property="Foreground" Value="#7A8494" />
+    </Style>
+    <Style Selector="Button.deviceTool:disabled /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="Foreground" Value="#7A8494" />
+    </Style>
     <Style Selector="Button.action">
-      <Setter Property="MinHeight" Value="39" />
-      <Setter Property="Padding" Value="15,8" />
-      <Setter Property="CornerRadius" Value="9" />
+      <Setter Property="MinHeight" Value="34" />
+      <Setter Property="Padding" Value="11,5" />
+      <Setter Property="CornerRadius" Value="7" />
       <Setter Property="HorizontalContentAlignment" Value="Center" />
+      <Setter Property="ContentTemplate" Value="{Binding Content, RelativeSource={RelativeSource Self}, Converter={x:Static local:ActionLabel.TemplateForContent}}" />
       <Setter Property="FontWeight" Value="SemiBold" />
       <Setter Property="Cursor" Value="Hand" />
       <Setter Property="Background" Value="#FFFFFF" />
@@ -48,17 +407,31 @@
       <Setter Property="BorderThickness" Value="1" />
     </Style>
     <Style Selector="Button.accent">
-      <Setter Property="Background" Value="#244FC5" />
+      <Setter Property="Background" Value="#087CF5" />
       <Setter Property="Foreground" Value="#FFFFFF" />
-      <Setter Property="BorderBrush" Value="#244FC5" />
+      <Setter Property="BorderBrush" Value="#087CF5" />
     </Style>
-    <Style Selector="Button.action:pointerover /template/ ContentPresenter#PART_ContentPresenter">
-      <Setter Property="Background" Value="#E9EFFF" />
-      <Setter Property="Foreground" Value="#192E60" />
+    <Style Selector="Button.danger">
+      <Setter Property="Background" Value="#FFF0F0" />
+      <Setter Property="BorderBrush" Value="#F2CECE" />
+      <Setter Property="Foreground" Value="#A42E36" />
     </Style>
-    <Style Selector="Button.accent:pointerover /template/ ContentPresenter#PART_ContentPresenter">
-      <Setter Property="Background" Value="#1D3FAB" />
+    <Style Selector="Button.action:pointerover:not(:disabled) /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="#EDF2FC" />
+      <Setter Property="Foreground" Value="#243757" />
+    </Style>
+    <Style Selector="Button.accent:pointerover:not(:disabled) /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="#076DD8" />
       <Setter Property="Foreground" Value="#FFFFFF" />
+    </Style>
+    <Style Selector="Button.danger:pointerover:not(:disabled) /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="#FCE1E2" />
+      <Setter Property="Foreground" Value="#A42E36" />
+    </Style>
+    <Style Selector="Button.action:disabled /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="#E7ECF4" />
+      <Setter Property="Foreground" Value="#536178" />
+      <Setter Property="BorderBrush" Value="#DFE6F0" />
     </Style>
     <Style Selector="ListBoxItem">
       <Setter Property="Padding" Value="10,7" />

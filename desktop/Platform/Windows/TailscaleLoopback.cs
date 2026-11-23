@@ -15,16 +15,15 @@ internal static class TailscaleLoopback
 {
     private const int TcpOwnerPidConnections = 4;
     private const int TcpTableRowSize = 24;
-    private const string ProtectedTailscalePipe = @"ProtectedPrefix\Administrators\Tailscale\tailscaled";
 
     // Serve sends a PROXY header over loopback. Only the Windows Tailscale service may assert that identity.
-    public static async Task<bool> IsFromService(IPEndPoint source, IPEndPoint destination, CancellationToken token)
+    public static async Task<bool> IsFromService(TailscaleMode mode, IPEndPoint source, IPEndPoint destination, CancellationToken token)
     {
-        if (!OperatingSystem.IsWindows() || !source.Address.Equals(IPAddress.Loopback) ||
+        if (!OperatingSystem.IsWindows() || mode != TailscaleMode.System || !source.Address.Equals(IPAddress.Loopback) ||
             !destination.Address.Equals(IPAddress.Loopback)) return false;
         // The service supervisor starts a separate daemon, which owns both the LocalAPI pipe and Serve's sockets.
         // Windows permits only administrators to create pipes under this prefix.
-        using var pipe = new NamedPipeClientStream(".", ProtectedTailscalePipe, PipeDirection.InOut,
+        using var pipe = new NamedPipeClientStream(".", BundledTailscale.SystemPipe, PipeDirection.InOut,
             PipeOptions.Asynchronous, TokenImpersonationLevel.Identification);
         try { await pipe.ConnectAsync(750, token); }
         catch (Exception error) when (error is TimeoutException or IOException or UnauthorizedAccessException) { return false; }

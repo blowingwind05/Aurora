@@ -1,0 +1,257 @@
+--- a/paths/paths.go
++++ b/paths/paths.go
+@@ -13,6 +13,7 @@
+ 	"runtime"
+ 	"strings"
+ 
++	"tailscale.com/auroradata"
+ 	"tailscale.com/syncs"
+ 	"tailscale.com/version/distro"
+ )
+@@ -105,7 +106,7 @@
+ 		return f()
+ 	}
+ 	if runtime.GOOS == "windows" {
+-		return filepath.Join(os.Getenv("ProgramData"), "Tailscale", "server-state.conf")
++		return filepath.Join(auroradata.WindowsMachineDataDir(), "server-state.conf")
+ 	}
+ 	return ""
+ }
+--- a/envknob/envknob.go
++++ b/envknob/envknob.go
+@@ -33,6 +33,7 @@
+ 
+ 	"tailscale.com/feature/buildfeatures"
+ 	"tailscale.com/kube/kubetypes"
++	"tailscale.com/auroradata"
+ 	"tailscale.com/syncs"
+ 	"tailscale.com/types/opt"
+ 	"tailscale.com/util/testenv"
+@@ -556,7 +557,7 @@
+ // environment variables to a running service in a way similar to modifying
+ // /etc/default/tailscaled on Linux.
+ //
+-// On Windows, you use %ProgramData%\Tailscale\tailscaled-env.txt instead.
++// On Windows, the Aurora build reads tailscaled-env.txt from its protected machine directory.
+ //
+ // On macOS, use one of:
+ //
+@@ -628,7 +629,7 @@
+ 	switch runtime.GOOS {
+ 	case "windows":
+ 		return []string{
+-			filepath.Join(os.Getenv("ProgramData"), "Tailscale", "tailscaled-env.txt"),
++			filepath.Join(auroradata.WindowsMachineDataDir(), "tailscaled-env.txt"),
+ 		}
+ 	case "linux":
+ 		if buildfeatures.HasSynology && distro.Get() == distro.Synology {
+--- a/cmd/tailscaled/syspolicy.go
++++ b/cmd/tailscaled/syspolicy.go
+@@ -8,10 +8,10 @@
+ import (
+ 	"flag"
+ 	"log"
+-	"os"
+ 	"path/filepath"
+ 	"runtime"
+ 
++	"tailscale.com/auroradata"
+ 	"tailscale.com/util/syspolicy"
+ )
+ 
+@@ -21,7 +21,7 @@
+ 
+ // defaultSyspolicyFile returns the platform-specific default path for the
+ // --syspolicy-file flag. On Windows it sits next to the rest of Tailscale's
+-// machine state under %ProgramData%\Tailscale. On every other platform
++// machine state in Aurora's protected machine data directory. On every other platform
+ // (Linux, the BSDs, illumos/Solaris, and tailscaled-without-the-GUI on
+ // macOS) it uses /etc/tailscale, which is where admin-provided
+ // configuration is conventionally placed.
+@@ -32,10 +32,7 @@
+ // merges later-registered same-scope sources over earlier ones.
+ func defaultSyspolicyFile() string {
+ 	if runtime.GOOS == "windows" {
+-		if pd := os.Getenv("ProgramData"); pd != "" {
+-			return filepath.Join(pd, "Tailscale", "syspolicy.json")
+-		}
+-		return ""
++		return filepath.Join(auroradata.WindowsMachineDataDir(), "syspolicy.json")
+ 	}
+ 	return "/etc/tailscale/syspolicy.json"
+ }
+--- a/ipn/auditlog/store.go
++++ b/ipn/auditlog/store.go
+@@ -5,11 +5,11 @@
+ 
+ import (
+ 	"fmt"
+-	"os"
+ 	"path/filepath"
+ 	"runtime"
+ 
+ 	"tailscale.com/ipn/store"
++	"tailscale.com/auroradata"
+ 	"tailscale.com/types/lazy"
+ 	"tailscale.com/types/logger"
+ 	"tailscale.com/util/must"
+@@ -32,7 +32,7 @@
+ func DefaultStoreFilePath() (string, error) {
+ 	switch runtime.GOOS {
+ 	case "windows":
+-		return filepath.Join(os.Getenv("ProgramData"), "Tailscale", "audit-log.json"), nil
++		return filepath.Join(auroradata.WindowsMachineDataDir(), "audit-log.json"), nil
+ 	default:
+ 		// The auditlog package must either be omitted from the build,
+ 		// have the platform-specific store path set with [SetStoreFilePath] (e.g., on macOS),
+--- a/ipn/store/stores.go
++++ b/ipn/store/stores.go
+@@ -13,7 +13,6 @@
+ 	"maps"
+ 	"os"
+ 	"path/filepath"
+-	"runtime"
+ 	"slices"
+ 	"strings"
+ 	"sync"
+@@ -62,18 +61,12 @@
+ 			// We can't strip the prefix here as some NewStoreFunc (like arn:)
+ 			// expect the prefix.
+ 			if prefix == TPMPrefix {
+-				if runtime.GOOS == "windows" {
+-					path = TPMPrefix + TryWindowsAppDataMigration(logf, strings.TrimPrefix(path, TPMPrefix))
+-				}
+ 				if err := maybeMigrateLocalStateFile(logf, path); err != nil {
+ 					return nil, fmt.Errorf("failed to migrate existing state file to TPM-sealed format: %w", err)
+ 				}
+ 			}
+ 			return sf(logf, path)
+ 		}
+-	}
+-	if runtime.GOOS == "windows" {
+-		path = TryWindowsAppDataMigration(logf, path)
+ 	}
+ 	if err := maybeMigrateLocalStateFile(logf, path); err != nil {
+ 		return nil, fmt.Errorf("failed to migrate existing TPM-sealed state file to plaintext format: %w", err)
+--- a/logpolicy/logpolicy.go
++++ b/logpolicy/logpolicy.go
+@@ -30,6 +30,7 @@
+ 
+ 	"golang.org/x/term"
+ 	"tailscale.com/atomicfile"
++	"tailscale.com/auroradata"
+ 	"tailscale.com/envknob"
+ 	"tailscale.com/feature"
+ 	"tailscale.com/feature/buildfeatures"
+@@ -218,18 +219,7 @@
+ 	switch runtime.GOOS {
+ 	case "windows":
+ 		if version.CmdName() == "tailscaled" {
+-			// In the common case, when tailscaled is run as the Local System (as a service),
+-			// we want to use %ProgramData% (C:\ProgramData\Tailscale), aside the
+-			// system state config with the machine key, etc. But if that directory's
+-			// not accessible, then it's probably because the user is running tailscaled
+-			// as a regular user (perhaps in userspace-networking/SOCK5 mode) and we should
+-			// just use the %LocalAppData% instead. In a user context, %LocalAppData% isn't
+-			// subject to random deletions from Windows system updates.
+-			dir := filepath.Join(os.Getenv("ProgramData"), "Tailscale")
+-			if winProgramDataAccessible(dir) {
+-				logf("logpolicy: using dir %v", dir)
+-				return dir
+-			}
++			return auroradata.WindowsMachineDataDir()
+ 		}
+ 		dir := filepath.Join(os.Getenv("LocalAppData"), "Tailscale")
+ 		logf("logpolicy: using LocalAppData dir %v", dir)
+@@ -296,23 +286,6 @@
+ 
+ func redirectStderrToLogPanics() bool {
+ 	return runningUnderSystemd() || envknob.Bool("TS_PLEASE_PANIC")
+-}
+-
+-// winProgramDataAccessible reports whether the directory (assumed to
+-// be a Windows %ProgramData% directory) is accessible to the current
+-// process. It's created if needed.
+-func winProgramDataAccessible(dir string) bool {
+-	if err := os.MkdirAll(dir, 0700); err != nil {
+-		// TODO: windows ACLs
+-		return false
+-	}
+-	// The C:\ProgramData\Tailscale directory should be locked down
+-	// by with ACLs to only be readable by the local system so a
+-	// regular user shouldn't be able to do this operation:
+-	if _, err := os.ReadDir(dir); err != nil {
+-		return false
+-	}
+-	return true
+ }
+ 
+ // tryFixLogStateLocation is a temporary fixup for
+@@ -582,34 +555,6 @@
+ 
+ 	if runtime.GOOS == "windows" {
+ 		switch opts.CmdName {
+-		case "tailscaled":
+-			// Tailscale 1.14 and before stored state under %LocalAppData%
+-			// (usually "C:\WINDOWS\system32\config\systemprofile\AppData\Local"
+-			// when tailscaled.exe is running as a non-user system service).
+-			// However it is frequently cleared for almost any reason: Windows
+-			// updates, System Restore, even various System Cleaner utilities.
+-			//
+-			// The Windows service previously ran as tailscale-ipn.exe, so
+-			// machines which ran very old versions might still have their
+-			// log conf named %LocalAppData%\tailscale-ipn.log.conf
+-			//
+-			// Machines which started using Tailscale more recently will have
+-			// %LocalAppData%\tailscaled.log.conf
+-			//
+-			// Attempt to migrate the log conf to C:\ProgramData\Tailscale
+-			oldDir := filepath.Join(os.Getenv("LocalAppData"), "Tailscale")
+-
+-			oldPath := filepath.Join(oldDir, "tailscaled.log.conf")
+-			if fi, err := os.Stat(oldPath); err != nil || !fi.Mode().IsRegular() {
+-				// *Only* if tailscaled.log.conf does not exist,
+-				// check for tailscale-ipn.log.conf
+-				oldPathOldCmd := filepath.Join(oldDir, "tailscale-ipn.log.conf")
+-				if fi, err := os.Stat(oldPathOldCmd); err == nil && fi.Mode().IsRegular() {
+-					oldPath = oldPathOldCmd
+-				}
+-			}
+-
+-			cfgPath = paths.TryConfigFileMigration(earlyLogf, oldPath, cfgPath)
+ 		case "tailscale-ipn":
+ 			for _, oldBase := range []string{"wg64.log.conf", "wg32.log.conf"} {
+ 				oldConf := filepath.Join(opts.Dir, oldBase)
+--- /dev/null
++++ b/auroradata/dir.go
+@@ -0,0 +1,7 @@
++// SPDX-License-Identifier: BSD-3-Clause
++
++// Package auroradata locates Aurora's protected Windows machine data directory.
++package auroradata
++
++// WindowsMachineDataDir returns the machine data directory of the Aurora build.
++var WindowsMachineDataDir = func() string { panic("Windows machine data requested on a non-Windows platform") }
+--- /dev/null
++++ b/auroradata/dir_windows.go
+@@ -0,0 +1,20 @@
++// SPDX-License-Identifier: BSD-3-Clause
++
++package auroradata
++
++import (
++	"path/filepath"
++	"sync"
++
++	"golang.org/x/sys/windows"
++)
++
++func init() {
++	WindowsMachineDataDir = sync.OnceValue(func() string {
++		root, err := windows.KnownFolderPath(windows.FOLDERID_ProgramFiles, 0)
++		if err != nil || !filepath.IsAbs(root) || len(filepath.VolumeName(root)) != 2 {
++			panic("cannot locate the local Windows Program Files directory")
++		}
++		return filepath.Join(root, "AuroraTailnet", "Tailscale")
++	})
++}
