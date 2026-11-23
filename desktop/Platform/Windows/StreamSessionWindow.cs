@@ -59,7 +59,7 @@ internal sealed class StreamSessionWindow : Window
     private readonly Popup fullscreenControls;
     private readonly MenuFlyout controlMenu;
     private readonly MenuItem fullscreenItem = new();
-    private readonly MenuItem statsItem = new() { Header = "切换性能统计", IsVisible = false };
+    private readonly MenuItem statsItem = new() { Header = "显示／隐藏性能统计", IsVisible = false };
     private EventWaitHandle statsSignal;
     private readonly MenuItem privacyStatus = new() { IsEnabled = false };
     private readonly MenuItem privacyAction = new() { StaysOpenOnClick = true };
