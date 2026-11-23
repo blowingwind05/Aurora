@@ -35,7 +35,7 @@ internal sealed class StreamSessionWindow : Window
         HorizontalContentAlignment = HorizontalAlignment.Center, VerticalContentAlignment = VerticalAlignment.Center,
         Background = Brushes.Transparent, IsHitTestVisible = false, Focusable = false };
     private readonly Control statusArrow;
-    private readonly Border displayTab;
+    private readonly DisplayTab displayTab;
     private readonly TextBlock displayCaption;
     private readonly Flyout connectionFlyout;
     private readonly StreamConnectionDetails connectionDetails = new();
@@ -70,6 +70,35 @@ internal sealed class StreamSessionWindow : Window
     private WindowState previousState;
     private bool connected;
     private bool allowClose;
+
+    private sealed class DisplayTab : Decorator
+    {
+        internal const double Foot = 11;
+        private const double TopRadius = 10;
+
+        public override void Render(DrawingContext context)
+        {
+            var width = Bounds.Width;
+            var height = Bounds.Height;
+            var outline = new StreamGeometry();
+            using (var path = outline.Open())
+            {
+                var top = new Size(TopRadius, TopRadius);
+                var bottom = new Size(Foot, Foot);
+                // Draw the inset top corners and the outward feet as one outline to avoid seams.
+                path.BeginFigure(new Point(0, height), true);
+                path.ArcTo(new Point(Foot, height - Foot), bottom, 0, false, SweepDirection.CounterClockwise);
+                path.LineTo(new Point(Foot, TopRadius));
+                path.ArcTo(new Point(Foot + TopRadius, 0), top, 0, false, SweepDirection.Clockwise);
+                path.LineTo(new Point(width - Foot - TopRadius, 0));
+                path.ArcTo(new Point(width - Foot, TopRadius), top, 0, false, SweepDirection.Clockwise);
+                path.LineTo(new Point(width - Foot, height - Foot));
+                path.ArcTo(new Point(width, height), bottom, 0, false, SweepDirection.CounterClockwise);
+                path.EndFigure(true);
+            }
+            context.DrawGeometry(Brushes.White, null, outline);
+        }
+    }
 
     private string SessionName => "Aurora.Embedded." + id;
 
@@ -112,14 +141,14 @@ internal sealed class StreamSessionWindow : Window
         connectionFlyout.FlyoutPresenterClasses.Add("streamDetails");
         statusButton.Flyout = connectionFlyout;
         displayCaption = new TextBlock { Text = "显示器 1", FontSize = 12, VerticalAlignment = VerticalAlignment.Center };
-        displayTab = new Border
+        displayTab = new DisplayTab
         {
-            Width = 152, Height = 37, Margin = new Thickness(14, 0, 0, 0), VerticalAlignment = VerticalAlignment.Bottom,
-            Background = Brushes.White, CornerRadius = new CornerRadius(9, 9, 0, 0),
+            Width = 152 + 2 * DisplayTab.Foot, Height = 37,
+            Margin = new Thickness(14, 0, 0, 0), VerticalAlignment = VerticalAlignment.Bottom,
             Child = new StackPanel
             {
                 Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Left,
-                VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(10, 0, 0, 0), Spacing = 6,
+                VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(DisplayTab.Foot + 10, 0, 0, 0), Spacing = 6,
                 Children = { AuroraVisual.Icon(AuroraVisual.Monitor, size: 16), displayCaption }
             }
         };
@@ -292,7 +321,7 @@ internal sealed class StreamSessionWindow : Window
         var narrow = width < 490;
         controlsText.IsVisible = !compact;
         controls.Width = compact ? 32 : 94;
-        displayTab.Width = compact ? 36 : 152;
+        displayTab.Width = (compact ? 36 : 152) + 2 * DisplayTab.Foot;
         displayTab.Margin = new Thickness(compact ? 0 : 14, 0, 0, 0);
         displayCaption.IsVisible = !compact;
         disconnectText.IsVisible = status.IsVisible = !narrow;

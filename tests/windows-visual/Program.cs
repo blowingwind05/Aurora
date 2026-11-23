@@ -430,12 +430,17 @@ internal static class WindowsVisualTests
         var maximize = (Button)type.GetField("maximize", Private).GetValue(window);
         var disconnect = (Button)type.GetField("disconnect", Private).GetValue(window);
         var slot = (Grid)type.GetField("disconnectSlot", Private).GetValue(window);
+        var tab = (Control)type.GetField("displayTab", Private).GetValue(window);
         var frame = (Border)window.Content;
         using var stop = new CancellationTokenSource();
 
         try
         {
             Call(window, "ShowConnecting", stop);
+            window.Width = 580;
+            await Until(() => toolbar.Bounds.Width is > 500 and < 650 && tab.Bounds.Width < 100);
+            CheckDisplayTabFeet(toolbar, tab, Path.Combine(output, "stream-display-tab-compact.png"));
+            window.Width = 1000;
             foreach (var state in new[] { WindowState.Normal, WindowState.Maximized })
             {
                 window.WindowState = state;
@@ -449,6 +454,8 @@ internal static class WindowsVisualTests
                     Require(Math.Abs(midpoint - toolbar.Bounds.Height / 2) <= 0.51, $"{state}: {AutomationProperties.GetName(button)} midpoint {midpoint}, toolbar {toolbar.Bounds.Height}, button {button.Bounds}, visible {button.IsVisible}.");
                 }
 
+                CheckDisplayTabFeet(toolbar, tab, state == WindowState.Normal
+                    ? Path.Combine(output, "stream-display-tab.png") : null);
                 if (state == WindowState.Maximized)
                     Require(AutomationProperties.GetName(maximize) == "还原窗口", "Maximized windows need the restore caption.");
             }
@@ -537,6 +544,40 @@ internal static class WindowsVisualTests
             Console.WriteLine("Windows stream caption alignment, retry, native full-screen menu and restore verified.");
         }
         finally { Call(window, "Finish"); }
+    }
+
+    private static void CheckDisplayTabFeet(Control toolbar, Control tab, string screenshot)
+    {
+        const double scale = 2;
+        var origin = tab.TranslatePoint(default, toolbar).Value;
+        using var picture = Draw(toolbar, scale);
+        using var encoded = new MemoryStream();
+        picture.Save(encoded);
+        encoded.Position = 0;
+        using var pixels = SKBitmap.Decode(encoded);
+        SKColor Pixel(double x, double y) => pixels.GetPixel(
+            (int)Math.Floor((origin.X + x) * scale), (int)Math.Floor((origin.Y + y) * scale));
+
+        var background = new SKColor(0xED, 0xF1, 0xF8);
+        var height = tab.Bounds.Height;
+        foreach (var side in new[] { 0.0, tab.Bounds.Width })
+        {
+            var sign = side == 0 ? 1 : -1;
+            Require(Pixel(side + sign * 7, height - 2) == SKColors.White &&
+                Pixel(side + sign * 4, height - 8) == background,
+                "The display tab must flare outward at the bottom of both sides.");
+        }
+
+        if (screenshot != null)
+        {
+            var left = Math.Max(0, (int)Math.Floor((origin.X - 12) * scale));
+            var right = Math.Min(pixels.Width, (int)Math.Ceiling((origin.X + tab.Bounds.Width + 12) * scale));
+            using var crop = new SKBitmap();
+            Require(pixels.ExtractSubset(crop, new SKRectI(left, 0, right, pixels.Height)), "The display tab crop is off screen.");
+            using var png = crop.Encode(SKEncodedImageFormat.Png, 100);
+            using var file = File.Create(screenshot);
+            png.SaveTo(file);
+        }
     }
 
     private static void Click(Button button) => button.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
