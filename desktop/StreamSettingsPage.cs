@@ -147,7 +147,8 @@ internal sealed class StreamSettingsPage : UserControl
 
     private Control Quality(Action refreshBitrate)
     {
-        var resolution = Choice("分辨率", "resolution", ("720p · 1280 × 720", "1280x720"),
+        var resolution = Choice("分辨率", "resolution",
+            ("跟随被控端", StreamPreferences.FollowHostResolution), ("720p · 1280 × 720", "1280x720"),
             ("1080p · 1920 × 1080", "1920x1080"), ("1440p · 2560 × 1440", "2560x1440"),
             ("4K · 3840 × 2160", "3840x2160"));
         var fps = Choice("帧率", "fps", ("30 FPS", "30"), ("60 FPS", "60"));

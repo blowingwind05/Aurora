@@ -14,6 +14,8 @@ pair_source_port_patch="$script_dir/0006-aurora-pair-source-port.patch"
 encoder_probe_patch="$script_dir/0008-aurora-background-encoder-probe.patch"
 power_patch="$script_dir/0009-aurora-device-power.patch"
 privacy_patch="$script_dir/0010-aurora-macos-privacy-screensaver.patch"
+geometry_patch="$script_dir/0012-aurora-capture-geometry.patch"
+geometry_platform_patch="$script_dir/0013-aurora-macos-capture-geometry.patch"
 privacy_provenance="$script_dir/Mac-Privacy-SOURCE.txt"
 privacy_preview="${AURORA_MACOS_PRIVACY_PREVIEW:-OFF}"
 
@@ -40,7 +42,7 @@ staged="$work/stage"
 git clone --depth 1 --branch "$tag" --recurse-submodules --shallow-submodules \
   https://github.com/SunshineStream/Sunshine.git "$source_dir"
 [[ "$(git -C "$source_dir" rev-parse HEAD)" == "$revision" ]]
-for host_patch in "$patch" "$wallpaper_patch" "$private_admin_patch" "$pair_source_port_patch" "$encoder_probe_patch" "$power_patch" "$privacy_patch"; do
+for host_patch in "$patch" "$wallpaper_patch" "$private_admin_patch" "$pair_source_port_patch" "$encoder_probe_patch" "$power_patch" "$privacy_patch" "$geometry_patch" "$geometry_platform_patch"; do
   git -C "$source_dir" apply --check "$host_patch"
   git -C "$source_dir" apply "$host_patch"
 done
@@ -90,7 +92,7 @@ test -f "$resources/assets/web/index.html"
 cp "$desktop/Assets/Aurora.icns" "$resources/sunshine.icns"
 licenses="$resources/licenses"
 mkdir -p "$licenses"
-cp "$source_dir/LICENSE" "$source_dir/NOTICE" "$patch" "$wallpaper_patch" "$private_admin_patch" "$pair_source_port_patch" "$encoder_probe_patch" "$power_patch" "$privacy_patch" "$privacy_provenance" "$licenses/"
+cp "$source_dir/LICENSE" "$source_dir/NOTICE" "$patch" "$wallpaper_patch" "$private_admin_patch" "$pair_source_port_patch" "$encoder_probe_patch" "$power_patch" "$privacy_patch" "$geometry_patch" "$geometry_platform_patch" "$privacy_provenance" "$licenses/"
 {
   printf '%s\n' 'https://github.com/SunshineStream/Sunshine' "$tag" "$revision"
   git -C "$source_dir" submodule status --recursive

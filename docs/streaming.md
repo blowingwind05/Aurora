@@ -8,7 +8,7 @@
 
 确认配对时，Aurora 调用 `Moonlight list`。启动串流时，Moonlight 再解析主机和目标应用。内置 Tailscale 的配对检查和串流共用所选路由的[转发租约](../desktop/EmbeddedTailnet.cs)。[启动警告补丁](../desktop/upstream/moonlight-qt/0014-aurora-skip-cli-warning-delay.patch) 将警告写入日志并让 CLI 继续执行。
 
-[串流偏好](../desktop/StreamPreferences.cs) 持久化设置，启动串流时生成参数。Windows 把视频嵌入 [Aurora 会话窗](../desktop/Platform/Windows/StreamSessionWindow.cs)。macOS 的串流组件使用 [Aurora 原生连接窗口](../desktop/upstream/moonlight-qt/0017-aurora-macos-session-window.patch) 显示进度与失败，出画时交给 SDL 视频窗及其 AppKit 控制中心。原生连接入口在当前 Mac 补丁中省略了 QML 提示所需的 1.5 秒等待。窗口化时从连接状态打开详情。全屏时可从悬浮控制中心打开同一详情。面板使用当前会话的实测指标，缺失值隐藏。隐私保护由被控端确认是否支持和开启。
+[串流偏好](../desktop/StreamPreferences.cs) 保存手动选择。默认的「跟随被控端」会在连接时使用已配对 Windows 或 macOS 宿主报告的采集尺寸。源尺寸有效时，运行时按实际宽高比建立视频流。手动指定尺寸优先。旧宿主缺少尺寸信息时沿用串流组件的偏好。Windows 把视频嵌入 [Aurora 会话窗](../desktop/Platform/Windows/StreamSessionWindow.cs)。窗口化时，Windows 和 macOS 都根据实际视频宽高比调整视口。macOS 的串流组件使用 [Aurora 原生连接窗口](../desktop/upstream/moonlight-qt/0017-aurora-macos-session-window.patch) 显示进度与失败，出画时交给 SDL 视频窗及其 AppKit 控制中心。原生连接入口在当前 Mac 补丁中省略了 QML 提示所需的 1.5 秒等待。窗口化时从连接状态打开详情。全屏时可从悬浮控制中心打开同一详情。面板使用当前会话的实测指标，缺失值隐藏。隐私保护由被控端确认是否支持和开启。
 
 ## 已配对设备的建连优化
 

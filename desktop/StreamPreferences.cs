@@ -9,6 +9,8 @@ namespace Aurora;
 
 internal static class StreamPreferences
 {
+    internal const string FollowHostResolution = "host";
+
     private static readonly StreamPreferenceStore Store = new(GetSettingsPath());
 
     internal static string Get(string option) => Store.Get(option);
@@ -39,7 +41,7 @@ internal sealed class StreamPreferenceStore
     // Moonlight Qt 6.0.0 fallbacks with Aurora's desktop-oriented viewer defaults.
     private static readonly Dictionary<string, string> Defaults = new(StringComparer.Ordinal)
     {
-        ["resolution"] = "1280x720",
+        ["resolution"] = StreamPreferences.FollowHostResolution,
         ["fps"] = "60",
         ["display-mode"] = ViewerDisplayMode,
         ["vsync"] = Enabled,
@@ -105,7 +107,7 @@ internal sealed class StreamPreferenceStore
         }
     }
 
-    // getDefaultBitrate() at the resolutions and frame rates offered by Aurora.
+    // Estimate for the settings slider before remote capture geometry is available.
     // Called with overrides locked so the resolution and FPS form a single snapshot.
     private string DefaultValue(string option)
     {
@@ -128,6 +130,8 @@ internal sealed class StreamPreferenceStore
         Dictionary<string, string> effective;
         lock (overrides) effective = new Dictionary<string, string>(overrides, StringComparer.Ordinal);
 
+        if (effective.GetValueOrDefault("resolution") == StreamPreferences.FollowHostResolution)
+            effective.Remove("resolution");
         if (useViewerDefault) effective.TryAdd("display-mode", ViewerDisplayMode);
         effective.TryAdd("absolute-mouse", Defaults["absolute-mouse"]);
         if (useBundledDefaults)
@@ -160,7 +164,7 @@ internal sealed class StreamPreferenceStore
 
         return option switch
         {
-            "resolution" => value is "1280x720" or "1920x1080" or "2560x1440" or "3840x2160",
+            "resolution" => value is StreamPreferences.FollowHostResolution or "1280x720" or "1920x1080" or "2560x1440" or "3840x2160",
             "fps" => value is "30" or "60",
             "display-mode" => value is "fullscreen" or "borderless" or ViewerDisplayMode,
             "audio-config" => value is "stereo" or "5.1-surround" or "7.1-surround",

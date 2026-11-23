@@ -26,6 +26,8 @@ try {
     $store = New-Store $path
     Assert-True ($methods.GetBitrate.Invoke($store, $null) -eq 10000) 'A missing file must use the built-in default.'
     Assert-True (![IO.File]::Exists($path)) 'Reading defaults must not write the fixture.'
+    Assert-True ($methods.Get.Invoke($store, @('resolution')) -ceq 'host') 'A new profile should follow the controlled display.'
+    Assert-True ($methods.Arguments.Invoke($store, @($false, $true)) -cnotcontains '--resolution') 'A fresh profile must allow resolution negotiation.'
     Assert-True ($methods.Set.Invoke($store, @('resolution', '2560x1440'))) 'Resolution must save.'
     Assert-True ($methods.Set.Invoke($store, @('fps', '30'))) 'FPS must save.'
     Assert-True ($methods.GetBitrate.Invoke($store, $null) -eq 20000) 'Automatic bitrate must follow the selected resolution and FPS.'
@@ -43,6 +45,11 @@ try {
     Assert-True ($arguments.Contains('--display-mode|borderless')) 'An explicit window mode must win over the viewer default.'
     Assert-True ($arguments.Contains('--video-decoder|auto') -and $arguments.Contains('--hdr')) 'HDR must force auto decoding only in CLI arguments.'
     Assert-True ($arguments.Contains('--vsync')) 'An explicit default-valued override must survive restart and reach standalone CLI arguments.'
+    Assert-True ($arguments.Contains('--resolution|2560x1440')) 'The manual resolution must reach the streamer.'
+    Assert-True ($methods.Set.Invoke($reopened, @('resolution', 'host'))) 'Following the host must save.'
+    $hostResolution = New-Store $path
+    Assert-True ($methods.Get.Invoke($hostResolution, @('resolution')) -ceq 'host') 'Following the host must survive restart.'
+    Assert-True ($methods.Arguments.Invoke($hostResolution, @($false, $true)) -cnotcontains '--resolution') 'Following the host cannot become a fixed command-line resolution.'
     Assert-True ($methods.Reset.Invoke($reopened, $null)) 'Reset must save.'
     $reset = New-Store $path
     Assert-True ($methods.GetBitrate.Invoke($reset, $null) -eq 10000) 'Reset must survive reopening the store.'

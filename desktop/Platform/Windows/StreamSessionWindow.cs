@@ -26,6 +26,7 @@ internal sealed class StreamSessionWindow : Window
     private readonly string id = Guid.NewGuid().ToString("N");
     private CancellationTokenSource stop;
     private readonly WindowsStreamSurface surface;
+    private readonly WindowsStreamWindowSizing sizing;
     private readonly TextBlock status = new()
     {
         Text = "正在连接", Classes = { "muted" }, FontSize = 12, VerticalAlignment = VerticalAlignment.Center
@@ -228,6 +229,7 @@ internal sealed class StreamSessionWindow : Window
         };
         frame[!MarginProperty] = this[!OffScreenMarginProperty];
         Content = frame;
+        sizing = new WindowsStreamWindowSizing(this, viewer);
 
         UpdateWindowActions();
         ResizeToolbar(Width);
@@ -238,6 +240,7 @@ internal sealed class StreamSessionWindow : Window
             frame.CornerRadius = new CornerRadius(WindowState == WindowState.Normal ? 13 : 0);
             frame.BorderThickness = new Thickness(WindowState == WindowState.Normal ? 1 : 0);
             UpdateWindowActions();
+            sizing.FitSoon();
         };
         KeyDown += (_, args) =>
         {
@@ -372,6 +375,7 @@ internal sealed class StreamSessionWindow : Window
     {
         stop = cancellation;
         connected = allowClose = false;
+        sizing.SetAspect(0);
         connectionFlyout.Hide();
         connectionDetails.Update(null);
         privacyState = SessionPrivacyState.Unavailable;
@@ -401,6 +405,7 @@ internal sealed class StreamSessionWindow : Window
     internal void ShowFailure(string message)
     {
         connected = false;
+        sizing.SetAspect(0);
         connectionFlyout.Hide();
         allowClose = true;
         surface.IsVisible = false;
@@ -424,6 +429,12 @@ internal sealed class StreamSessionWindow : Window
         SetStatus("已连接", "#087CF5");
         SetToolContent(disconnect, disconnectText, "断开", DisconnectIcon);
         UpdateWindowActions();
+    }
+
+    private void UpdateStreamAspect(StreamConnectionSample sample)
+    {
+        if (sample.Width > 0 && sample.Height > 0)
+            sizing.SetAspect((double)sample.Width / sample.Height);
     }
 
     internal void Finish()
@@ -488,6 +499,7 @@ internal sealed class StreamSessionWindow : Window
                     {
                         displayed = sample;
                         connectionDetails.Update(sample);
+                        UpdateStreamAspect(sample);
                         SetStatus(sample.Poor ? "网络较差" : "已连接", sample.Poor ? "#946317" : "#087CF5");
                     }
                     if (fullscreenSignal.WaitOne(0)) ToggleFullscreen();

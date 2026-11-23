@@ -1,0 +1,189 @@
+diff --git a/app/streaming/session.cpp b/app/streaming/session.cpp
+--- a/app/streaming/session.cpp
++++ b/app/streaming/session.cpp
+@@ -1234,6 +1234,16 @@
+         }
+     }
+ 
++    int videoWidth = m_StreamConfig.width;
++    int videoHeight = m_StreamConfig.height;
++#if defined(Q_OS_DARWIN) && defined(AURORA_STREAM_RUNTIME)
++    // The video setup callback has reported the stream size before the viewer is created.
++    if (m_ActiveVideoWidth > 0 && m_ActiveVideoHeight > 0) {
++        videoWidth = m_ActiveVideoWidth;
++        videoHeight = m_ActiveVideoHeight;
++    }
++#endif
++
+     SDL_Rect usableBounds;
+     if (SDL_GetDisplayUsableBounds(displayIndex, &usableBounds) == 0) {
+         // Don't use more than 80% of the display to leave room for system UI
+@@ -1241,8 +1251,8 @@
+         // of the image will have a one-pixel black bar next to it).
+         SDL_Rect src, dst;
+         src.x = src.y = dst.x = dst.y = 0;
+-        src.w = m_StreamConfig.width;
+-        src.h = m_StreamConfig.height;
++        src.w = videoWidth;
++        src.h = videoHeight;
+         dst.w = ((int)SDL_ceilf(usableBounds.w * 0.80f) & ~0x1);
+         dst.h = ((int)SDL_ceilf(usableBounds.h * 0.80f) & ~0x1);
+ 
+@@ -1251,9 +1261,9 @@
+ 
+         // If the stream window can fit within the usable drawing area with 1:1
+         // scaling, do that rather than filling the screen.
+-        if (m_StreamConfig.width < dst.w && m_StreamConfig.height < dst.h) {
+-            width = m_StreamConfig.width;
+-            height = m_StreamConfig.height;
++        if (videoWidth < dst.w && videoHeight < dst.h) {
++            width = videoWidth;
++            height = videoHeight;
+         }
+         else {
+             width = dst.w;
+@@ -1265,8 +1275,8 @@
+                      "SDL_GetDisplayUsableBounds() failed: %s",
+                      SDL_GetError());
+ 
+-        width = m_StreamConfig.width;
+-        height = m_StreamConfig.height;
++        width = videoWidth;
++        height = videoHeight;
+     }
+ 
+     x = y = SDL_WINDOWPOS_CENTERED_DISPLAY(displayIndex);
+@@ -1382,10 +1392,10 @@
+ 
+     // Actually enter/leave fullscreen
+ #if defined(Q_OS_DARWIN) && defined(AURORA_STREAM_RUNTIME)
+-    if (!fullScreen) hideAuroraSessionToolbar(m_Window);
++    prepareAuroraSessionToolbarForFullscreenChange(m_Window, fullScreen);
+     SDL_SetWindowFullscreen(m_Window, fullScreen ? m_FullScreenFlag : 0);
+     installAuroraSessionToolbar(m_Window, m_Computer->name, SDL_AtomicGet(&m_AuroraConnectionPoor) != 0,
+-                                m_AuroraPrivacy);
++                                m_AuroraPrivacy, m_ActiveVideoWidth, m_ActiveVideoHeight);
+ #else
+     SDL_SetWindowFullscreen(m_Window, fullScreen ? m_FullScreenFlag : 0);
+ #endif
+@@ -1898,7 +1908,7 @@
+ #if defined(Q_OS_DARWIN) && defined(AURORA_STREAM_RUNTIME)
+     const bool hasWindowedToolbar = !m_IsFullScreen &&
+         installAuroraSessionToolbar(m_Window, m_Computer->name, SDL_AtomicGet(&m_AuroraConnectionPoor) != 0,
+-                                    m_AuroraPrivacy);
++                                    m_AuroraPrivacy, m_ActiveVideoWidth, m_ActiveVideoHeight);
+ #endif
+ 
+     QSvgRenderer svgIconRenderer(QString(":/res/moonlight.svg"));
+@@ -1932,7 +1942,7 @@
+ 
+ #if defined(Q_OS_DARWIN) && defined(AURORA_STREAM_RUNTIME)
+         installAuroraSessionToolbar(m_Window, m_Computer->name, SDL_AtomicGet(&m_AuroraConnectionPoor) != 0,
+-                                    m_AuroraPrivacy);
++                                    m_AuroraPrivacy, m_ActiveVideoWidth, m_ActiveVideoHeight);
+ #endif
+ 
+ #ifdef Q_OS_WIN32
+@@ -2318,7 +2328,7 @@
+             SDL_AtomicUnlock(&m_DecoderLock);
+ #if defined(Q_OS_DARWIN) && defined(AURORA_STREAM_RUNTIME)
+             installAuroraSessionToolbar(m_Window, m_Computer->name,
+-                                        SDL_AtomicGet(&m_AuroraConnectionPoor) != 0, m_AuroraPrivacy);
++                                        SDL_AtomicGet(&m_AuroraConnectionPoor) != 0, m_AuroraPrivacy, m_ActiveVideoWidth, m_ActiveVideoHeight);
+ #endif
+             break;
+ 
+diff --git a/app/streaming/aurora-session-toolbar.h b/app/streaming/aurora-session-toolbar.h
+--- a/app/streaming/aurora-session-toolbar.h
++++ b/app/streaming/aurora-session-toolbar.h
+@@ -17,7 +17,7 @@
+ };
+ 
+ bool installAuroraSessionToolbar(SDL_Window* window, const QString& deviceName, bool connectionPoor,
+-                                 const std::shared_ptr<AuroraSessionPrivacy>& privacy);
+-void hideAuroraSessionToolbar(SDL_Window* window);
++                                 const std::shared_ptr<AuroraSessionPrivacy>& privacy, int videoWidth, int videoHeight);
++void prepareAuroraSessionToolbarForFullscreenChange(SDL_Window* window, bool enteringFullscreen);
+ void closeAuroraFullscreenControls(SDL_Window* window);
+ void setAuroraSessionToolbarConnectionQuality(SDL_Window* window, bool poor);
+diff --git a/app/streaming/aurora-session-toolbar.mm b/app/streaming/aurora-session-toolbar.mm
+--- a/app/streaming/aurora-session-toolbar.mm
++++ b/app/streaming/aurora-session-toolbar.mm
+@@ -267,6 +267,7 @@
+     NSMenuItem* _privacyNote;
+     NSMenuItem* _exitFullscreen;
+     BOOL _nativeFullscreen;
++    NSSize _videoAspect;
+ }
+ - (instancetype)initWithWindow:(NSWindow*)window deviceName:(NSString*)name;
+ - (AuroraToolbarButton*)addButton:(NSString*)title symbol:(NSString*)symbol action:(SEL)action
+@@ -276,6 +277,7 @@
+ - (void)closeConnectionDetails;
+ - (void)refreshConnectionDetails:(NSTimer*)timer;
+ - (void)showIfWindowed;
++- (void)setVideoWidth:(int)width height:(int)height fullscreen:(BOOL)fullscreen;
+ - (void)showFullscreenControls:(BOOL)visible;
+ - (void)positionFullscreenControls;
+ - (void)updateConnectionQuality:(BOOL)poor;
+@@ -468,9 +470,18 @@
+     }
+ }
+ 
++- (void)setVideoWidth:(int)width height:(int)height fullscreen:(BOOL)fullscreen
++{
++    _videoAspect = width > 0 && height > 0 ? NSMakeSize(static_cast<CGFloat>(width) / height, 1) : NSZeroSize;
++    const NSSize aspect = fullscreen || _nativeFullscreen ? NSZeroSize : _videoAspect;
++    // Constrain the video content, leaving titlebar sizing and drag behavior to AppKit.
++    if (!NSEqualSizes(_window.contentAspectRatio, aspect)) _window.contentAspectRatio = aspect;
++}
++
+ - (void)windowWillEnterFullscreen:(NSNotification*)notification
+ {
+     _nativeFullscreen = YES;
++    _window.contentAspectRatio = NSZeroSize;
+     _window.toolbar.visible = NO;
+ }
+ 
+@@ -482,6 +493,7 @@
+ - (void)windowDidExitFullscreen:(NSNotification*)notification
+ {
+     _nativeFullscreen = NO;
++    _window.contentAspectRatio = _videoAspect;
+     [self showFullscreenControls:NO];
+     [self showIfWindowed];
+ }
+@@ -720,7 +732,7 @@
+ @end
+ 
+ bool installAuroraSessionToolbar(SDL_Window* window, const QString& deviceName, bool connectionPoor,
+-                                 const std::shared_ptr<AuroraSessionPrivacy>& privacy)
++                                 const std::shared_ptr<AuroraSessionPrivacy>& privacy, int videoWidth, int videoHeight)
+ {
+     if (![NSThread isMainThread] || !window) return false;
+     NSWindow* native = nativeWindow(window);
+@@ -745,6 +757,7 @@
+         [controller updatePrivacyMenu];
+     }
+ 
++    [controller setVideoWidth:videoWidth height:videoHeight fullscreen:fullscreen];
+     [controller showFullscreenControls:fullscreen];
+     if (fullscreen) return false;
+     if (native.toolbar.delegate == controller) {
+@@ -785,12 +798,13 @@
+     return true;
+ }
+ 
+-void hideAuroraSessionToolbar(SDL_Window* window)
++void prepareAuroraSessionToolbarForFullscreenChange(SDL_Window* window, bool enteringFullscreen)
+ {
+     NSWindow* native = nativeWindow(window);
+-    if (auroraToolbar(native) && native.toolbar.visible) {
+-        native.toolbar.visible = NO;
+-    }
++    if (!auroraToolbar(native)) return;
++
++    native.contentAspectRatio = NSZeroSize;
++    if (!enteringFullscreen && native.toolbar.visible) native.toolbar.visible = NO;
+ }
+ 
+ void closeAuroraFullscreenControls(SDL_Window* window)

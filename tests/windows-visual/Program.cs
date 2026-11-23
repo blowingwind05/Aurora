@@ -3,6 +3,7 @@ using System.IO;
 using System.Linq;
 using System.Linq.Expressions;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Avalonia;
@@ -37,12 +38,14 @@ internal static class WindowsVisualTests
         {
             try
             {
-                if (args.Contains("--stream")) await CheckStreamWindow(output);
+                if (args.Contains("--stream-sizing")) await CheckStreamSizing();
+                else if (args.Contains("--stream")) await CheckStreamWindow(output);
                 else
                 {
                     await CheckButtons(output, baseline);
                     if (!baseline)
                     {
+                        await CheckStreamSizing();
                         await CheckStreamWindow(output);
                         await CheckHost(output);
                         await CheckStartup(output);
@@ -323,6 +326,96 @@ internal static class WindowsVisualTests
         finally { window.Close(); }
         Console.WriteLine("Startup defaults on once and preserves opt-out. The preview did not write to Windows startup settings.");
     }
+
+    private static async Task CheckStreamSizing()
+    {
+        var assembly = typeof(AuroraWindow).Assembly;
+        var type = assembly.GetType("Aurora.StreamSessionWindow", true);
+        Func<Window, Task> retry = _ => Task.CompletedTask;
+        var window = (Window)Activator.CreateInstance(type, Private, null, new object[] { "远程电脑", retry }, null);
+        window.ShowActivated = false;
+        window.ShowInTaskbar = false;
+        window.Opacity = 0;
+        window.Width = 760;
+        window.Height = 530;
+        var surface = (Control)type.GetField("surface", Private).GetValue(window);
+        using var stop = new CancellationTokenSource();
+        try
+        {
+            Call(window, "ShowConnecting", stop);
+            window.WindowState = WindowState.Normal;
+            await Until(() => window.WindowState == WindowState.Normal && window.Bounds.Width > 0);
+            var beforeVideo = window.Bounds.Size;
+            Call(window, "ShowVideo");
+            await Until(() => surface.Bounds.Width > 0);
+            var hwnd = window.TryGetPlatformHandle().Handle;
+            var pendingDrag = new SizingRect { Left = 40, Top = 80, Right = 680, Bottom = 550 };
+            SendMessage(hwnd, 0x0214, 4, ref pendingDrag);
+            Require(window.Bounds.Size == beforeVideo && pendingDrag.Left == 40 && pendingDrag.Top == 80 &&
+                pendingDrag.Right == 680 && pendingDrag.Bottom == 550, "Sizing must wait for the first reported frame dimensions.");
+
+            bool ViewportMatches(double aspect) => surface.Bounds.Width > 0 &&
+                Math.Abs(surface.Bounds.Height - surface.Bounds.Width / aspect) <= 1.5 / window.RenderScaling;
+            var sampleType = assembly.GetType("Aurora.StreamConnectionSample", true);
+            var read = sampleType.GetMethod("Read", BindingFlags.Static | BindingFlags.NonPublic);
+            var invalid = read.Invoke(null, new object[] { "aurora-connection/1,1920,0,2,6000,18000,0,1400,12,0" });
+            Call(window, "UpdateStreamAspect", invalid);
+            var sample = read.Invoke(null, new object[] { "aurora-connection/1,1920,1080,2,6000,18000,0,1400,12,0" });
+            Call(window, "UpdateStreamAspect", sample);
+            await Until(() => ViewportMatches(16d / 9));
+            sample = read.Invoke(null, new object[] { "aurora-connection/1,2560,1664,2,6000,18000,0,1400,12,0" });
+            Call(window, "UpdateStreamAspect", sample);
+            var aspect = 2560d / 1664;
+            await Until(() => ViewportMatches(aspect));
+
+            Require(GetWindowRect(hwnd, out var current), "The stream window must have a native rectangle.");
+            var chromeWidth = current.Width - surface.Bounds.Width * window.RenderScaling;
+            var chromeHeight = current.Height - surface.Bounds.Height * window.RenderScaling;
+            var corner = new SizingRect { Left = 40, Top = 80, Right = 680, Bottom = 550 };
+            var original = corner;
+            Require(SendMessage(hwnd, 0x0214, 4, ref corner) == 1, "The top-left resize message was not handled.");
+            Require(corner.Right == original.Right && corner.Bottom == original.Bottom,
+                "A corner drag must preserve its opposite corner.");
+            Require(Math.Abs(corner.Height - chromeHeight - (corner.Width - chromeWidth) / aspect) <= 1.5,
+                "A corner drag must keep the stream aspect.");
+
+            var edge = new SizingRect { Left = 40, Top = 80, Right = 100, Bottom = 160 };
+            Require(SendMessage(hwnd, 0x0214, 2, ref edge) == 1, "The right-edge resize message was not handled.");
+            Require(edge.Left == 40 && edge.Top == 80 && edge.Width >= window.MinWidth * window.RenderScaling &&
+                edge.Height >= window.MinHeight * window.RenderScaling, "A side drag must preserve the window's minimum size and origin.");
+            Require(Math.Abs(edge.Height - chromeHeight - (edge.Width - chromeWidth) / aspect) <= 1.5,
+                "The minimum size must preserve the stream aspect.");
+
+            window.WindowState = WindowState.Maximized;
+            await Until(() => window.WindowState == WindowState.Maximized);
+            corner = original;
+            SendMessage(hwnd, 0x0214, 4, ref corner);
+            Require(corner.Left == original.Left && corner.Top == original.Top && corner.Right == original.Right &&
+                corner.Bottom == original.Bottom, "Maximized windows must bypass constrained resizing.");
+            window.WindowState = WindowState.Normal;
+            await Until(() => window.WindowState == WindowState.Normal && ViewportMatches(aspect));
+            Console.WriteLine("Windowed sizing verified without telemetry and with 16:9 and 2560×1664 frames, including edge and corner drags, minimum size, and maximize/restore.");
+        }
+        finally { Call(window, "Finish"); }
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct SizingRect
+    {
+        internal int Left;
+        internal int Top;
+        internal int Right;
+        internal int Bottom;
+
+        internal readonly int Width => Right - Left;
+        internal readonly int Height => Bottom - Top;
+    }
+
+    [DllImport("user32.dll")]
+    private static extern bool GetWindowRect(nint window, out SizingRect rect);
+
+    [DllImport("user32.dll", EntryPoint = "SendMessageW")]
+    private static extern nint SendMessage(nint window, uint message, nint wParam, ref SizingRect lParam);
 
     private static async Task CheckStreamWindow(string output)
     {
