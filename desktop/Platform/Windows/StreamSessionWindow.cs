@@ -31,7 +31,12 @@ internal sealed class StreamSessionWindow : Window
         Text = "正在连接", Classes = { "muted" }, FontSize = 12, VerticalAlignment = VerticalAlignment.Center
     };
     private readonly Ellipse statusDot = new() { Width = 7, Height = 7, VerticalAlignment = VerticalAlignment.Center };
-    private readonly StackPanel statusGroup;
+    private readonly Button statusButton = new() { Height = 28, Padding = new Thickness(3, 0), CornerRadius = new CornerRadius(6),
+        HorizontalContentAlignment = HorizontalAlignment.Center, VerticalContentAlignment = VerticalAlignment.Center,
+        Background = Brushes.Transparent, IsHitTestVisible = false, Focusable = false };
+    private readonly Control statusArrow;
+    private readonly Flyout connectionFlyout;
+    private readonly StreamConnectionDetails connectionDetails = new();
     private readonly TextBlock stageTitle = new()
     {
         Text = "正在连接", FontSize = 18, FontWeight = FontWeight.SemiBold, TextAlignment = TextAlignment.Center
@@ -59,8 +64,7 @@ internal sealed class StreamSessionWindow : Window
     private readonly Popup fullscreenControls;
     private readonly MenuFlyout controlMenu;
     private readonly MenuItem fullscreenItem = new();
-    private readonly MenuItem statsItem = new() { Header = "显示／隐藏性能统计", IsVisible = false };
-    private EventWaitHandle statsSignal;
+    private readonly MenuItem fullscreenDetailsItem = new() { Header = "连接详情", IsVisible = false };
     private readonly MenuItem privacyStatus = new() { IsEnabled = false };
     private readonly MenuItem privacyAction = new() { StaysOpenOnClick = true };
     private Func<SessionPrivacyCommand, Task<SessionPrivacyState>> privacyRequest;
@@ -99,20 +103,26 @@ internal sealed class StreamSessionWindow : Window
             TextTrimming = TextTrimming.CharacterEllipsis, VerticalAlignment = VerticalAlignment.Center
         };
         ToolTip.SetTip(name, deviceName);
-        statusGroup = new StackPanel
+        statusArrow = AuroraVisual.Icon(AuroraVisual.ChevronDown, statusButton, size: 11);
+        statusArrow.IsVisible = false;
+        statusButton.Content = new StackPanel
         {
-            Width = 76, Orientation = Orientation.Horizontal, Spacing = 6,
-            VerticalAlignment = VerticalAlignment.Center, Children = { statusDot, status }
+            Orientation = Orientation.Horizontal, Spacing = 5, VerticalAlignment = VerticalAlignment.Center,
+            Children = { statusDot, status, statusArrow }
         };
+        connectionDetails.Update(null);
+        connectionFlyout = new Flyout { Placement = PlacementMode.BottomEdgeAlignedLeft, VerticalOffset = 4, Content = connectionDetails };
+        connectionFlyout.FlyoutPresenterClasses.Add("streamDetails");
+        statusButton.Flyout = connectionFlyout;
         var identity = new Grid
         {
             ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto"), ColumnSpacing = 9,
             Margin = new Thickness(13, 0, 10, 0), VerticalAlignment = VerticalAlignment.Center,
             HorizontalAlignment = HorizontalAlignment.Left,
-            Children = { mark, name, statusGroup }
+            Children = { mark, name, statusButton }
         };
         Grid.SetColumn(name, 1);
-        Grid.SetColumn(statusGroup, 2);
+        Grid.SetColumn(statusButton, 2);
 
         fullscreen.Click += (_, _) => ToggleFullscreen();
         disconnect.Click += (_, _) => Close();
@@ -124,7 +134,6 @@ internal sealed class StreamSessionWindow : Window
             Header = "Ctrl+Alt+Shift+M 切换鼠标模式", IsEnabled = false
         };
         fullscreenItem.Click += (_, _) => ToggleFullscreen();
-        statsItem.Click += (_, _) => statsSignal?.Set();
         var security = new MenuItem { Header = "安全", Items = { privacyStatus, privacyAction } };
         security.SubmenuOpened += async (_, _) => await UpdatePrivacy(SessionPrivacyCommand.Status);
         privacyAction.Click += async (_, _) => await UpdatePrivacy(privacyState switch
@@ -138,9 +147,11 @@ internal sealed class StreamSessionWindow : Window
         controlMenu = new MenuFlyout
         {
             Placement = PlacementMode.BottomEdgeAlignedRight,
-            Items = { fullscreenItem, statsItem, security, mouseHelp, new Separator(), disconnectItem }
+            Items = { fullscreenItem, fullscreenDetailsItem, security, mouseHelp, new Separator(), disconnectItem }
         };
         controls.Flyout = controlMenu;
+        controlMenu.Opening += (_, _) => connectionFlyout.Hide();
+        connectionFlyout.Opening += (_, _) => controlMenu.Hide();
         var floatingControls = new Button
         {
             Width = 40, Height = 40, Padding = new Thickness(0), CornerRadius = new CornerRadius(13),
@@ -150,6 +161,11 @@ internal sealed class StreamSessionWindow : Window
         };
         floatingControls.Content = AuroraVisual.Icon(AuroraVisual.Gear, floatingControls, size: 18);
         AuroraVisual.Label(floatingControls, "控制中心");
+        fullscreenDetailsItem.Click += (_, _) =>
+        {
+            controlMenu.Hide();
+            connectionFlyout.ShowAt(floatingControls);
+        };
         ShowPrivacyState();
 
         var minimize = CaptionButton("最小化", AuroraVisual.Minus, () => WindowState = WindowState.Minimized);
@@ -250,7 +266,7 @@ internal sealed class StreamSessionWindow : Window
         controls.Width = compact ? 32 : 92;
         disconnectText.IsVisible = status.IsVisible = !narrow;
         disconnect.Width = disconnectSlot.Width = narrow ? 32 : 60;
-        statusGroup.Width = narrow ? 14 : 76;
+        statusButton.Width = narrow ? 30 : 94;
     }
 
     private static void SetToolContent(Button button, TextBlock text, string label, string geometry)
@@ -276,8 +292,9 @@ internal sealed class StreamSessionWindow : Window
     {
         status.Text = text;
         statusDot.Fill = Brush.Parse(color);
-        ToolTip.SetTip(statusGroup, text);
-        AutomationProperties.SetName(statusGroup, text);
+        statusButton.IsHitTestVisible = statusButton.Focusable = statusArrow.IsVisible = connected;
+        ToolTip.SetTip(statusButton, connected ? "连接详情" : text);
+        AutomationProperties.SetName(statusButton, connected ? text + "，查看连接详情" : text);
     }
 
     private void ShowPrivacyState()
@@ -347,6 +364,7 @@ internal sealed class StreamSessionWindow : Window
         var showFloatingControls = full && connected;
         if (fullscreenControls.IsOpen && !showFloatingControls) controlMenu.Hide();
         fullscreenControls.IsOpen = showFloatingControls;
+        fullscreenDetailsItem.IsVisible = showFloatingControls;
         toolbar.IsVisible = !showFloatingControls;
     }
 
@@ -354,6 +372,8 @@ internal sealed class StreamSessionWindow : Window
     {
         stop = cancellation;
         connected = allowClose = false;
+        connectionFlyout.Hide();
+        connectionDetails.Update(null);
         privacyState = SessionPrivacyState.Unavailable;
         ShowPrivacyState();
         surface.IsVisible = false;
@@ -381,6 +401,7 @@ internal sealed class StreamSessionWindow : Window
     internal void ShowFailure(string message)
     {
         connected = false;
+        connectionFlyout.Hide();
         allowClose = true;
         surface.IsVisible = false;
         stage.IsVisible = true;
@@ -437,11 +458,16 @@ internal sealed class StreamSessionWindow : Window
             using var ready = new EventWaitHandle(false, EventResetMode.ManualReset, @"Local\" + SessionName + ".ready");
             using var disconnectSignal = new EventWaitHandle(false, EventResetMode.ManualReset, @"Local\" + SessionName + ".stop");
             using var fullscreenSignal = new EventWaitHandle(false, EventResetMode.AutoReset, @"Local\" + SessionName + ".fullscreen");
-            using var toggleStats = new EventWaitHandle(false, EventResetMode.AutoReset, @"Local\" + SessionName + ".stats");
-            using var statsAvailable = new EventWaitHandle(false, EventResetMode.ManualReset, @"Local\" + SessionName + ".stats-available");
             var invitation = FormattableString.Invariant($"{hwnd.ToInt64()}:{Environment.ProcessId}:{id}");
             cancellation.ThrowIfCancellationRequested();
-            using var process = Upstream.LaunchMoonlight(runtime, route, pair: false, invitation);
+            using var process = Upstream.LaunchMoonlight(runtime, route, pair: false, invitation, readConnectionDetails: true);
+            StreamConnectionSample latest = null, displayed = null;
+            process.OutputDataReceived += (_, data) =>
+            {
+                if (StreamConnectionSample.Read(data.Data) is { } sample) Volatile.Write(ref latest, sample);
+            };
+            process.BeginOutputReadLine();
+            process.BeginErrorReadLine();
             using var privacyLifetime = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
             var exit = process.WaitForExitAsync();
             if (route.SupportsSessionPrivacy)
@@ -456,14 +482,13 @@ internal sealed class StreamSessionWindow : Window
                 while (!exit.IsCompleted)
                 {
                     cancellation.ThrowIfCancellationRequested();
-                    if (!connected && ready.WaitOne(0))
+                    if (!connected && ready.WaitOne(0)) ShowVideo();
+                    var sample = Volatile.Read(ref latest);
+                    if (connected && sample != displayed && sample != null)
                     {
-                        if (statsAvailable.WaitOne(0))
-                        {
-                            statsSignal = toggleStats;
-                            statsItem.IsVisible = true;
-                        }
-                        ShowVideo();
+                        displayed = sample;
+                        connectionDetails.Update(sample);
+                        SetStatus(sample.Poor ? "网络较差" : "已连接", sample.Poor ? "#946317" : "#087CF5");
                     }
                     if (fullscreenSignal.WaitOne(0)) ToggleFullscreen();
                     await Task.WhenAny(exit, Task.Delay(80, cancellation));
@@ -475,8 +500,8 @@ internal sealed class StreamSessionWindow : Window
             }
             finally
             {
-                statsSignal = null;
-                statsItem.IsVisible = false;
+                connectionFlyout.Hide();
+                connectionDetails.Update(null);
                 privacyRequest = null;
                 privacyBusy = false;
                 privacyState = SessionPrivacyState.Unavailable;

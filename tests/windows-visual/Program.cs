@@ -369,6 +369,27 @@ internal static class WindowsVisualTests
             Require(disconnect.IsVisible && AutomationProperties.GetName(disconnect) == "取消", "Retry did not restore Cancel.");
 
             Call(window, "ShowVideo");
+            var indicator = (Button)type.GetField("statusButton", Private).GetValue(window);
+            var detail = (Flyout)indicator.Flyout;
+            var panel = (Control)type.GetField("connectionDetails", Private).GetValue(window);
+            var sampleType = typeof(AuroraWindow).Assembly.GetType("Aurora.StreamConnectionSample", true);
+            var read = sampleType.GetMethod("Read", BindingFlags.Static | BindingFlags.NonPublic);
+            Require(read.Invoke(null, new object[] { "aurora-connection/1,?" }) == null, "An invalid telemetry line was accepted.");
+            var sample = read.Invoke(null, new object[] { "aurora-connection/1,1920,1080,2,5994,18600,120,1400,12,0" });
+            Call(panel, "Update", sample);
+            Require(AutomationProperties.GetName(indicator).Contains("查看连接详情"), "The connected status should expose session details.");
+            detail.ShowAt(indicator);
+            await Until(() => detail.IsOpen && panel.Bounds.Width > 0);
+            Require(TopLevel.GetTopLevel(panel) != window, "Connection details must be above the embedded video.");
+            var fields = panel.GetVisualDescendants().OfType<TextBlock>().Where(text => text.IsVisible).Select(text => text.Text).ToArray();
+            Require(fields.Contains("1920 × 1080") && fields.Contains("HEVC") && fields.Contains("12 ms"), "Actual telemetry fields are missing.");
+            using (var detailsPicture = Draw(panel.GetVisualAncestors().OfType<FlyoutPresenter>().First(), 1.25))
+                detailsPicture.Save(Path.Combine(output, "stream-connection-details.png"));
+            detail.Hide();
+            var noLatency = read.Invoke(null, new object[] { "aurora-connection/1,1920,1080,2,5994,18600,120,1400,0,0" });
+            Call(panel, "Update", noLatency);
+            Require(!panel.GetVisualDescendants().OfType<TextBlock>().Any(text => text.Text == "网络延迟"), "An unavailable metric should be hidden.");
+            Console.WriteLine("Windows connection details parse, placement and unavailable fields verified.");
             Call(window, "ToggleFullscreen");
             await Until(() => popup.IsOpen && popup.Child.Bounds.Height > 0);
             Require(!toolbar.IsVisible && Equals(restore.Header, "退出全屏"), "Fullscreen controls are unavailable.");

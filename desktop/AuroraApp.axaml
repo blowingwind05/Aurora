@@ -269,6 +269,14 @@
     <Style Selector="Button.icon:pointerover /template/ ContentPresenter#PART_ContentPresenter">
       <Setter Property="Background" Value="Transparent" />
     </Style>
+    <Style Selector="FlyoutPresenter.streamDetails">
+      <Setter Property="MinWidth" Value="0" />
+      <Setter Property="Padding" Value="12" />
+      <Setter Property="Background" Value="#FFFFFF" />
+      <Setter Property="BorderBrush" Value="#D7DFEC" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="CornerRadius" Value="9" />
+    </Style>
     <Style Selector="Button.streamTool:pointerover /template/ ContentPresenter#PART_ContentPresenter, Button.streamTool:focus-visible /template/ ContentPresenter#PART_ContentPresenter">
       <Setter Property="Background" Value="#E8EDF4" />
     </Style>

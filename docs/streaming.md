@@ -8,7 +8,7 @@
 
 确认配对时，Aurora 调用 `Moonlight list`。启动串流时，Moonlight 再解析主机和目标应用。内置 Tailscale 的配对检查和串流共用所选路由的[转发租约](../desktop/EmbeddedTailnet.cs)。[启动警告补丁](../desktop/upstream/moonlight-qt/0014-aurora-skip-cli-warning-delay.patch) 将警告写入日志并让 CLI 继续执行。
 
-[串流偏好](../desktop/StreamPreferences.cs) 持久化设置，启动串流时生成参数。Windows 把视频嵌入 [Aurora 会话窗](../desktop/Platform/Windows/StreamSessionWindow.cs)。macOS 的串流组件使用 [Aurora 原生连接窗口](../desktop/upstream/moonlight-qt/0017-aurora-macos-session-window.patch) 显示进度与失败，出画时交给 SDL 视频窗及其 AppKit 控制中心。原生连接入口在当前 Mac 补丁中省略了 QML 提示所需的 1.5 秒等待。Windows 和 macOS 都能从控制中心显示或隐藏当前串流的性能统计。Windows 根据内置组件提供的能力显示该操作。隐私保护由被控端确认是否支持和开启。
+[串流偏好](../desktop/StreamPreferences.cs) 持久化设置，启动串流时生成参数。Windows 把视频嵌入 [Aurora 会话窗](../desktop/Platform/Windows/StreamSessionWindow.cs)。macOS 的串流组件使用 [Aurora 原生连接窗口](../desktop/upstream/moonlight-qt/0017-aurora-macos-session-window.patch) 显示进度与失败，出画时交给 SDL 视频窗及其 AppKit 控制中心。原生连接入口在当前 Mac 补丁中省略了 QML 提示所需的 1.5 秒等待。窗口化时从连接状态打开详情。全屏时可从悬浮控制中心打开同一详情。面板使用当前会话的实测指标，缺失值隐藏。隐私保护由被控端确认是否支持和开启。
 
 ## 已配对设备的建连优化
 

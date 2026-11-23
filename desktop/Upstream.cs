@@ -488,7 +488,8 @@ namespace Aurora
             return path;
         }
 
-        internal static Process LaunchMoonlight(string path, StreamHost route, bool pair, string embeddedSession = null)
+        internal static Process LaunchMoonlight(string path, StreamHost route, bool pair, string embeddedSession = null,
+            bool readConnectionDetails = false)
         {
             var arguments = MoonlightArguments(route, pair);
             if (!pair)
@@ -497,11 +498,11 @@ namespace Aurora
                 var useViewerDefault = bundled && (OperatingSystem.IsMacOS() || embeddedSession != null);
                 arguments = arguments.Concat(StreamPreferences.Arguments(useViewerDefault, useBundledDefaults: bundled)).ToArray();
             }
-            return StartMoonlight(path, arguments, redirect: false, embeddedSession, route);
+            return StartMoonlight(path, arguments, redirect: readConnectionDetails, embeddedSession, route, readConnectionDetails);
         }
 
         internal static Process StartMoonlight(string path, string[] arguments, bool redirect, string embeddedSession = null,
-            StreamHost streamRoute = null)
+            StreamHost streamRoute = null, bool readConnectionDetails = false)
         {
             var options = new ProcessStartInfo(path)
             {
@@ -516,6 +517,8 @@ namespace Aurora
                 options.Environment.Remove("AURORA_EMBEDDED_SESSION");
                 if (embeddedSession != null) options.Environment["AURORA_EMBEDDED_SESSION"] = embeddedSession;
             }
+            options.Environment.Remove("AURORA_CONNECTION_DETAILS");
+            if (readConnectionDetails) options.Environment["AURORA_CONNECTION_DETAILS"] = "1";
             options.Environment.Remove("AURORA_GAMESTREAM_RELAY_BASE");
             options.Environment.Remove("AURORA_GAMESTREAM_HOST_UUID");
             if (streamRoute?.ViaEmbeddedTailnet == true)
