@@ -1,6 +1,6 @@
 # 早期 Windows 服务版 Tailscale
 
-此目录保留旧版后台服务的构建和恢复资料。当前 Aurora 集成包使用[应用内节点](../tsnet)。
+本目录记录旧版 Windows 后台服务的构建与状态恢复。Aurora 发布包的网络组件使用[应用内节点](../tsnet/README.md)。
 
 Windows 版使用 [Tailscale v1.104.7](https://github.com/tailscale/tailscale/tree/v1.104.7) 的提交 `cbc74fe48ef1b1649f69a4d9a602319427e25102`。极光用上游的 Windows 服务、命令行和签名版 [Wintun 0.14.1](https://www.wintun.net/) 建立系统路由，供 Moonlight 和 Sunshine 的 TCP、UDP 串流使用。
 
@@ -11,7 +11,7 @@ git clone --depth 1 --branch v1.104.7 https://github.com/tailscale/tailscale.git
 pwsh -File ./desktop/upstream/tailscale/Build-Windows-Tailscale.ps1 -SourceDirectory <源码目录> -GoExecutable <go.exe路径> -WintunZip <wintun-0.14.1.zip路径> -OutputDirectory <部署目录>
 ```
 
-将部署目录传给 `desktop/Build.ps1 -TailscaleDirectory`。Windows 版优先使用已安装的系统 Tailscale。未安装系统 Tailscale 的电脑可以启用内置服务。两者各自保留原有设备身份和登录状态。源码集成版只部署后台服务及供极光调用的命令行，无独立客户端界面或新增托盘图标。macOS 目前复用系统 Tailscale。
+这里的部署目录包含旧版服务、命令行工具和状态恢复程序。当前应用打包通过 `-TailscaleDirectory` 接收 [AuroraTailnet](../tsnet/README.md) 的部署目录。
 
 ## Windows 切换接口
 

@@ -64,6 +64,7 @@ internal static class AuroraVisual
     internal const string ChevronDown = "m6 9 6 6 6-6";
     internal const string Minus = "M5 12h14";
     internal const string Square = "M5 3H19a2 2 0 0 1 2 2V19a2 2 0 0 1 -2 2H5a2 2 0 0 1 -2 -2V5a2 2 0 0 1 2 -2Z";
+    internal const string RestoreWindow = "M8 8V4H20V16H16 M4 8H16V20H4Z";
     internal const string Close = "M18 6 6 18 M6 6l12 12";
 
     private static readonly Lazy<(Rect ViewBox, Geometry Outline, double StrokeWidth)> HostSvg = new(() =>

@@ -488,7 +488,8 @@ namespace Aurora
             return path;
         }
 
-        internal static Process LaunchMoonlight(string path, StreamHost route, bool pair, string embeddedSession = null)
+        internal static Process LaunchMoonlight(string path, StreamHost route, bool pair, string embeddedSession = null,
+            bool readConnectionDetails = false)
         {
             var arguments = MoonlightArguments(route, pair);
             if (!pair)
@@ -497,11 +498,11 @@ namespace Aurora
                 var useViewerDefault = bundled && (OperatingSystem.IsMacOS() || embeddedSession != null);
                 arguments = arguments.Concat(StreamPreferences.Arguments(useViewerDefault, useBundledDefaults: bundled)).ToArray();
             }
-            return StartMoonlight(path, arguments, redirect: false, embeddedSession, route);
+            return StartMoonlight(path, arguments, redirect: readConnectionDetails, embeddedSession, route, readConnectionDetails);
         }
 
         internal static Process StartMoonlight(string path, string[] arguments, bool redirect, string embeddedSession = null,
-            StreamHost streamRoute = null)
+            StreamHost streamRoute = null, bool readConnectionDetails = false)
         {
             var options = new ProcessStartInfo(path)
             {
@@ -516,6 +517,8 @@ namespace Aurora
                 options.Environment.Remove("AURORA_EMBEDDED_SESSION");
                 if (embeddedSession != null) options.Environment["AURORA_EMBEDDED_SESSION"] = embeddedSession;
             }
+            options.Environment.Remove("AURORA_CONNECTION_DETAILS");
+            if (readConnectionDetails) options.Environment["AURORA_CONNECTION_DETAILS"] = "1";
             options.Environment.Remove("AURORA_GAMESTREAM_RELAY_BASE");
             options.Environment.Remove("AURORA_GAMESTREAM_HOST_UUID");
             if (streamRoute?.ViaEmbeddedTailnet == true)
@@ -548,12 +551,12 @@ namespace Aurora
             throw new InvalidOperationException("内置 Tailscale 需要新版 Aurora 串流组件，请使用完整的集成包。");
         }
 
-        internal static async Task<(int ExitCode, string Output)> ListMoonlight(StreamHost route, CancellationToken token)
+        internal static async Task<(int ExitCode, string Output)> ListMoonlight(string runtime, EmbeddedTailnet.StreamLease stream,
+            CancellationToken token)
         {
-            var path = FindMoonlight();
-            if (route?.ViaEmbeddedTailnet == true) await RequireRelayRuntime(path, token);
-            using var stream = await EmbeddedTailnet.OpenStream(route, token);
-            return await RunMoonlight(path, new[] { "list", stream.Route.Endpoint.ToString() }, token, stream.Route);
+            var route = stream.Route;
+            if (route.ViaEmbeddedTailnet) await RequireRelayRuntime(runtime, token);
+            return await RunMoonlight(runtime, new[] { "list", route.Endpoint.ToString() }, token, route);
         }
 
         internal static async Task<(bool Reachable, byte[] Preview)> ReadWallpaper(

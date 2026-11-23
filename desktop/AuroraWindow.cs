@@ -357,7 +357,7 @@ public sealed partial class AuroraWindow : Window
     private void UpdateMaximizeIcon()
     {
         var maximized = WindowState == WindowState.Maximized;
-        var geometry = maximized ? "M8 3H21V16 M3 8H16V21H3Z" : AuroraVisual.Square;
+        var geometry = maximized ? AuroraVisual.RestoreWindow : AuroraVisual.Square;
         MaximizeWindow.Content = AuroraVisual.Icon(geometry, MaximizeWindow, size: 14);
         AutomationProperties.SetName(MaximizeWindow, maximized ? "还原窗口" : "最大化");
         ToolTip.SetTip(MaximizeWindow, maximized ? "还原窗口" : "最大化");
@@ -825,6 +825,7 @@ public sealed partial class AuroraWindow : Window
         streamAccess = currentAccess;
         var token = currentAccess.Token;
         var session = previousSession;
+        EmbeddedTailnet.StreamLease stream = null;
         var keepFailureVisible = false;
 
         void ReportProgress(string message)
@@ -860,7 +861,8 @@ public sealed partial class AuroraWindow : Window
             var route = await Discovery.ChooseRoute(device, () => ReportProgress("正在等待被控端检测编码器…"), token);
             if (closed) return;
             ReportProgress("正在确认设备信任…");
-            if (!await IsPaired(route, token))
+            stream = await EmbeddedTailnet.OpenStream(route, token);
+            if (!await IsPaired(runtime, stream, token))
             {
                 if (device.Tailnet == null)
                     throw new InvalidOperationException("首次自动配对需要两台设备登录同一 Tailscale 账号。");
@@ -871,16 +873,20 @@ public sealed partial class AuroraWindow : Window
                 ReportProgress("正在与对端 Aurora 建立信任…");
                 await AutomaticPairing.Pair(device, moonlight, token);
                 // Retry LAN after Moonlight has pinned the host certificate.
-                if (route != device.Tailnet && await IsPaired(route, token))
-                    ReportProgress("已自动配对，正在通过局域网连接…");
-                else if (await IsPaired(device.Tailnet, token))
+                var confirmed = await IsPaired(runtime, stream, token);
+                if (!confirmed && route != device.Tailnet)
+                {
+                    stream.Dispose();
+                    stream = null;
                     route = device.Tailnet;
-                else
-                    throw new InvalidOperationException("串流组件尚未确认设备信任，请重新连接。");
+                    stream = await EmbeddedTailnet.OpenStream(route, token);
+                    confirmed = await IsPaired(runtime, stream, token);
+                }
+                if (!confirmed) throw new InvalidOperationException("串流组件尚未确认设备信任，请重新连接。");
+                if (route == device.Lan) ReportProgress("已自动配对，正在通过局域网连接…");
             }
             token.ThrowIfCancellationRequested();
             var source = route == device.Lan ? "局域网" : "Tailscale";
-            using var stream = await EmbeddedTailnet.OpenStream(route, token);
             int? exitCode;
             if (session != null)
             {
@@ -912,6 +918,7 @@ public sealed partial class AuroraWindow : Window
         catch (Exception error) { ReportFailure(error.Message); }
         finally
         {
+            stream?.Dispose();
             if (!keepFailureVisible) session?.Finish();
             streamAccess = null;
             connecting = false;
@@ -933,11 +940,11 @@ public sealed partial class AuroraWindow : Window
         finally { if (token.IsCancellationRequested) Upstream.StopProcess(process); }
     }
 
-    private static async Task<bool> IsPaired(StreamHost route, CancellationToken token)
+    private static async Task<bool> IsPaired(string runtime, EmbeddedTailnet.StreamLease stream, CancellationToken token)
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
         timeout.CancelAfter(TimeSpan.FromSeconds(16));
-        try { return (await Upstream.ListMoonlight(route, timeout.Token)).ExitCode == 0; }
+        try { return (await Upstream.ListMoonlight(runtime, stream, timeout.Token)).ExitCode == 0; }
         catch (OperationCanceledException) when (!token.IsCancellationRequested) { return false; }
     }
 

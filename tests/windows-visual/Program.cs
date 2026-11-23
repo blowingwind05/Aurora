@@ -9,6 +9,7 @@ using Avalonia;
 using Avalonia.Automation;
 using Avalonia.Controls;
 using Avalonia.Controls.Presenters;
+using Avalonia.Controls.Primitives;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Media;
@@ -36,11 +37,16 @@ internal static class WindowsVisualTests
         {
             try
             {
-                await CheckButtons(output, baseline);
-                if (!baseline)
+                if (args.Contains("--stream")) await CheckStreamWindow(output);
+                else
                 {
-                    await CheckHost(output);
-                    await CheckStartup(output);
+                    await CheckButtons(output, baseline);
+                    if (!baseline)
+                    {
+                        await CheckStreamWindow(output);
+                        await CheckHost(output);
+                        await CheckStartup(output);
+                    }
                 }
                 failure = null;
             }
@@ -316,6 +322,98 @@ internal static class WindowsVisualTests
         }
         finally { window.Close(); }
         Console.WriteLine("Startup defaults on once and preserves opt-out. The preview did not write to Windows startup settings.");
+    }
+
+    private static async Task CheckStreamWindow(string output)
+    {
+        var type = typeof(AuroraWindow).Assembly.GetType("Aurora.StreamSessionWindow", true);
+        Func<Window, Task> retry = _ => Task.CompletedTask;
+        var window = (Window)Activator.CreateInstance(type, Private, null, new object[] { "远程电脑", retry }, null);
+        window.ShowActivated = false;
+        window.ShowInTaskbar = false;
+        window.Opacity = 0;
+        var toolbar = (Grid)type.GetField("toolbar", Private).GetValue(window);
+        var popup = (Popup)type.GetField("fullscreenControls", Private).GetValue(window);
+        var maximize = (Button)type.GetField("maximize", Private).GetValue(window);
+        var disconnect = (Button)type.GetField("disconnect", Private).GetValue(window);
+        var slot = (Grid)type.GetField("disconnectSlot", Private).GetValue(window);
+        var restore = (MenuItem)type.GetField("fullscreenItem", Private).GetValue(window);
+        var frame = (Border)window.Content;
+        using var stop = new CancellationTokenSource();
+
+        try
+        {
+            Call(window, "ShowConnecting", stop);
+            foreach (var state in new[] { WindowState.Normal, WindowState.Maximized })
+            {
+                window.WindowState = state;
+                await Until(() => window.WindowState == state && toolbar.Bounds.Width > 400);
+                await Task.Delay(100);
+                window.UpdateLayout();
+                Require(frame.Margin == window.OffScreenMargin, "The frame lost Windows' off-screen margins.");
+                foreach (var button in toolbar.GetVisualDescendants().OfType<Button>())
+                {
+                    var midpoint = button.TranslatePoint(new Point(button.Bounds.Width / 2, button.Bounds.Height / 2), toolbar).Value.Y;
+                    Require(Math.Abs(midpoint - toolbar.Bounds.Height / 2) <= 0.51, "Caption control is off center.");
+                }
+
+                if (state == WindowState.Maximized)
+                    Require(AutomationProperties.GetName(maximize) == "还原窗口", "Maximized windows need the restore caption.");
+            }
+            double reserve = slot.Bounds.Width;
+            Call(window, "ShowFailure", "测试");
+            window.UpdateLayout();
+            Require(!disconnect.IsVisible && Math.Abs(slot.Bounds.Width - reserve) <= 0.51,
+                "Failure needs a single close button and must preserve the toolbar spacing.");
+            Call(window, "ShowConnecting", stop);
+            Require(disconnect.IsVisible && AutomationProperties.GetName(disconnect) == "取消", "Retry did not restore Cancel.");
+
+            Call(window, "ShowVideo");
+            var indicator = (Button)type.GetField("statusButton", Private).GetValue(window);
+            var detail = (Flyout)indicator.Flyout;
+            var panel = (Control)type.GetField("connectionDetails", Private).GetValue(window);
+            var sampleType = typeof(AuroraWindow).Assembly.GetType("Aurora.StreamConnectionSample", true);
+            var read = sampleType.GetMethod("Read", BindingFlags.Static | BindingFlags.NonPublic);
+            Require(read.Invoke(null, new object[] { "aurora-connection/1,?" }) == null, "An invalid telemetry line was accepted.");
+            var sample = read.Invoke(null, new object[] { "aurora-connection/1,1920,1080,2,5994,18600,120,1400,12,0" });
+            Call(panel, "Update", sample);
+            Require(AutomationProperties.GetName(indicator).Contains("查看连接详情"), "The connected status should expose session details.");
+            detail.ShowAt(indicator);
+            await Until(() => detail.IsOpen && panel.Bounds.Width > 0);
+            Require(TopLevel.GetTopLevel(panel) != window, "Connection details must be above the embedded video.");
+            var fields = panel.GetVisualDescendants().OfType<TextBlock>().Where(text => text.IsVisible).Select(text => text.Text).ToArray();
+            Require(fields.Contains("1920 × 1080") && fields.Contains("HEVC") && fields.Contains("12 ms"), "Actual telemetry fields are missing.");
+            using (var detailsPicture = Draw(panel.GetVisualAncestors().OfType<FlyoutPresenter>().First(), 1.25))
+                detailsPicture.Save(Path.Combine(output, "stream-connection-details.png"));
+            detail.Hide();
+            var noLatency = read.Invoke(null, new object[] { "aurora-connection/1,1920,1080,2,5994,18600,120,1400,0,0" });
+            Call(panel, "Update", noLatency);
+            Require(!panel.GetVisualDescendants().OfType<TextBlock>().Any(text => text.Text == "网络延迟"), "An unavailable metric should be hidden.");
+            Console.WriteLine("Windows connection details parse, placement and unavailable fields verified.");
+            Call(window, "ToggleFullscreen");
+            await Until(() => popup.IsOpen && popup.Child.Bounds.Height > 0);
+            Require(!toolbar.IsVisible && Equals(restore.Header, "退出全屏"), "Fullscreen controls are unavailable.");
+            Require(AutomationProperties.GetName((Button)popup.Child) == "控制中心", "The floating button needs an accessible label.");
+            var popupRoot = TopLevel.GetTopLevel(popup.Child);
+            Require(popupRoot != window, "The floating button must be above the native video surface.");
+            var buttonOrigin = popup.Child.PointToScreen(default);
+            var screen = window.Screens.ScreenFromWindow(window).Bounds;
+            Require(screen.Contains(buttonOrigin), "The floating button is outside the stream monitor.");
+
+            var trigger = (Button)popup.Child;
+            trigger.Flyout.ShowAt(trigger);
+            await Until(() => ((MenuFlyout)trigger.Flyout).IsOpen);
+            Require(restore.IsEffectivelyEnabled, "The fullscreen menu cannot restore the window.");
+            trigger.Flyout.Hide();
+            restore.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+            await Until(() => window.WindowState == WindowState.Maximized && !popup.IsOpen && toolbar.IsVisible);
+            await Task.Delay(100);
+            window.UpdateLayout();
+            using var picture = Draw(toolbar, 1);
+            picture.Save(Path.Combine(output, "stream-toolbar.png"));
+            Console.WriteLine("Windows stream caption alignment, retry, native full-screen menu and restore verified.");
+        }
+        finally { Call(window, "Finish"); }
     }
 
     private static void Click(Button button) => button.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
