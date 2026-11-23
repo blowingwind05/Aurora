@@ -521,8 +521,6 @@ public sealed partial class SunshinePage : UserControl, IDisposable
         if (current?.IsAuthenticated == true && !AutomaticPairing.SupportsHost(current, admin))
         {
             StopAutomaticPairing();
-            if (OperatingSystem.IsMacOS() && current.Mode == TailscaleMode.System)
-                PairingFeedback.Text = "Mac 被控端使用内置 Tailscale 时可接收自动配对。";
             return;
         }
         bool enabled;

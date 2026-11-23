@@ -70,14 +70,6 @@ namespace Aurora
                 .Select(root => Path.Combine(root, name + ".app")).FirstOrDefault(Directory.Exists);
         }
 
-        private static IEnumerable<string> MacTailscaleCandidates()
-        {
-            var bundle = FindMacApplication("Tailscale");
-            if (bundle != null) yield return Path.Combine(bundle, "Contents", "MacOS", "Tailscale");
-            yield return "/usr/local/bin/tailscale";
-            yield return "/opt/homebrew/bin/tailscale";
-        }
-
         private static string FindProgram(string relativePath, string name)
         {
             foreach (var root in new[]
@@ -124,9 +116,8 @@ namespace Aurora
 
         internal static bool HasSystemTailscale => FindSystemTailscale() != null;
 
-        private static string FindSystemTailscale() =>
-            OperatingSystem.IsMacOS() ? MacTailscaleCandidates().FirstOrDefault(File.Exists)
-                : BundledTailscale.FindWindowsCli(TailscaleMode.System);
+        private static string FindSystemTailscale() => OperatingSystem.IsWindows()
+            ? BundledTailscale.FindWindowsCli(TailscaleMode.System) : null;
 
         public static NetworkSnapshot ReadNetwork()
         {
@@ -157,10 +148,9 @@ namespace Aurora
                 RedirectStandardOutput = true, RedirectStandardError = true,
                 StandardOutputEncoding = Encoding.UTF8, StandardErrorEncoding = Encoding.UTF8
             };
-            if (OperatingSystem.IsMacOS()) options.Environment["TAILSCALE_BE_CLI"] = "1";
             // Windows pipe names are case-insensitive. Spelling out the name in lowercase also
             // keeps the upstream CLI from falling back to its per-user development pipe.
-            if (OperatingSystem.IsWindows()) options.ArgumentList.Add(@"--socket=\\.\pipe\" + BundledTailscale.SystemPipe.ToLowerInvariant());
+            options.ArgumentList.Add(@"--socket=\\.\pipe\" + BundledTailscale.SystemPipe.ToLowerInvariant());
             foreach (var argument in arguments) options.ArgumentList.Add(argument);
             return options;
         }

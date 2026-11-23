@@ -66,6 +66,9 @@ for directory in Frameworks PlugIns Resources; do
   fi
 done
 
+mkdir -p "$destination/Resources"
+cp "$here/../../Assets/Aurora.png" "$destination/Resources/AuroraStreamBrand.png"
+
 notices="$destination/Resources/ThirdParty/Moonlight"
 mkdir -p "$notices"
 cp "$source/LICENSE" "$notices/LICENSE"

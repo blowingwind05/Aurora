@@ -166,28 +166,35 @@ Assert-True (($integrated -join '|') -ceq '--aurora-runtime|stream|192.168.12.8:
 Assert-True (($integratedWin -join '|') -ceq ($integrated -join '|')) 'Windows must use the same private runtime command as macOS.'
 Assert-True (($external -join '|') -ceq ($streamArguments -join '|')) 'External Moonlight must keep the upstream argument format.'
 
-$preferences = $assembly.GetType('Aurora.StreamPreferences', $true)
-$preferenceArgs = $preferences.GetMethod('Arguments', $staticMethods)
-$setToggle = $preferences.GetMethod('SetToggle', $staticMethods)
+$preferences = $assembly.GetType('Aurora.StreamPreferenceStore', $true)
+$instanceMethods = [Reflection.BindingFlags]'Instance,Public,NonPublic'
+$preferenceArgs = $preferences.GetMethod('Arguments', $instanceMethods)
+$setToggle = $preferences.GetMethod('SetToggle', $instanceMethods)
+$fixture = [IO.Directory]::CreateTempSubdirectory('aurora-desktop-preferences-')
+$fixturePath = Join-Path $fixture.FullName 'stream-preferences.json'
 try {
+    $store = [Activator]::CreateInstance($preferences, $instanceMethods, $null, @([string]$fixturePath), $null)
     foreach ($windowDefaults in $true, $false) {
-        $defaults = $preferenceArgs.Invoke($null, @($windowDefaults, $true))
+        $defaults = $preferenceArgs.Invoke($store, @($windowDefaults, $true))
         Assert-True ($defaults -ccontains '--vsync' -and $defaults -ccontains '--keep-awake' -and
             $defaults -ccontains '--absolute-mouse' -and $defaults -ccontains '--no-frame-pacing') `
             'Bundled Aurora playback must apply its defaults with and without the embedded window.'
     }
-    $standalone = $preferenceArgs.Invoke($null, @($false, $false))
+    $standalone = $preferenceArgs.Invoke($store, @($false, $false))
     Assert-True ($standalone -cnotcontains '--vsync' -and $standalone -cnotcontains '--keep-awake') `
         'Aurora playback defaults must not take over the independently installed Moonlight preferences.'
-    $setToggle.Invoke($null, @('vsync', $false))
-    $setToggle.Invoke($null, @('keep-awake', $false))
-    $setToggle.Invoke($null, @('absolute-mouse', $false))
-    $setToggle.Invoke($null, @('frame-pacing', $true))
-    $custom = $preferenceArgs.Invoke($null, @($true, $true))
+    Assert-True ($setToggle.Invoke($store, @('vsync', $false))) 'Fixture preference vsync must save.'
+    Assert-True ($setToggle.Invoke($store, @('keep-awake', $false))) 'Fixture preference keep-awake must save.'
+    Assert-True ($setToggle.Invoke($store, @('absolute-mouse', $false))) 'Fixture preference absolute-mouse must save.'
+    Assert-True ($setToggle.Invoke($store, @('frame-pacing', $true))) 'Fixture preference frame-pacing must save.'
+    $custom = $preferenceArgs.Invoke($store, @($true, $true))
     Assert-True ($custom -ccontains '--no-vsync' -and $custom -ccontains '--no-keep-awake' -and
         $custom -ccontains '--no-absolute-mouse' -and $custom -ccontains '--no-frame-pacing') `
         'Explicit overrides must win, and frame pacing requires V-Sync.'
 }
-finally { $preferences.GetMethod('Reset', $staticMethods).Invoke($null, $null) }
+finally {
+    [IO.File]::Delete($fixturePath)
+    $fixture.Delete()
+}
 
 'Desktop discovery, route, Moonlight arguments, and playback defaults tests passed.'
