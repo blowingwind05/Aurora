@@ -357,7 +357,7 @@ public sealed partial class AuroraWindow : Window
     private void UpdateMaximizeIcon()
     {
         var maximized = WindowState == WindowState.Maximized;
-        var geometry = maximized ? "M8 3H21V16 M3 8H16V21H3Z" : AuroraVisual.Square;
+        var geometry = maximized ? AuroraVisual.RestoreWindow : AuroraVisual.Square;
         MaximizeWindow.Content = AuroraVisual.Icon(geometry, MaximizeWindow, size: 14);
         AutomationProperties.SetName(MaximizeWindow, maximized ? "还原窗口" : "最大化");
         ToolTip.SetTip(MaximizeWindow, maximized ? "还原窗口" : "最大化");
