@@ -17,8 +17,17 @@ namespace Aurora;
 internal sealed class DeviceCard : Border
 {
     private static readonly IBrush OfflineWallpaperOverlay = new SolidColorBrush(Color.Parse("#FBFBFB"), 0.30);
-    private static readonly Lazy<Bitmap> Shrine = new(() => Load("hakurei-shrine.webp"));
-    private static readonly Lazy<Bitmap> Lake = new(() => Load("misty-lake.webp"));
+    private static readonly Lazy<Bitmap>[] DefaultCovers = Array.ConvertAll(new[]
+    {
+        "mountain-valley.webp",
+        "forest-path.webp",
+        "blossom-grove.webp",
+        "ginkgo-lakeside.webp",
+        "baikal-piano.webp",
+        "baikal-accordion.webp",
+        "sunflower-field.webp",
+        "sunset-sky.webp",
+    }, name => new Lazy<Bitmap>(() => LoadCover(name)));
     private readonly Button connect;
     private readonly TextBlock address;
     private readonly StackPanel details;
@@ -44,7 +53,7 @@ internal sealed class DeviceCard : Border
         ClipToBounds = true;
 
         var cover = new Grid();
-        defaultCover = (index % 2 == 0 ? Shrine : Lake).Value;
+        defaultCover = DefaultCovers[index % DefaultCovers.Length].Value;
         coverArt = new Image { Source = defaultCover, Stretch = Stretch.UniformToFill, IsHitTestVisible = false };
         cover.Children.Add(coverArt);
         if (!device.Online)
@@ -225,9 +234,9 @@ internal sealed class DeviceCard : Border
         return list;
     }
 
-    private static Bitmap Load(string name)
+    private static Bitmap LoadCover(string name)
     {
-        using var stream = AssetLoader.Open(new Uri($"avares://Aurora/Assets/{name}"));
+        using var stream = AssetLoader.Open(new Uri($"avares://Aurora/Assets/Wallpapers/{name}"));
         return new Bitmap(stream);
     }
 }
