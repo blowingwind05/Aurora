@@ -1,5 +1,6 @@
 using System;
 using System.Globalization;
+using System.IO;
 using System.Linq;
 using Avalonia;
 using Avalonia.Automation;
@@ -16,7 +17,7 @@ internal sealed class StreamSettingsPage : UserControl
     private const double ScrollGutter = 8;
     private static readonly IBrush Ink = Brush.Parse("#19283F");
 
-    private readonly RadioButton[] tabs = new RadioButton[5];
+    private readonly RadioButton[] tabs = new RadioButton[4];
     private readonly ScrollViewer scroll = new()
     {
         VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
@@ -30,7 +31,7 @@ internal sealed class StreamSettingsPage : UserControl
         BuildPanels();
         var tabBar = new WrapPanel { ItemSpacing = 6, LineSpacing = 6 };
         AutomationProperties.SetName(tabBar, "设置板块");
-        var names = new[] { "画质", "音频", "界面", "输入", "高级" };
+        var names = new[] { "画质", "音频", "通用", "高级设置" };
         for (var index = 0; index < names.Length; index++)
         {
             var target = index;
@@ -62,7 +63,8 @@ internal sealed class StreamSettingsPage : UserControl
         {
             StreamPreferences.Reset();
             var trayChangeFailed = !TrayResidency.TrySetCloseToTray(true);
-            BuildPanels(trayChangeFailed);
+            var sleepChangeFailed = !TrySetSleepMode(HostSleepMode.System);
+            BuildPanels(trayChangeFailed, sleepChangeFailed);
             Select(Array.FindIndex(tabs, tab => tab.IsChecked == true));
         };
         var header = new Grid
@@ -103,8 +105,11 @@ internal sealed class StreamSettingsPage : UserControl
         tabs[0].IsChecked = true;
     }
 
-    private void BuildPanels(bool trayChangeFailed = false) =>
-        panels = new[] { Quality(), Audio(), Interface(trayChangeFailed), Input(), Advanced() };
+    private void BuildPanels(bool trayChangeFailed = false, bool sleepChangeFailed = false)
+    {
+        var bitrate = Bitrate(out var refreshBitrate);
+        panels = new[] { Quality(refreshBitrate), Audio(), General(trayChangeFailed, sleepChangeFailed), Advanced(bitrate) };
+    }
 
     private void MoveTab(KeyEventArgs args, int index)
     {
@@ -132,7 +137,24 @@ internal sealed class StreamSettingsPage : UserControl
         scroll.Offset = default;
     }
 
-    private static Control Quality()
+    private static Control Quality(Action refreshBitrate)
+    {
+        var resolution = Choice("分辨率", "resolution", ("720p · 1280 × 720", "1280x720"),
+            ("1080p · 1920 × 1080", "1920x1080"), ("1440p · 2560 × 1440", "2560x1440"),
+            ("4K · 3840 × 2160", "3840x2160"));
+        var fps = Choice("帧率", "fps", ("30 FPS", "30"), ("60 FPS", "60"));
+        resolution.SelectionChanged += (_, _) => refreshBitrate();
+        fps.SelectionChanged += (_, _) => refreshBitrate();
+        var displayMode = Choice("串流窗口模式", "display-mode",
+            ("全屏", "fullscreen"), ("无边框窗口", "borderless"), ("窗口", "windowed"));
+
+        return Panel(Card("串流画面",
+            Row("分辨率", resolution),
+            Row("帧率", fps),
+            Row("串流窗口模式", displayMode)));
+    }
+
+    private static Control PlaybackSettings(Control bitrate)
     {
         var pacing = MakeToggle("帧速调节", StreamPreferences.GetToggle("frame-pacing"),
             value => StreamPreferences.SetToggle("frame-pacing", value));
@@ -150,43 +172,23 @@ internal sealed class StreamSettingsPage : UserControl
         });
         UpdatePacing(vsync.IsChecked == true);
 
-        var bitrate = Bitrate(out var refreshBitrate);
-        var resolution = Choice("分辨率", "resolution", ("720p · 1280 × 720", "1280x720"),
-            ("1080p · 1920 × 1080", "1920x1080"), ("1440p · 2560 × 1440", "2560x1440"),
-            ("4K · 3840 × 2160", "3840x2160"));
-        var fps = Choice("帧率", "fps", ("30 FPS", "30"), ("60 FPS", "60"));
-        resolution.SelectionChanged += (_, _) => refreshBitrate();
-        fps.SelectionChanged += (_, _) => refreshBitrate();
-
-        var displayMode = Choice("串流窗口模式", "display-mode",
-            ("全屏", "fullscreen"),
-            ("无边框窗口", "borderless"),
-            ("窗口", "windowed"));
-
-        return Panel(
-            Card("视频质量",
-                Row("分辨率", resolution),
-                Row("帧率", fps),
-                Row("视频码率", bitrate, minEditorWidth: 120)),
-            Card("串流显示",
-                Row("串流窗口模式", displayMode),
-                Row("垂直同步", vsync, stretchEditor: false),
-                Row("帧速调节", pacing, stretchEditor: false)));
+        return Card("播放与显示",
+            Row("视频码率", bitrate, minEditorWidth: 120),
+            Row("垂直同步", vsync, stretchEditor: false),
+            Row("帧速调节", pacing, stretchEditor: false),
+            ToggleRow("串流时保持屏幕开启", "keep-awake"));
     }
 
     private static Control Audio() => Panel(Card("音频播放",
-        Row("音频配置", Choice("音频配置", "audio-config", ("立体声", "stereo"),
-            ("5.1 环绕声", "5.1-surround"), ("7.1 环绕声", "7.1-surround"))),
         Row("串流时将目标电脑的扬声器静音", MakeToggle("串流时将目标电脑的扬声器静音",
             !StreamPreferences.GetToggle("audio-on-host"),
-            value => StreamPreferences.SetToggle("audio-on-host", !value)), stretchEditor: false),
-        ToggleRow("Moonlight 失去焦点时静音", "mute-on-focus-loss")));
+            value => StreamPreferences.SetToggle("audio-on-host", !value)), stretchEditor: false)));
 
     internal void RefreshStartup() => refreshStartup?.Invoke();
 
-    private Control Interface(bool trayChangeFailed)
+    private Control General(bool trayChangeFailed, bool sleepChangeFailed)
     {
-        var streaming = Card("串流体验", ToggleRow("串流时保持屏幕开启", "keep-awake"));
+        var power = PowerSettings(sleepChangeFailed);
         const string startupLabel = "开机自启动";
         var startup = MakeToggle(startupLabel, false);
         var startupNote = Text("", 12);
@@ -231,7 +233,7 @@ internal sealed class StreamSettingsPage : UserControl
         refreshStartup = () => ReadStartup();
         ReadStartup();
         var startupRow = Row(startupLabel, startup, stretchEditor: false);
-        if (!TrayResidency.IsAvailable) return Panel(Card("Aurora 窗口", startupRow, startupNote), streaming);
+        if (!TrayResidency.IsAvailable) return Panel(Card("Aurora 窗口", startupRow, startupNote), power);
 
         const string label = "关闭窗口时";
         const int keepRunning = 0;
@@ -255,10 +257,51 @@ internal sealed class StreamSettingsPage : UserControl
                 restoringSelection = false;
             }
         };
-        return Panel(Card("Aurora 窗口", startupRow, startupNote, Row(label, choice), error), streaming);
+        return Panel(Card("Aurora 窗口", startupRow, startupNote, Row(label, choice), error), power);
     }
 
-    private static Control Input()
+    private static Control PowerSettings(bool changeFailed)
+    {
+        const string label = "防止电脑自动休眠";
+        const string explanation = "关闭时按系统电源设置休眠。防休眠仅在被控组件运行时生效。";
+        var modes = new[] { HostSleepMode.System, HostSleepMode.OnAc, HostSleepMode.Always };
+        var selector = Combo(label, "关闭", "仅接通电源时", "始终");
+        selector.SelectedIndex = Array.IndexOf(modes, HostSleepPrevention.Mode);
+        var message = Text(changeFailed ? "无法恢复自动休眠设置。" : explanation, 12);
+        message.Classes.Add("muted");
+        message.Margin = new Thickness(0, 0, 0, 10);
+        AutomationProperties.SetLiveSetting(message, AutomationLiveSetting.Polite);
+        var restoring = false;
+        selector.SelectionChanged += (_, _) =>
+        {
+            if (restoring || selector.SelectedIndex < 0) return;
+            if (TrySetSleepMode(modes[selector.SelectedIndex]))
+            {
+                message.Text = explanation;
+                return;
+            }
+            message.Text = "无法保存自动休眠设置。";
+            restoring = true;
+            selector.SelectedIndex = Array.IndexOf(modes, HostSleepPrevention.Mode);
+            restoring = false;
+        };
+        return Card("电源", Row(label, selector), message);
+    }
+
+    private static bool TrySetSleepMode(HostSleepMode mode)
+    {
+        try
+        {
+            HostSleepPrevention.SetMode(mode);
+            return true;
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    private static Control[] InputSettings()
     {
         const string option = "capture-system-keys";
         var current = StreamPreferences.Get(option);
@@ -278,19 +321,19 @@ internal sealed class StreamSettingsPage : UserControl
         };
         var shortcuts = InlineEditors(scope, shortcut, minInlineWidth: 145);
 
-        return Panel(
+        return [
             Card("键盘、鼠标与触屏",
-                ToggleRow("为远程桌面优化鼠标", "absolute-mouse"),
+                ToggleRow("桌面鼠标模式", "absolute-mouse"),
                 Row("捕获系统快捷键", shortcuts, minEditorWidth: 120),
                 ToggleRow("将触摸屏用作虚拟触控板", "touchscreen-trackpad"),
                 ToggleRow("交换鼠标左右键", "mouse-buttons-swap"),
                 ToggleRow("反转鼠标滚动方向", "reverse-scroll-direction")),
             Card("手柄",
                 ToggleRow("交换手柄的 A/B 和 X/Y 键", "swap-gamepad-buttons"),
-                ToggleRow("Moonlight 在后台时接收手柄输入", "background-gamepad")));
+                ToggleRow("后台接收手柄输入", "background-gamepad"))];
     }
 
-    private static Control Advanced()
+    private static Control Advanced(Control bitrate)
     {
         const string option = "video-decoder";
         var values = new[] { "auto", "hardware", "software" };
@@ -315,15 +358,21 @@ internal sealed class StreamSettingsPage : UserControl
         });
         UpdateDecoder(initialHdr);
 
-        return Panel(
+        return Panel([
+            PlaybackSettings(bitrate),
             Card("视频与性能", Row("视频解码方式", decoder),
                 Row("视频编码格式", Choice("视频编码格式", "video-codec", ("自动（推荐）", "auto"),
                     ("H.264", "H.264"), ("HEVC（H.265）", "HEVC"), ("AV1（实验）", "AV1"))),
                 Row("启用 HDR（实验）", hdr, stretchEditor: false),
                 ToggleRow("串流时显示性能统计", "performance-overlay")),
+            Card("音频",
+                Row("音频配置", Choice("音频配置", "audio-config", ("立体声", "stereo"),
+                    ("5.1 环绕声", "5.1-surround"), ("7.1 环绕声", "7.1-surround"))),
+                ToggleRow("失去焦点时静音", "mute-on-focus-loss")),
+            .. InputSettings(),
             Card("目标电脑",
                 ToggleRow("为串流优化目标电脑上的游戏设置", "game-optimization"),
-                ToggleRow("串流结束后退出目标电脑上的应用", "quit-after")));
+                ToggleRow("串流结束后退出目标电脑上的应用", "quit-after"))]);
     }
 
     private static Control Bitrate(out Action refresh)

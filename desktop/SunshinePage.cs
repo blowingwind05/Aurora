@@ -48,8 +48,12 @@ public sealed partial class SunshinePage : UserControl, IDisposable
         StreamAudio.IsCheckedChanged += (_, _) => QueueSave(text: false);
         PrivacyDisplay.SelectionChanged += (_, _) =>
         {
-            LocalDisplays.IsEnabled = PrivacyDisplay.SelectedItem is SunshinePrivacyDisplay display && display.Id.Length != 0;
-            if (!LocalDisplays.IsEnabled) LocalDisplays.SelectedIndex = 0;
+            UpdateDisplayControls();
+            QueueSave(text: false);
+        };
+        PrivacyScreensaver.IsCheckedChanged += (_, _) =>
+        {
+            UpdateDisplayControls();
             QueueSave(text: false);
         };
         LocalDisplays.SelectionChanged += (_, _) => QueueSave(text: false);
@@ -394,34 +398,58 @@ public sealed partial class SunshinePage : UserControl, IDisposable
     private void LoadDisplaySettings(SunshinePrivacySettings displays)
     {
         displaySettings = displays;
-        PrivacySettings.IsVisible = displays != null;
+        var hasScreensaver = displays?.Saved.Screensaver == true || displays?.Active.Screensaver == true;
+        var hasVirtualSelection = displays?.SupportsVirtualDisplay == true &&
+            (displays.Saved.Id.Length != 0 || displays.Active.Id.Length != 0 || !displays.SupportsScreensaver);
+        PrivacySettings.IsVisible = hasScreensaver || hasVirtualSelection;
         PrivacyDisplay.ItemsSource = null;
-        if (displays == null) return;
+        if (!PrivacySettings.IsVisible) return;
 
-        var choices = new[] { new SunshinePrivacyDisplay("", "按原有显示设置") }
-            .Concat(displays.Displays).ToList();
-        var selected = choices.FirstOrDefault(display => display.Id == displays.Saved.Id);
-        if (selected == null)
+        PrivacyScreensaverRow.IsVisible = hasScreensaver;
+        PrivacyScreensaver.IsEnabled = displays.Saved.Screensaver;
+        PrivacyDisplayRow.IsVisible = hasVirtualSelection;
+        LocalDisplaysRow.IsVisible = hasVirtualSelection && displays.SupportsExtended;
+        if (hasVirtualSelection)
         {
-            selected = new(displays.Saved.Id, "已选虚拟显示器不可用");
-            choices.Add(selected);
+            var choices = new[] { new SunshinePrivacyDisplay("", "按原有显示设置") }
+                .Concat(displays.Displays).ToList();
+            var selected = choices.FirstOrDefault(display => display.Id == displays.Saved.Id);
+            if (selected == null)
+            {
+                selected = new(displays.Saved.Id, "已选虚拟显示器不可用");
+                choices.Add(selected);
+            }
+            PrivacyDisplay.ItemsSource = choices;
+            PrivacyDisplay.SelectedItem = selected;
         }
-        PrivacyDisplay.ItemsSource = choices;
-        PrivacyDisplay.SelectedItem = selected;
-        LocalDisplaysRow.IsVisible = displays.SupportsExtended;
         LocalDisplays.SelectedIndex = displays.Saved.Exclusive ? 1 : 0;
-        PrivacyNote.Text = displays.Displays.Length == 0
-            ? "要串流虚拟显示器，请先在 Windows 启用受信任的虚拟显示器。"
-            : displays.SupportsExtended ? "断开后恢复原来的显示布局。"
-                : "更新内置被控组件后，可在串流虚拟显示器时保留本地显示。";
-        if (displays.Active != displays.Saved) PrivacyNote.Text += " 有更改等待重启。";
+        PrivacyScreensaver.IsChecked = displays.Saved.Screensaver;
+        UpdateDisplayControls();
+        UpdatePrivacyNote();
+    }
+
+    private void UpdateDisplayControls()
+    {
+        LocalDisplays.IsEnabled = PrivacyScreensaver.IsChecked != true &&
+            PrivacyDisplay.SelectedItem is SunshinePrivacyDisplay { Id.Length: > 0 };
+        if (!LocalDisplays.IsEnabled) LocalDisplays.SelectedIndex = 0;
+    }
+
+    private void UpdatePrivacyNote()
+    {
+        if (displaySettings == null) return;
+        PrivacyNote.Text = displaySettings.Saved.Screensaver
+            ? "可关闭旧版自动屏保，改为在主控端的控制中心操作。"
+            : PrivacyDisplayRow.IsVisible ? "断开后恢复原来的显示布局。" : "";
+        if (displaySettings.Active != displaySettings.Saved) PrivacyNote.Text += " 重启被控组件后生效。";
     }
 
     private OverviewSettings ReadOverview()
     {
-        var display = PrivacyDisplay.SelectedItem as SunshinePrivacyDisplay;
-        var selection = display == null ? null : new SunshineDisplaySelection(display.Id, display.Id.Length != 0 &&
-            (displaySettings?.SupportsExtended != true || LocalDisplays.SelectedIndex == 1));
+        var id = (PrivacyDisplay.SelectedItem as SunshinePrivacyDisplay)?.Id ?? "";
+        var screensaver = PrivacyScreensaverRow.IsVisible && PrivacyScreensaver.IsChecked == true;
+        var selection = !PrivacySettings.IsVisible ? null : new SunshineDisplaySelection(id, id.Length != 0 && !screensaver &&
+            (!displaySettings.SupportsExtended || LocalDisplays.SelectedIndex == 1), screensaver);
         return new(HostName.Text?.Trim() ?? "", StreamAudio.IsChecked == true, selection);
     }
 
@@ -455,6 +483,12 @@ public sealed partial class SunshinePage : UserControl, IDisposable
             if (savedOverview == null || submitted == savedOverview) return true;
             await admin.SavePreferences(submitted.Name, submitted.Audio, submitted.Display);
             savedOverview = submitted;
+            if (displaySettings != null && submitted.Display != null)
+            {
+                displaySettings = displaySettings with { Saved = submitted.Display };
+                PrivacyScreensaver.IsEnabled = submitted.Display.Screensaver;
+                UpdatePrivacyNote();
+            }
             ReportSettings("已保存。重启 Sunshine 后生效。");
             return true;
         }
@@ -482,8 +516,15 @@ public sealed partial class SunshinePage : UserControl, IDisposable
 
     private async Task UpdateAutomaticPairing(bool reauthorize = false)
     {
-        if (closed || admin == null || !OperatingSystem.IsWindows()) return;
+        if (closed || admin == null) return;
         var current = network;
+        if (current?.IsAuthenticated == true && !AutomaticPairing.SupportsHost(current, admin))
+        {
+            StopAutomaticPairing();
+            if (OperatingSystem.IsMacOS() && current.Mode == TailscaleMode.System)
+                PairingFeedback.Text = "Mac 被控端使用内置 Tailscale 时可接收自动配对。";
+            return;
+        }
         bool enabled;
         try { enabled = AutomaticPairing.EnsureEnrollment(current, admin, reauthorize); }
         catch (Exception error)

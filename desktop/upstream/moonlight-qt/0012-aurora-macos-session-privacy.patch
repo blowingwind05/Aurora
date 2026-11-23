@@ -1,0 +1,593 @@
+diff --git a/app/app.pro b/app/app.pro
+index c6d546a..a2459ed 100644
+--- a/app/app.pro
++++ b/app/app.pro
+@@ -385,8 +385,9 @@ macx {
+     message(VideoToolbox renderer selected)
+ 
+     contains(DEFINES, AURORA_STREAM_RUNTIME) {
+-        SOURCES += streaming/aurora-session-toolbar.mm
+-        HEADERS += streaming/aurora-session-toolbar.h
++        SOURCES += streaming/aurora-session-toolbar.mm streaming/aurora-session-privacy.cpp
++        HEADERS += streaming/aurora-session-toolbar.h streaming/aurora-session-privacy.h
++        LIBS += -framework CoreFoundation
+     }
+ 
+     SOURCES += \
+diff --git a/app/streaming/aurora-session-privacy.cpp b/app/streaming/aurora-session-privacy.cpp
+new file mode 100644
+index 0000000..e617d57
+--- /dev/null
++++ b/app/streaming/aurora-session-privacy.cpp
+@@ -0,0 +1,134 @@
++#include "aurora-session-privacy.h"
++#include "../AuroraStreamEntry.h"
++#include "../backend/nvaddress.h"
++
++#include <QCoreApplication>
++#include <QDir>
++#include <QEventLoop>
++#include <QFileInfo>
++#include <QHostAddress>
++#include <QProcess>
++#include <QRegularExpression>
++#include <QTimer>
++
++AuroraPrivacyTarget makeAuroraPrivacyTarget(const NvAddress& address, int httpsPort,
++                                           const QString& uuid, bool hasPinnedCertificate)
++{
++    const auto program = QCoreApplication::applicationFilePath();
++    const QFileInfo programInfo(program);
++    const QHostAddress host(address.address());
++    const QRegularExpression uuidPattern(QStringLiteral(
++        R"(\A[0-9A-Fa-f]{8}(?:-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}\z)"));
++    if (!hasPinnedCertificate || programInfo.completeBaseName() != QStringLiteral("AuroraStream") ||
++        !programInfo.isAbsolute() || !programInfo.isExecutable() ||
++        !uuidPattern.match(uuid).hasMatch() || host.isNull() || !host.scopeId().isEmpty() ||
++        httpsPort <= 0 || httpsPort != address.port() + DEFAULT_HTTPS_PORT - DEFAULT_HTTP_PORT) {
++        return {};
++    }
++
++    auto environment = QProcessEnvironment::systemEnvironment();
++    const auto relayPortKey = QStringLiteral("AURORA_GAMESTREAM_RELAY_BASE");
++    const auto relayHostKey = QStringLiteral("AURORA_GAMESTREAM_HOST_UUID");
++    const int relayPort = auroraGameStreamRelayBase();
++    const auto relayHost = environment.value(relayHostKey);
++    if (relayPort < 0 || (relayPort == 0 && environment.contains(relayHostKey)) ||
++        (relayPort > 0 && (address != NvAddress(QStringLiteral("127.0.0.1"), static_cast<uint16_t>(relayPort)) ||
++                          uuid.compare(relayHost, Qt::CaseInsensitive) != 0))) {
++        return {};
++    }
++
++    environment.remove(relayPortKey);
++    environment.remove(relayHostKey);
++    if (relayPort > 0) {
++        environment.insert(relayPortKey, QString::number(relayPort));
++        environment.insert(relayHostKey, relayHost);
++    }
++    return {program, QDir::currentPath(), NvAddress(host, address.port()).toString(), uuid, environment};
++}
++
++AuroraPrivacyState runAuroraPrivacyCommand(const AuroraPrivacyTarget& target, AuroraPrivacyOperation operation,
++                                          const std::atomic<bool>& live)
++{
++    if (!live || target.program.isEmpty()) {
++        return AuroraPrivacyState::Unavailable;
++    }
++
++    const char* verb = "status";
++    switch (operation) {
++    case AuroraPrivacyOperation::Status: break;
++    case AuroraPrivacyOperation::Enable: verb = "on"; break;
++    case AuroraPrivacyOperation::Disable: verb = "off"; break;
++    }
++    QProcess child;
++    child.setProgram(target.program);
++    child.setWorkingDirectory(target.workingDirectory);
++    child.setProcessEnvironment(target.environment);
++    child.setStandardInputFile(QProcess::nullDevice());
++    child.setStandardErrorFile(QProcess::nullDevice());
++    child.setArguments({QStringLiteral("--aurora-runtime"), QStringLiteral("privacy"),
++                        target.endpoint, target.uuid, QString::fromLatin1(verb)});
++
++    QEventLoop loop;
++    QTimer timeout;
++    timeout.setSingleShot(true);
++    QTimer cancellation;
++    QByteArray output;
++    bool completed = false;
++    bool invalid = false;
++    auto readOutput = [&]() {
++        output += child.readAllStandardOutput();
++        if (output.size() > 16) {
++            invalid = true;
++            loop.quit();
++        }
++    };
++
++    QObject::connect(&child, &QProcess::readyReadStandardOutput, &loop, readOutput);
++    QObject::connect(&child, qOverload<int, QProcess::ExitStatus>(&QProcess::finished), &loop,
++                     [&](int, QProcess::ExitStatus) {
++        completed = true;
++        loop.quit();
++    });
++    QObject::connect(&child, &QProcess::errorOccurred, &loop, [&](QProcess::ProcessError error) {
++        if (error == QProcess::FailedToStart) {
++            invalid = true;
++            loop.quit();
++        }
++    });
++    QObject::connect(&timeout, &QTimer::timeout, &loop, [&]() {
++        invalid = true;
++        loop.quit();
++    });
++    QObject::connect(&cancellation, &QTimer::timeout, &loop, [&]() {
++        if (!live) {
++            loop.quit();
++        }
++    });
++
++    // This event loop runs only in the worker. SDL owns the AppKit thread during streaming.
++    timeout.start(8000);
++    cancellation.start(80);
++    child.start();
++    if (!completed && !invalid && live) {
++        loop.exec();
++    }
++    if (!completed) {
++        child.kill();
++        child.waitForFinished(300);
++    }
++    readOutput();
++    if (!live || !completed || invalid || child.exitStatus() != QProcess::NormalExit) {
++        return AuroraPrivacyState::Error;
++    }
++    if (output.endsWith("\r\n")) {
++        output.chop(2);
++    } else if (output.endsWith('\n')) {
++        output.chop(1);
++    }
++    if (child.exitCode() == 0) {
++        if (output == "on") return AuroraPrivacyState::On;
++        if (output == "off") return AuroraPrivacyState::Off;
++        if (output == "unavailable") return AuroraPrivacyState::Unavailable;
++    }
++    return AuroraPrivacyState::Error;
++}
+diff --git a/app/streaming/aurora-session-privacy.h b/app/streaming/aurora-session-privacy.h
+new file mode 100644
+index 0000000..13cd556
+--- /dev/null
++++ b/app/streaming/aurora-session-privacy.h
+@@ -0,0 +1,51 @@
++#pragma once
++
++#include <QElapsedTimer>
++#include <QProcessEnvironment>
++#include <QString>
++
++#include <atomic>
++#include <utility>
++
++class NvAddress;
++
++enum class AuroraPrivacyOperation {
++    Status,
++    Enable,
++    Disable,
++};
++
++enum class AuroraPrivacyState {
++    Unknown,
++    On,
++    Off,
++    Unavailable,
++    Error,
++};
++
++struct AuroraPrivacyTarget {
++    QString program;
++    QString workingDirectory;
++    QString endpoint;
++    QString uuid;
++    QProcessEnvironment environment;
++};
++
++AuroraPrivacyTarget makeAuroraPrivacyTarget(const NvAddress& address, int httpsPort,
++                                           const QString& uuid, bool hasPinnedCertificate);
++
++AuroraPrivacyState runAuroraPrivacyCommand(const AuroraPrivacyTarget& target, AuroraPrivacyOperation operation,
++                                          const std::atomic<bool>& live);
++
++struct AuroraSessionPrivacy {
++    explicit AuroraSessionPrivacy(AuroraPrivacyTarget target) : target(std::move(target)) {}
++
++    const AuroraPrivacyTarget target;
++    std::atomic<bool> live{true};
++
++    // Menu state belongs to the AppKit thread. The worker only reads live and target.
++    AuroraPrivacyState state = AuroraPrivacyState::Unknown;
++    QElapsedTimer lastStatusCheck;
++    bool busy = false;
++    bool changeRejected = false;
++};
+diff --git a/app/streaming/aurora-session-toolbar.h b/app/streaming/aurora-session-toolbar.h
+index 44f7677..3da0796 100644
+--- a/app/streaming/aurora-session-toolbar.h
++++ b/app/streaming/aurora-session-toolbar.h
+@@ -2,6 +2,10 @@
+ 
+ #include <SDL.h>
+ 
++#include <memory>
++
++struct AuroraSessionPrivacy;
++
+ // Reserved alongside Session's SDL_USEREVENT codes.
+ enum class AuroraToolbarAction : Sint32 {
+     Disconnect = 105,
+@@ -9,4 +13,4 @@ enum class AuroraToolbarAction : Sint32 {
+     ToggleStats,
+ };
+ 
+-bool installAuroraSessionToolbar(SDL_Window* window);
++bool installAuroraSessionToolbar(SDL_Window* window, const std::shared_ptr<AuroraSessionPrivacy>& privacy);
+diff --git a/app/streaming/aurora-session-toolbar.mm b/app/streaming/aurora-session-toolbar.mm
+index 8ca23f0..23817f1 100644
+--- a/app/streaming/aurora-session-toolbar.mm
++++ b/app/streaming/aurora-session-toolbar.mm
+@@ -1,14 +1,44 @@
+ #include "aurora-session-toolbar.h"
++#include "aurora-session-privacy.h"
+ 
+ #import <AppKit/AppKit.h>
++#import <CoreFoundation/CoreFoundation.h>
+ #include <SDL_syswm.h>
++#include <QThreadPool>
+ 
+-@interface AuroraSessionToolbarController : NSTitlebarAccessoryViewController {
++static NSWindow* auroraNativeWindow(SDL_Window* window)
++{
++    SDL_SysWMinfo info = {};
++    SDL_VERSION(&info.version);
++    if (!window || !SDL_GetWindowWMInfo(window, &info) || info.subsystem != SDL_SYSWM_COCOA) {
++        return nil;
++    }
++    return info.info.cocoa.window;
++}
++
++@interface AuroraSessionToolbarController : NSTitlebarAccessoryViewController <NSMenuDelegate> {
+ @public
+     Uint32 streamWindowId;
++    std::shared_ptr<AuroraSessionPrivacy> privacy;
++@private
++    NSPopUpButton* _controlCenter;
++    NSMenuItem* _privacyItem;
++    NSMenuItem* _privacyNote;
+ }
++- (void)requestPrivacy:(AuroraPrivacyOperation)operation;
++- (void)updatePrivacyMenu;
+ @end
+ 
++static AuroraSessionToolbarController* auroraToolbar(NSWindow* nativeWindow)
++{
++    for (NSTitlebarAccessoryViewController* accessory in nativeWindow.titlebarAccessoryViewControllers) {
++        if ([accessory isKindOfClass:[AuroraSessionToolbarController class]]) {
++            return (AuroraSessionToolbarController*)accessory;
++        }
++    }
++    return nil;
++}
++
+ @implementation AuroraSessionToolbarController
+ 
+ - (void)sendAction:(NSButton*)sender
+@@ -23,9 +53,100 @@
+     }
+ }
+ 
++- (void)updatePrivacyMenu
++{
++    const bool hasTarget = privacy && privacy->live && !privacy->target.program.isEmpty();
++    const auto state = hasTarget ? privacy->state : AuroraPrivacyState::Unavailable;
++    const bool busy = hasTarget && privacy->busy;
++    _privacyItem.enabled = !busy && (state == AuroraPrivacyState::On || state == AuroraPrivacyState::Off);
++    _privacyItem.state = !busy && state == AuroraPrivacyState::On ? NSControlStateValueOn : NSControlStateValueOff;
++
++    NSString* note = nil;
++    if (busy || state == AuroraPrivacyState::Unknown) {
++        note = @"正在确认隐私保护状态…";
++    } else if (state == AuroraPrivacyState::Unavailable) {
++        note = @"此连接不支持隐私保护";
++    } else if (state == AuroraPrivacyState::Error) {
++        note = @"无法确认主机状态，重新打开控制中心以重试";
++    } else if (privacy->changeRejected) {
++        note = @"主机未切换到所选状态";
++    }
++    _privacyNote.title = note ?: @"";
++    _privacyNote.hidden = note == nil;
++}
++
++- (void)requestPrivacy:(AuroraPrivacyOperation)operation
++{
++    if (!privacy || !privacy->live || privacy->target.program.isEmpty() || privacy->busy) {
++        return;
++    }
++    privacy->busy = true;
++    privacy->changeRejected = false;
++    privacy->lastStatusCheck.start();
++    [self updatePrivacyMenu];
++
++    const std::weak_ptr<AuroraSessionPrivacy> weak(privacy);
++    const auto windowId = streamWindowId;
++    QThreadPool::globalInstance()->start([weak, windowId, operation]() {
++        const auto session = weak.lock();
++        if (!session || !session->live) {
++            return;
++        }
++        const auto result = runAuroraPrivacyCommand(session->target, operation, session->live);
++        if (!session->live) {
++            return;
++        }
++        const auto mainLoop = CFRunLoopGetMain();
++        CFRunLoopPerformBlock(mainLoop, kCFRunLoopCommonModes, ^{
++            const auto current = weak.lock();
++            if (!current || !current->live) {
++                return;
++            }
++            current->busy = false;
++            current->lastStatusCheck.restart();
++            current->state = result;
++            current->changeRejected =
++                (operation == AuroraPrivacyOperation::Enable && result == AuroraPrivacyState::Off) ||
++                (operation == AuroraPrivacyOperation::Disable && result == AuroraPrivacyState::On);
++            AuroraSessionToolbarController* toolbar = auroraToolbar(auroraNativeWindow(SDL_GetWindowFromID(windowId)));
++            if (toolbar && toolbar->privacy == current) {
++                [toolbar updatePrivacyMenu];
++            }
++        });
++        CFRunLoopWakeUp(mainLoop);
++    });
++}
++
++- (void)menuWillOpen:(NSMenu*)menu
++{
++    [self updatePrivacyMenu];
++    if (privacy && (!privacy->lastStatusCheck.isValid() || privacy->lastStatusCheck.hasExpired(3000))) {
++        [self requestPrivacy:AuroraPrivacyOperation::Status];
++    }
++}
++
++- (void)togglePrivacy:(NSMenuItem*)sender
++{
++    if (!privacy || privacy->busy) {
++        return;
++    }
++    if (privacy->state == AuroraPrivacyState::On) {
++        [self requestPrivacy:AuroraPrivacyOperation::Disable];
++    } else if (privacy->state == AuroraPrivacyState::Off) {
++        [self requestPrivacy:AuroraPrivacyOperation::Enable];
++    }
++}
++
++- (void)dealloc
++{
++    _controlCenter.menu.delegate = nil;
++    [_controlCenter release];
++    [super dealloc];
++}
++
+ - (void)loadView
+ {
+-    NSView* strip = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 400, 36)];
++    NSView* strip = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 440, 36)];
+     self.view = strip;
+     [strip release];
+ 
+@@ -41,6 +162,24 @@
+                                          forOrientation:NSLayoutConstraintOrientationHorizontal];
+     }
+ 
++    _controlCenter = [[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:YES];
++    [_controlCenter addItemWithTitle:@"控制中心"];
++    _controlCenter.refusesFirstResponder = YES;
++    [_controlCenter setContentCompressionResistancePriority:NSLayoutPriorityRequired
++                                              forOrientation:NSLayoutConstraintOrientationHorizontal];
++    NSMenu* controlMenu = _controlCenter.menu;
++    controlMenu.autoenablesItems = NO;
++    controlMenu.delegate = self;
++    _privacyItem = [[NSMenuItem alloc] initWithTitle:@"隐私保护" action:@selector(togglePrivacy:) keyEquivalent:@""];
++    _privacyItem.target = self;
++    [controlMenu addItem:_privacyItem];
++    [_privacyItem release];
++    _privacyNote = [[NSMenuItem alloc] initWithTitle:@"" action:nullptr keyEquivalent:@""];
++    _privacyNote.enabled = NO;
++    [controlMenu addItem:_privacyNote];
++    [_privacyNote release];
++    [self updatePrivacyMenu];
++
+     NSTextField* hint = [NSTextField labelWithString:@"释放鼠标  ⌃⌥⇧Z"];
+     hint.font = [NSFont systemFontOfSize:[NSFont smallSystemFontSize]];
+     hint.textColor = [NSColor secondaryLabelColor];
+@@ -48,7 +187,7 @@
+     [hint setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
+                                    forOrientation:NSLayoutConstraintOrientationHorizontal];
+ 
+-    NSStackView* row = [NSStackView stackViewWithViews:@[fullscreen, stats, disconnect, hint]];
++    NSStackView* row = [NSStackView stackViewWithViews:@[fullscreen, stats, _controlCenter, disconnect, hint]];
+     row.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+     row.alignment = NSLayoutAttributeCenterY;
+     row.spacing = 8;
+@@ -63,37 +202,33 @@
+ 
+ @end
+ 
+-bool installAuroraSessionToolbar(SDL_Window* window)
++bool installAuroraSessionToolbar(SDL_Window* window, const std::shared_ptr<AuroraSessionPrivacy>& privacy)
+ {
+     if (![NSThread isMainThread] || (SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN)) {
+         return false;
+     }
+ 
+-    SDL_SysWMinfo info = {};
+-    SDL_VERSION(&info.version);
+-    if (!SDL_GetWindowWMInfo(window, &info) || info.subsystem != SDL_SYSWM_COCOA) {
+-        return false;
+-    }
+-
+-    NSWindow* nativeWindow = info.info.cocoa.window;
+-    if (!(nativeWindow.styleMask & NSWindowStyleMaskTitled) ||
++    NSWindow* nativeWindow = auroraNativeWindow(window);
++    if (!nativeWindow || !(nativeWindow.styleMask & NSWindowStyleMaskTitled) ||
+         (nativeWindow.styleMask & NSWindowStyleMaskFullSizeContentView)) {
+         return false;
+     }
+ 
+-    for (NSTitlebarAccessoryViewController* accessory in nativeWindow.titlebarAccessoryViewControllers) {
+-        if ([accessory isKindOfClass:[AuroraSessionToolbarController class]]) {
+-            return true;
+-        }
++    if (auroraToolbar(nativeWindow)) {
++        return true;
+     }
+ 
+     // NSWindow owns the accessory and its controls. It can be installed again
+     // if SDL recreates the Cocoa window for a different renderer.
+     AuroraSessionToolbarController* controller = [[AuroraSessionToolbarController alloc] init];
+     controller->streamWindowId = SDL_GetWindowID(window);
++    controller->privacy = privacy;
+     controller.layoutAttribute = NSLayoutAttributeBottom;
+     controller.fullScreenMinHeight = 0;
+     [nativeWindow addTitlebarAccessoryViewController:controller];
++    if (privacy && !privacy->lastStatusCheck.isValid()) {
++        [controller requestPrivacy:AuroraPrivacyOperation::Status];
++    }
+     [controller release];
+     return true;
+ }
+diff --git a/app/streaming/session.cpp b/app/streaming/session.cpp
+index dafd3a8..0bd26b7 100644
+--- a/app/streaming/session.cpp
++++ b/app/streaming/session.cpp
+@@ -8,6 +8,7 @@
+ #include "utils.h"
+ 
+ #if defined(Q_OS_DARWIN) && defined(AURORA_STREAM_RUNTIME)
++#include "aurora-session-privacy.h"
+ #include "aurora-session-toolbar.h"
+ #endif
+ 
+@@ -1411,9 +1412,26 @@ bool Session::startConnectionAsync()
+     }
+ 
+     QString rtspSessionUrl;
++#if defined(Q_OS_DARWIN) && defined(AURORA_STREAM_RUNTIME)
++    NvAddress launchAddress;
++    int launchHttpsPort = 0;
++    QString launchUuid;
++    bool hasPinnedCertificate = false;
++#endif
+ 
+     try {
++#if defined(Q_OS_DARWIN) && defined(AURORA_STREAM_RUNTIME)
++        QReadLocker routeLock(&m_Computer->lock);
++#endif
+         NvHTTP http(m_Computer);
++#if defined(Q_OS_DARWIN) && defined(AURORA_STREAM_RUNTIME)
++        // This address is the one used for /launch or /resume, not a later discovery result.
++        launchAddress = http.address();
++        launchHttpsPort = http.httpsPort();
++        launchUuid = m_Computer->uuid;
++        hasPinnedCertificate = !http.serverCert().isNull();
++        routeLock.unlock();
++#endif
+         http.startApp(m_Computer->currentGameId != 0 ? "resume" : "launch",
+                       m_Computer->isNvidiaServerSoftware,
+                       m_App.id, &m_StreamConfig,
+@@ -1430,11 +1448,16 @@ bool Session::startConnectionAsync()
+         return false;
+     }
+ 
+-    QByteArray hostnameStr = m_Computer->activeAddress.address().toLatin1();
++#if defined(Q_OS_DARWIN) && defined(AURORA_STREAM_RUNTIME)
++    const auto& streamAddress = launchAddress;
++#else
++    const auto& streamAddress = m_Computer->activeAddress;
++#endif
++    QByteArray hostnameStr = streamAddress.address().toLatin1();
+     QByteArray siAppVersion = m_Computer->appVersion.toLatin1();
+ 
+     SERVER_INFORMATION hostInfo = {};
+-    hostInfo.auroraRelayBasePort = NvHTTP::gameStreamRelayBase(m_Computer->activeAddress);
++    hostInfo.auroraRelayBasePort = NvHTTP::gameStreamRelayBase(streamAddress);
+     hostInfo.address = hostnameStr.data();
+     hostInfo.serverInfoAppVersion = siAppVersion.data();
+     hostInfo.serverCodecModeSupport = m_Computer->serverCodecModeSupport;
+@@ -1504,6 +1527,10 @@ bool Session::startConnectionAsync()
+         return false;
+     }
+ 
++#if defined(Q_OS_DARWIN) && defined(AURORA_STREAM_RUNTIME)
++    m_AuroraPrivacy = std::make_shared<AuroraSessionPrivacy>(
++        makeAuroraPrivacyTarget(launchAddress, launchHttpsPort, launchUuid, hasPinnedCertificate));
++#endif
+     emit connectionStarted();
+     return true;
+ }
+@@ -1759,7 +1786,7 @@ void Session::execInternal()
+     m_InputHandler->setWindow(m_Window);
+ 
+ #if defined(Q_OS_DARWIN) && defined(AURORA_STREAM_RUNTIME)
+-    const bool hasWindowedToolbar = !m_IsFullScreen && installAuroraSessionToolbar(m_Window);
++    const bool hasWindowedToolbar = !m_IsFullScreen && installAuroraSessionToolbar(m_Window, m_AuroraPrivacy);
+ #endif
+ 
+     QSvgRenderer svgIconRenderer(QString(":/res/moonlight.svg"));
+@@ -2164,7 +2191,7 @@ void Session::execInternal()
+ 
+             SDL_AtomicUnlock(&m_DecoderLock);
+ #if defined(Q_OS_DARWIN) && defined(AURORA_STREAM_RUNTIME)
+-            installAuroraSessionToolbar(m_Window);
++            installAuroraSessionToolbar(m_Window, m_AuroraPrivacy);
+ #endif
+             break;
+ 
+@@ -2223,6 +2250,12 @@ void Session::execInternal()
+     }
+ 
+ DispatchDeferredCleanup:
++#if defined(Q_OS_DARWIN) && defined(AURORA_STREAM_RUNTIME)
++    if (m_AuroraPrivacy) {
++        m_AuroraPrivacy->live = false;
++        m_AuroraPrivacy.reset();
++    }
++#endif
+     // Uncapture the mouse and hide the window immediately,
+     // so we can return to the Qt GUI ASAP.
+     m_InputHandler->setCaptureActive(false);
+diff --git a/app/streaming/session.h b/app/streaming/session.h
+index 9fd9d40..15ff98e 100644
+--- a/app/streaming/session.h
++++ b/app/streaming/session.h
+@@ -11,6 +11,11 @@
+ #include "audio/renderers/renderer.h"
+ #include "video/overlaymanager.h"
+ 
++#if defined(Q_OS_DARWIN) && defined(AURORA_STREAM_RUNTIME)
++#include <memory>
++struct AuroraSessionPrivacy;
++#endif
++
+ class Session : public QObject
+ {
+     Q_OBJECT
+@@ -162,6 +167,9 @@ private:
+     DECODER_RENDERER_CALLBACKS m_VideoCallbacks;
+     AUDIO_RENDERER_CALLBACKS m_AudioCallbacks;
+     NvComputer* m_Computer;
++#if defined(Q_OS_DARWIN) && defined(AURORA_STREAM_RUNTIME)
++    std::shared_ptr<AuroraSessionPrivacy> m_AuroraPrivacy;
++#endif
+     NvApp m_App;
+     SDL_Window* m_Window;
+     IVideoDecoder* m_VideoDecoder;

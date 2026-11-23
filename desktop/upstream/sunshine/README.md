@@ -16,7 +16,9 @@ pwsh -File ./desktop/upstream/sunshine/Build-Windows-Sunshine.ps1 -Msys2Root C:\
 
 每次启动内置宿主时，极光通过父子进程管道传递本次运行所需的随机管理凭据。Sunshine 使用上游逻辑保存凭据校验值，并在本机 HTTPS 接口继续验证凭据。设置通过极光管理。升级会保留原有 Sunshine 配置、配对和证书，只更新内置宿主私有目录中的管理凭据校验值。
 
-有受信任的虚拟屏时，可在「本机被控」的常用设置里将「远控画面来源」设为虚拟屏，再独立选择保留或关闭本地显示器。新选择默认保留本地显示器。Sunshine 在连接时启用目标屏，最后一个连接结束时恢复原布局。虚拟输出不可用或关屏模式未成功切换时，会拒绝启动串流。极光通过 Windows 识别虚拟输出，也支持预先安装的 Virtual Display Driver 和 SudoVDA。
+正在远控时，在主控端打开「控制中心 → 安全」即可操作被控端隐私屏保。Windows 被控端只有在当前会话使用支持遮罩排除的采集方式时才会接受操作，遮罩随会话结束而移除。正常使用无需安装虚拟显示器驱动。曾启用旧版自动屏保的设备可以在「本机被控」关闭该偏好。
+
+已经使用虚拟输出的配置仍可修改。连接时启用已选输出，最后一个连接结束时恢复显示布局。
 
 常用设置和全部配置项会自动保存。手动重启被控组件后，新的配置才会用于之后的连接。
 
@@ -26,4 +28,6 @@ macOS 使用同一个上游提交。构建脚本复用 Sunshine 的 macOS 应用
 
 按 [上游 macOS 构建流程](https://github.com/SunshineStream/Sunshine/blob/v2026.914.233613/.github/workflows/ci-macos.yml) 准备 Xcode、Git 和构建依赖。Homebrew 依赖为 `cmake node pkgconf icu4c@78 miniupnpc openssl@3 opus`，构建使用的 Python 需要 Jinja2。由 `desktop/Build-Mac.ps1` 调用宿主构建，再与 Moonlight 一起封装。macOS 14.2 及以上可启用被控端。
 
-首次使用在 macOS 系统设置中授予屏幕录制和辅助功能权限，音频和局域网权限按所用功能授权。极光管理宿主的启动与退出，配对先使用 PIN。常用宿主设置可在极光内完成。
+首次使用在 macOS 系统设置中授予屏幕录制和辅助功能权限，音频和局域网权限按所用功能授权。极光管理宿主的启动与退出。使用内置 Tailscale 时，同账号设备可以自动配对。也可以在本机被控页面确认手动配对的 PIN。
+
+隐私屏保的 macOS 实现使用 ScreenCaptureKit 从远控画面中排除 AppKit 遮罩。预览构建通过 `AURORA_MACOS_PRIVACY_PREVIEW=ON` 启用，仅接受单内建屏和 SDR VideoToolbox 串流。正式构建默认关闭预览，仍待 Mac 实机验证。

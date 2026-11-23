@@ -56,7 +56,8 @@ $origin = if ($SourceDirectory) { (Resolve-Path -LiteralPath $SourceDirectory).P
 $patches = foreach ($name in @('0001-aurora-managed-windows-host.patch', '0003-aurora-wallpaper.patch',
     '0004-aurora-windows-display-privacy.patch', '0005-aurora-private-admin.patch',
     '0006-aurora-pair-source-port.patch',
-    '0008-aurora-background-encoder-probe.patch')) {
+    '0008-aurora-background-encoder-probe.patch', '0009-aurora-device-power.patch',
+    '0010-aurora-windows-privacy-saver.patch', '0011-aurora-windows-session-privacy.patch')) {
     $target = Join-Path $work $name
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot $name) -Destination $target
     $target

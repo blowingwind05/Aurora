@@ -32,7 +32,7 @@ internal sealed class DeviceCard : Border
     internal Device Device { get; }
 
     public DeviceCard(Device device, int index, Func<Device, Task> launch, Func<IPAddress, string, Task> copy,
-        string previewPath = null)
+        Func<Device, DevicePowerAction, Task> requestPower, string previewPath = null)
     {
         canConnect = device.CanConnect;
         Device = device;
@@ -89,7 +89,7 @@ internal sealed class DeviceCard : Border
 
         var more = new Button { Classes = { "deviceTool" } };
         more.Content = AuroraVisual.Icon(AuroraVisual.Grid2X2, more, 17);
-        AuroraVisual.Label(more, $"更多功能：{device.Name}", "更多功能");
+        AuroraVisual.Label(more, $"更多工具：{device.Name}", "更多工具");
         var menu = new MenuFlyout();
         foreach (var value in AvailableAddresses(device))
         {
@@ -97,6 +97,25 @@ internal sealed class DeviceCard : Border
             item.Resources["MenuFlyoutItemBackgroundPointerOver"] = Brush.Parse("#E8EDF4");
             item.Resources["MenuFlyoutItemForegroundPointerOver"] = Brush.Parse("#252A31");
             item.Click += async (_, _) => { await copy(value.Address, value.Source); more.Focus(); };
+            menu.Items.Add(item);
+        }
+        if (menu.Items.Count > 0) menu.Items.Add(new Separator { Height = 6, Margin = new Thickness(0), Opacity = 0 });
+        foreach (var (label, icon, action) in new[]
+        {
+            ("重启", AuroraVisual.RotateCcw, DevicePowerAction.Restart),
+            ("关机", AuroraVisual.Power, DevicePowerAction.Shutdown)
+        })
+        {
+            var item = new MenuItem { Header = label, IsEnabled = device.SupportsPower };
+            item.Icon = AuroraVisual.Icon(icon, size: 16);
+            item.Resources["MenuFlyoutItemBackgroundPointerOver"] = Brush.Parse("#E8EDF4");
+            item.Resources["MenuFlyoutItemForegroundPointerOver"] = Brush.Parse("#252A31");
+            if (!device.SupportsPower)
+            {
+                ToolTip.SetTip(item, "远程电源操作需要被控端在线并支持此功能");
+                ToolTip.SetShowOnDisabled(item, true);
+            }
+            item.Click += async (_, _) => { await requestPower(device, action); more.Focus(); };
             menu.Items.Add(item);
         }
         more.Flyout = menu;

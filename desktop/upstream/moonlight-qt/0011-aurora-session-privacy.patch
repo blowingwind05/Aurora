@@ -1,0 +1,183 @@
+diff --git a/app/backend/nvhttp.cpp b/app/backend/nvhttp.cpp
+--- a/app/backend/nvhttp.cpp
++++ b/app/backend/nvhttp.cpp
+@@ -21,6 +21,8 @@
+ #define LAUNCH_TIMEOUT_MS 120000
+ #define RESUME_TIMEOUT_MS 30000
+ #define QUIT_TIMEOUT_MS 30000
++
++static constexpr qint64 AURORA_PAIRED_RESPONSE_LIMIT = 64;
+ 
+ NvHTTP::NvHTTP(NvAddress address, uint16_t httpsPort, QSslCertificate serverCert, bool exactEndpoint) :
+     m_ServerCert(serverCert),
+@@ -424,20 +426,45 @@
+     return reply->readAll();
+ }
+ 
++QNetworkReply* NvHTTP::openAuroraPairedPost(const QString& command, const QString& action,
++                                           const QSslConfiguration& clientIdentity)
++{
++    if (!m_ExactEndpoint || m_ServerCert.isNull() || m_BaseUrlHttps.scheme() != "https") {
++        throw GfeHttpResponseException(400, "Invalid Aurora paired endpoint");
++    }
++
++    return openConnection(m_BaseUrlHttps, command, "action=" + action, REQUEST_TIMEOUT_MS, NVLL_NONE,
++                          AURORA_PAIRED_RESPONSE_LIMIT, &clientIdentity);
++}
++
+ void NvHTTP::sendAuroraPower(const QString& action, const QSslConfiguration& clientIdentity)
+ {
+-    if (!m_ExactEndpoint || m_ServerCert.isNull() || (action != "restart" && action != "shutdown")) {
++    if (action != "restart" && action != "shutdown") {
+         throw GfeHttpResponseException(400, "Invalid Aurora power request");
+     }
+ 
+-    constexpr qint64 maxBytes = 64;
+-    QScopedPointer<QNetworkReply> reply(openConnection(m_BaseUrlHttps, "aurora-power",
+-        "action=" + action, REQUEST_TIMEOUT_MS, NVLL_NONE, maxBytes, &clientIdentity));
++    QScopedPointer<QNetworkReply> reply(openAuroraPairedPost("aurora-power", action, clientIdentity));
+     const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+-    if (status < 200 || status >= 300 || reply->bytesAvailable() > maxBytes ||
++    if (status < 200 || status >= 300 || reply->bytesAvailable() > AURORA_PAIRED_RESPONSE_LIMIT ||
+             reply->readAll().trimmed() != "accepted") {
+         throw GfeHttpResponseException(400, "Invalid Aurora power response");
+     }
++}
++
++QByteArray NvHTTP::sendAuroraPrivacy(const QString& action, const QSslConfiguration& clientIdentity)
++{
++    if (action != "status" && action != "on" && action != "off") {
++        throw GfeHttpResponseException(400, "Invalid Aurora privacy request");
++    }
++
++    QScopedPointer<QNetworkReply> reply(openAuroraPairedPost("aurora-session-privacy", action, clientIdentity));
++    const auto response = reply->read(AURORA_PAIRED_RESPONSE_LIMIT + 1);
++    if (reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt() != 200 ||
++            (response != QByteArrayLiteral("on") && response != QByteArrayLiteral("off") &&
++             response != QByteArrayLiteral("unavailable"))) {
++        throw GfeHttpResponseException(400, "Invalid Aurora privacy response");
++    }
++    return response;
+ }
+ 
+ QByteArray
+@@ -594,13 +621,14 @@
+ 
+     QNetworkReply* reply = pinnedPostIdentity ? m_Nam.post(request, QByteArray()) : m_Nam.get(request);
+     if (pinnedPostIdentity) {
+-        connect(reply, &QNetworkReply::encrypted, reply, [this, reply, powerHandshakeSeen = false]() mutable {
+-            // Qt emits this before writing the HTTP request. Never resend a power POST
++        reply->setReadBufferSize(maxBytes + 1);
++        connect(reply, &QNetworkReply::encrypted, reply, [this, reply, handshakeSeen = false]() mutable {
++            // Qt emits this before writing the HTTP request. Do not resend a paired POST
+             // on a new connection if the response was interrupted.
+-            if (powerHandshakeSeen || reply->sslConfiguration().peerCertificate() != m_ServerCert) {
++            if (handshakeSeen || reply->sslConfiguration().peerCertificate() != m_ServerCert) {
+                 reply->abort();
+             }
+-            powerHandshakeSeen = true;
++            handshakeSeen = true;
+         });
+     }
+     if (maxBytes > 0) {
+diff --git a/app/backend/nvhttp.h b/app/backend/nvhttp.h
+--- a/app/backend/nvhttp.h
++++ b/app/backend/nvhttp.h
+@@ -183,6 +183,7 @@
+ 
+     QByteArray getAuroraWallpaper(const QString& revision);
+     void sendAuroraPower(const QString& action, const QSslConfiguration& clientIdentity);
++    QByteArray sendAuroraPrivacy(const QString& action, const QSslConfiguration& clientIdentity);
+ 
+     static
+     QVector<NvDisplayMode>
+@@ -203,6 +204,9 @@
+                    qint64 maxBytes = 0,
+                    const QSslConfiguration* pinnedPostIdentity = nullptr);
+ 
++    QNetworkReply* openAuroraPairedPost(const QString& command, const QString& action,
++                                      const QSslConfiguration& clientIdentity);
++
+     NvAddress m_Address;
+     QNetworkAccessManager m_Nam;
+     QSslCertificate m_ServerCert;
+diff --git a/app/main.cpp b/app/main.cpp
+--- a/app/main.cpp
++++ b/app/main.cpp
+@@ -368,10 +368,13 @@
+ }
+ 
+ #ifdef AURORA_STREAM_RUNTIME
+-static int runAuroraPower(int argc, char** argv)
++static int runAuroraPairedCommand(int argc, char** argv)
+ {
++    const char* command = argv[1];
++    const bool privacy = std::strcmp(command, "privacy") == 0;
+     if (argc != 5) {
+-        fputs("Usage: AuroraStream --aurora-runtime power <ip:port> <host-uuid> <restart|shutdown>\n", stderr);
++        fprintf(stderr, "Usage: AuroraStream --aurora-runtime %s <ip:port> <host-uuid> <%s>\n",
++            command, privacy ? "status|on|off" : "restart|shutdown");
+         return 2;
+     }
+ #ifdef Q_OS_MACOS
+@@ -388,9 +391,11 @@
+     const auto uuidPattern = QRegularExpression(QStringLiteral(
+         R"(\A[0-9A-Fa-f]{8}(?:-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}\z)"));
+     const int httpsPort = port + DEFAULT_HTTPS_PORT - DEFAULT_HTTP_PORT;
++    const bool validAction = privacy ? (action == "status" || action == "on" || action == "off") :
++        (action == "restart" || action == "shutdown");
+     if (address.isNull() || port > 65535 || httpsPort <= 0 ||
+-            !uuidPattern.match(uuid).hasMatch() || (action != "restart" && action != "shutdown")) {
+-        fputs("Invalid Aurora power endpoint, host UUID, or action.\n", stderr);
++            !uuidPattern.match(uuid).hasMatch() || !validAction) {
++        fprintf(stderr, "Invalid Aurora %s endpoint, host UUID, or action.\n", command);
+         return 2;
+     }
+     const NvAddress target(address, static_cast<uint16_t>(port));
+@@ -398,7 +403,7 @@
+     const auto relayUuid = qEnvironmentVariable("AURORA_GAMESTREAM_HOST_UUID");
+     if ((!relay.isNull() && (!(relay == target) || uuid.compare(relayUuid, Qt::CaseInsensitive) != 0)) ||
+             (relay.isNull() && !relayUuid.isEmpty())) {
+-        fputs("Aurora power target does not match its GameStream relay.\n", stderr);
++        fprintf(stderr, "Aurora %s target does not match its GameStream relay.\n", command);
+         return 2;
+     }
+ 
+@@ -414,16 +419,21 @@
+     }
+     try {
+         NvHTTP http(target, static_cast<uint16_t>(httpsPort), certificate, true);
+-        http.sendAuroraPower(action, clientIdentity);
+-        puts("accepted");
++        if (privacy) {
++            const auto state = http.sendAuroraPrivacy(action, clientIdentity);
++            puts(state.constData());
++        } else {
++            http.sendAuroraPower(action, clientIdentity);
++            puts("accepted");
++        }
+         return 0;
+     }
+     catch (const GfeHttpResponseException& error) {
+-        fputs(error.getStatusCode() == 401 ? "Aurora power host certificate did not match.\n" :
+-              "Aurora power request was not accepted by the host.\n", stderr);
++        fprintf(stderr, error.getStatusCode() == 401 ? "Aurora %s host certificate did not match.\n" :
++            "Aurora %s request was not accepted by the host.\n", command);
+     }
+     catch (const QtNetworkReplyException&) {
+-        fputs("Aurora power request failed or the host is unavailable.\n", stderr);
++        fprintf(stderr, "Aurora %s request failed or the host is unavailable.\n", command);
+     }
+     return 4;
+ }
+@@ -512,8 +522,8 @@
+     }
+ 
+ #ifdef AURORA_STREAM_RUNTIME
+-    if (argc > 1 && std::strcmp(argv[1], "power") == 0) {
+-        return runAuroraPower(argc, argv);
++    if (argc > 1 && (std::strcmp(argv[1], "power") == 0 || std::strcmp(argv[1], "privacy") == 0)) {
++        return runAuroraPairedCommand(argc, argv);
+     }
+     if (argc > 1 && std::strcmp(argv[1], "wallpaper") == 0) {
+         return runAuroraWallpaper(argc, argv);

@@ -14,6 +14,10 @@ using System.Threading.Tasks;
 
 namespace Aurora
 {
+    internal enum DevicePowerAction { Restart, Shutdown }
+    internal enum SessionPrivacyCommand { Status, Enable, Disable }
+    internal enum SessionPrivacyState { Unavailable, Off, On }
+
     internal sealed class Device
     {
         public string Id;
@@ -27,6 +31,7 @@ namespace Aurora
         public StreamHost Tailnet;
         public bool TailnetVisible;
         public bool CanConnect => Lan != null || Tailnet != null;
+        public bool SupportsPower => Lan?.SupportsPower == true || Tailnet?.SupportsPower == true;
     }
 
     internal sealed class NetworkSnapshot
@@ -498,8 +503,9 @@ namespace Aurora
             var arguments = MoonlightArguments(route, pair);
             if (!pair)
             {
-                var bundledMacViewer = OperatingSystem.IsMacOS() && Path.GetFileName(path) == "AuroraStream";
-                arguments = arguments.Concat(StreamPreferences.Arguments(bundledMacViewer || embeddedSession != null)).ToArray();
+                var bundled = Path.GetFileNameWithoutExtension(path) == "AuroraStream";
+                var useViewerDefault = bundled && (OperatingSystem.IsMacOS() || embeddedSession != null);
+                arguments = arguments.Concat(StreamPreferences.Arguments(useViewerDefault, useBundledDefaults: bundled)).ToArray();
             }
             return StartMoonlight(path, arguments, redirect: false, embeddedSession, route);
         }
@@ -585,11 +591,69 @@ namespace Aurora
         internal static async Task<string> FindBackgroundMoonlight(CancellationToken token)
         {
             var path = FindMoonlight();
-            var (exit, output) = await RunMoonlight(path, new[] { "pair", "--help" }, token);
-            if (exit != 0 || !output.Contains("--aurora-background", StringComparison.Ordinal) ||
-                !output.Contains("--aurora-pair-id", StringComparison.Ordinal))
-                throw new InvalidOperationException("本机串流组件还不支持后台配对。首次连接需要带后台配对功能的 Aurora 串流组件。");
-            return path;
+            if (Path.GetFileNameWithoutExtension(path) == "AuroraStream")
+            {
+                // Moonlight displays help in a modal Windows dialog unless pairing is in background mode.
+                var (exit, output) = await RunMoonlight(path, new[] { "pair", "--aurora-background", "--help" }, token);
+                if (exit == 0 && output.Contains("--aurora-background", StringComparison.Ordinal) &&
+                    output.Contains("--aurora-pair-id", StringComparison.Ordinal))
+                    return path;
+            }
+            throw new InvalidOperationException("本机串流组件还不支持后台配对。首次连接需要带后台配对功能的 Aurora 串流组件。");
+        }
+
+        internal static async Task RequestDevicePower(StreamHost route, DevicePowerAction action, CancellationToken token)
+        {
+            var command = action switch
+            {
+                DevicePowerAction.Restart => "restart",
+                DevicePowerAction.Shutdown => "shutdown",
+                _ => throw new ArgumentOutOfRangeException(nameof(action))
+            };
+            var path = FindMoonlight();
+            if (Path.GetFileNameWithoutExtension(path) != "AuroraStream")
+                throw new InvalidOperationException("远程电源操作需要 Aurora 内置的串流组件。");
+
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
+            timeout.CancelAfter(TimeSpan.FromSeconds(12));
+            if (route.ViaEmbeddedTailnet) await RequireRelayRuntime(path, timeout.Token);
+            using var stream = await EmbeddedTailnet.OpenStream(route, timeout.Token);
+            try
+            {
+                var (exit, output) = await RunMoonlight(path,
+                    new[] { "power", stream.Route.Endpoint.ToString(), route.Id, command }, timeout.Token, stream.Route);
+                if (exit == 0 && output.Trim() == "accepted") return;
+                if (exit == 3) throw new InvalidOperationException("请先连接这台设备，完成配对后再进行电源操作。");
+            }
+            catch (OperationCanceledException) when (!token.IsCancellationRequested) { }
+            throw new InvalidOperationException("未收到被控端确认，请先检查设备状态和系统权限。");
+        }
+
+        internal static async Task<SessionPrivacyState> ChangeSessionPrivacy(string runtime, StreamHost route,
+            SessionPrivacyCommand command, CancellationToken token)
+        {
+            var action = command switch
+            {
+                SessionPrivacyCommand.Status => "status",
+                SessionPrivacyCommand.Enable => "on",
+                SessionPrivacyCommand.Disable => "off",
+                _ => throw new ArgumentOutOfRangeException(nameof(command))
+            };
+            // The active stream owns this route and its relay lease.
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
+            timeout.CancelAfter(TimeSpan.FromSeconds(8));
+            var (exit, output) = await RunMoonlight(runtime,
+                new[] { "privacy", route.Endpoint.ToString(), route.Id, action }, timeout.Token, route);
+            if (exit == 0)
+            {
+                switch (output.Trim())
+                {
+                    case "off": return SessionPrivacyState.Off;
+                    case "on": return SessionPrivacyState.On;
+                    case "unavailable": return SessionPrivacyState.Unavailable;
+                }
+            }
+            throw new InvalidOperationException("未收到被控端的隐私屏保状态。");
         }
 
         internal static async Task<(int ExitCode, string Output)> RunMoonlight(string path, string[] arguments, CancellationToken token,

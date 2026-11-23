@@ -29,9 +29,9 @@ internal sealed record SunshinePrivacyDisplay(string Id, string Name)
 {
     public override string ToString() => Name;
 }
-internal sealed record SunshineDisplaySelection(string Id, bool Exclusive);
+internal sealed record SunshineDisplaySelection(string Id, bool Exclusive, bool Screensaver);
 internal sealed record SunshinePrivacySettings(SunshineDisplaySelection Saved, SunshineDisplaySelection Active,
-    bool SupportsExtended, SunshinePrivacyDisplay[] Displays);
+    bool SupportsVirtualDisplay, bool SupportsExtended, bool SupportsScreensaver, SunshinePrivacyDisplay[] Displays);
 
 internal sealed class SunshineLoginRejectedException()
     : InvalidOperationException("无法登录 Sunshine，请检查账号和密码。");
@@ -250,21 +250,31 @@ internal sealed class SunshineAdmin : IDisposable
 
     internal async Task<SunshinePrivacySettings> ReadPrivacySettings()
     {
-        if (!IsManaged || !OperatingSystem.IsWindows()) return null;
+        if (!IsManaged) return null;
         using var response = await Send(HttpMethod.Get, "api/aurora/privacy");
         if (response.StatusCode == HttpStatusCode.NotFound) return null;
-        var root = await ReadSuccess(response);
-        var displays = root.GetProperty("displays").EnumerateArray()
-            .Select(item => new SunshinePrivacyDisplay(ReadText(item, "id"), ReadText(item, "name")))
-            .Where(display => Guid.TryParseExact(display.Id, "B", out _)).ToArray();
-        var supportsExtended = root.TryGetProperty("saved_exclusive", out var exclusive);
+        return ParsePrivacySettings(await ReadSuccess(response));
+    }
+
+    internal static SunshinePrivacySettings ParsePrivacySettings(JsonElement root)
+    {
+        var hasDisplays = root.TryGetProperty("displays", out var list) && list.ValueKind == JsonValueKind.Array;
+        var supportsVirtualDisplay = root.TryGetProperty("supports_virtual_display", out var virtualDisplay)
+            ? virtualDisplay.ValueKind == JsonValueKind.True : hasDisplays;
+        var displays = supportsVirtualDisplay && hasDisplays
+            ? list.EnumerateArray().Select(item => new SunshinePrivacyDisplay(ReadText(item, "id"), ReadText(item, "name")))
+                .Where(display => Guid.TryParseExact(display.Id, "B", out _)).ToArray()
+            : Array.Empty<SunshinePrivacyDisplay>();
+        var supportsExtended = supportsVirtualDisplay && root.TryGetProperty("saved_exclusive", out _);
         var savedId = ReadText(root, "saved");
         var activeId = ReadText(root, "active");
+        var supportsScreensaver = ReadBoolean(root, "supports_screensaver");
         return new(
-            new(savedId, savedId.Length != 0 && (!supportsExtended || exclusive.ValueKind == JsonValueKind.True)),
+            new(savedId, savedId.Length != 0 && (!supportsExtended || ReadBoolean(root, "saved_exclusive")),
+                ReadBoolean(root, "saved_screensaver")),
             new(activeId, activeId.Length != 0 && (!supportsExtended ||
-                root.TryGetProperty("active_exclusive", out var activeExclusive) && activeExclusive.ValueKind == JsonValueKind.True)),
-            supportsExtended, displays);
+                ReadBoolean(root, "active_exclusive")), ReadBoolean(root, "active_screensaver")),
+            supportsVirtualDisplay, supportsExtended, supportsScreensaver, displays);
     }
 
     public async Task SavePreferences(string name, bool streamAudio, SunshineDisplaySelection display = null)
@@ -277,15 +287,25 @@ internal sealed class SunshineAdmin : IDisposable
         {
             var privacy = await ReadPrivacySettings() ??
                 throw new InvalidOperationException("请先更新内置被控组件。");
-            if (display != privacy.Saved && display.Id.Length != 0 &&
+            if (display.Id != privacy.Saved.Id && display.Id.Length != 0 &&
                 !privacy.Displays.Any(candidate => candidate.Id == display.Id))
                 throw new InvalidOperationException("所选虚拟显示器已不可用，请重新打开设置。");
             if (display.Id.Length != 0 && !display.Exclusive && !privacy.SupportsExtended)
                 throw new InvalidOperationException("请更新被控组件以保留本地显示器。");
-            payload.Remove("aurora_privacy_display_id");
-            payload.Remove("aurora_virtual_display_id");
-            if (display.Id.Length != 0)
-                payload[display.Exclusive ? "aurora_privacy_display_id" : "aurora_virtual_display_id"] = display.Id;
+            if (display.Screensaver && (display.Exclusive || !privacy.SupportsScreensaver && !privacy.Saved.Screensaver))
+                throw new InvalidOperationException("当前被控组件或显示设置无法启用隐私屏保。");
+            if (privacy.SupportsVirtualDisplay)
+            {
+                payload.Remove("aurora_privacy_display_id");
+                payload.Remove("aurora_virtual_display_id");
+                if (display.Id.Length != 0)
+                    payload[display.Exclusive ? "aurora_privacy_display_id" : "aurora_virtual_display_id"] = display.Id;
+            }
+            if (privacy.SupportsScreensaver || privacy.Saved.Screensaver)
+            {
+                payload.Remove("aurora_privacy_screensaver");
+                if (display.Screensaver) payload["aurora_privacy_screensaver"] = "enabled";
+            }
         }
         await Post("api/config", payload);
         var saved = await ReadPreferences();
@@ -415,6 +435,9 @@ internal sealed class SunshineAdmin : IDisposable
 
     private static string ReadText(JsonElement element, string name) =>
         element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() ?? "" : "";
+
+    private static bool ReadBoolean(JsonElement element, string name) =>
+        element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.True;
 
     public void Dispose()
     {

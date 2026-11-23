@@ -103,6 +103,10 @@ Assert-True ($combined.Count -eq 1 -and $combined[0].Lan -and $combined[0].Tailn
 $embeddedHost = New-TestHost $peer.AlternateAddress.ToString() 'host-a'
 $embeddedFlag = $hostType.GetProperty('ViaEmbeddedTailnet', [Reflection.BindingFlags]'Instance,NonPublic')
 $embeddedFlag.SetValue($embeddedHost, $true)
+$hasPrivacy = $hostType.GetProperty('SupportsSessionPrivacy', [Reflection.BindingFlags]'Instance,NonPublic')
+$parseHost = $discovery.GetMethod('ParseHost', $staticMethods)
+$privacyHost = $parseHost.Invoke($null, @($lan.Endpoint, '<root status_code="200"><PairStatus>1</PairStatus><appversion>7.1.0.0</appversion><hostname>Fixture</hostname><uniqueid>fixture</uniqueid><AuroraSessionPrivacy>1</AuroraSessionPrivacy></root>'))
+Assert-True ($hasPrivacy.GetValue($privacyHost) -and !$hasPrivacy.GetValue($lan)) 'Only hosts that advertise live privacy should receive privacy requests.'
 $embeddedPeer = New-Presence $identity $peer.AlternateAddress.ToString()
 $dualStack = @(Get-Routes -Lan @($lan) -Tailnet @($embeddedHost) -LocalPresence @($nearby) -TailnetPresence @($embeddedPeer) -Known $known)
 Assert-True ($dualStack.Count -eq 1 -and $dualStack[0].Online -and $dualStack[0].Lan -and
@@ -162,4 +166,28 @@ Assert-True (($integrated -join '|') -ceq '--aurora-runtime|stream|192.168.12.8:
 Assert-True (($integratedWin -join '|') -ceq ($integrated -join '|')) 'Windows must use the same private runtime command as macOS.'
 Assert-True (($external -join '|') -ceq ($streamArguments -join '|')) 'External Moonlight must keep the upstream argument format.'
 
-'Desktop discovery, route, and Moonlight argument tests passed.'
+$preferences = $assembly.GetType('Aurora.StreamPreferences', $true)
+$preferenceArgs = $preferences.GetMethod('Arguments', $staticMethods)
+$setToggle = $preferences.GetMethod('SetToggle', $staticMethods)
+try {
+    foreach ($windowDefaults in $true, $false) {
+        $defaults = $preferenceArgs.Invoke($null, @($windowDefaults, $true))
+        Assert-True ($defaults -ccontains '--vsync' -and $defaults -ccontains '--keep-awake' -and
+            $defaults -ccontains '--absolute-mouse' -and $defaults -ccontains '--no-frame-pacing') `
+            'Bundled Aurora playback must apply its defaults with and without the embedded window.'
+    }
+    $standalone = $preferenceArgs.Invoke($null, @($false, $false))
+    Assert-True ($standalone -cnotcontains '--vsync' -and $standalone -cnotcontains '--keep-awake') `
+        'Aurora playback defaults must not take over the independently installed Moonlight preferences.'
+    $setToggle.Invoke($null, @('vsync', $false))
+    $setToggle.Invoke($null, @('keep-awake', $false))
+    $setToggle.Invoke($null, @('absolute-mouse', $false))
+    $setToggle.Invoke($null, @('frame-pacing', $true))
+    $custom = $preferenceArgs.Invoke($null, @($true, $true))
+    Assert-True ($custom -ccontains '--no-vsync' -and $custom -ccontains '--no-keep-awake' -and
+        $custom -ccontains '--no-absolute-mouse' -and $custom -ccontains '--no-frame-pacing') `
+        'Explicit overrides must win, and frame pacing requires V-Sync.'
+}
+finally { $preferences.GetMethod('Reset', $staticMethods).Invoke($null, $null) }
+
+'Desktop discovery, route, Moonlight arguments, and playback defaults tests passed.'

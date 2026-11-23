@@ -30,6 +30,8 @@ internal static class AuroraVisual
         "M21 3v5h-5 " +
         "M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16 " +
         "M8 16H3v5";
+    internal const string RotateCcw = "M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8 M3 3v5h5";
+    internal const string Power = "M12 2v10 M18.4 6.6a9 9 0 1 1-12.77.04";
     internal const string Copy =
         "M10 8H20a2 2 0 0 1 2 2V20a2 2 0 0 1 -2 2H10a2 2 0 0 1 -2 -2V10a2 2 0 0 1 2 -2Z " +
         "M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2";

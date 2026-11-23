@@ -1,0 +1,856 @@
+diff --git a/cmake/targets/macos.cmake b/cmake/targets/macos.cmake
+index 021b5e5..65aa4d7 100644
+--- a/cmake/targets/macos.cmake
++++ b/cmake/targets/macos.cmake
+@@ -4,6 +4,21 @@ if(AURORA_SUNSHINE_HOST)
+     target_compile_definitions(sunshine PRIVATE AURORA_SUNSHINE_HOST=1)
+ endif()
+ 
++option(AURORA_MACOS_PRIVACY_PREVIEW "Enable Aurora's experimental macOS privacy curtain" OFF)
++if(AURORA_MACOS_PRIVACY_PREVIEW)
++    if(NOT AURORA_SUNSHINE_HOST)
++        message(FATAL_ERROR "The Aurora macOS privacy curtain requires AURORA_SUNSHINE_HOST")
++    endif()
++    find_library(SCREEN_CAPTURE_KIT_LIBRARY ScreenCaptureKit REQUIRED)
++    set(aurora_privacy_sources
++        "${CMAKE_SOURCE_DIR}/src/platform/macos/aurora_privacy.mm"
++        "${CMAKE_SOURCE_DIR}/src/platform/macos/sc_capture.mm")
++    target_sources(sunshine PRIVATE ${aurora_privacy_sources})
++    set_source_files_properties(${aurora_privacy_sources} PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
++    target_compile_definitions(sunshine PRIVATE AURORA_MACOS_PRIVACY_PREVIEW=1)
++    target_link_libraries(sunshine ${SCREEN_CAPTURE_KIT_LIBRARY})
++endif()
++
+ if (SUNSHINE_BUILD_HOMEBREW)
+     target_link_options(sunshine PRIVATE LINKER:-sectcreate,__TEXT,__info_plist,${APPLE_PLIST_FILE})
+ else()
+diff --git a/src/config.cpp b/src/config.cpp
+index e0e8647..65af211 100644
+--- a/src/config.cpp
++++ b/src/config.cpp
+@@ -714,6 +714,10 @@ namespace config {
+   /**
+    * @brief Default video configuration values used before file and CLI overrides.
+    */
++#if defined(__APPLE__) && defined(AURORA_SUNSHINE_HOST)
++  bool aurora_privacy_screensaver = false;
++#endif
++
+   video_t video {
+     28,  // qp
+ 
+@@ -1713,6 +1717,11 @@ namespace config {
+       }
+     }
+     bool_f(vars, "dd_config_revert_on_disconnect", video.dd.config_revert_on_disconnect);
++#if defined(__APPLE__) && defined(AURORA_SUNSHINE_HOST)
++    std::string privacy_screensaver;
++    string_f(vars, aurora_privacy_screensaver_key, privacy_screensaver);
++    aurora_privacy_screensaver = privacy_screensaver == "enabled";
++#endif
+     generic_f(vars, "dd_mode_remapping", video.dd.mode_remapping, dd::mode_remapping_from_view);
+     {
+       int value = 0;
+diff --git a/src/config.h b/src/config.h
+index 7861538..dd1becc 100644
+--- a/src/config.h
++++ b/src/config.h
+@@ -394,6 +394,10 @@ namespace config {
+   };
+ 
+   extern video_t video;
++#if defined(__APPLE__) && defined(AURORA_SUNSHINE_HOST)
++  inline constexpr auto aurora_privacy_screensaver_key = "aurora_privacy_screensaver";
++  extern bool aurora_privacy_screensaver;
++#endif
+   extern audio_t audio;
+   extern stream_t stream;
+   extern nvhttp_t nvhttp;
+diff --git a/src/confighttp.cpp b/src/confighttp.cpp
+index b5c1904..67c5824 100644
+--- a/src/confighttp.cpp
++++ b/src/confighttp.cpp
+@@ -1438,6 +1438,22 @@ namespace confighttp {
+     send_response(response, output_tree);
+   }
+ 
++#if defined(__APPLE__) && defined(AURORA_SUNSHINE_HOST)
++  void getAuroraPrivacy(const resp_https_t &response, const req_https_t &request) {
++    if (!authenticate(response, request)) return;
++
++    auto vars = config::parse_config(file_handler::read_file(config::sunshine.config_file.c_str()));
++  #ifdef AURORA_MACOS_PRIVACY_PREVIEW
++    constexpr bool supports_screensaver = true;
++  #else
++    constexpr bool supports_screensaver = false;
++  #endif
++    send_response(response, {{"status", true}, {"supports_screensaver", supports_screensaver},
++      {"saved_screensaver", vars[config::aurora_privacy_screensaver_key] == "enabled"},
++      {"active_screensaver", config::aurora_privacy_screensaver}, {"supports_virtual_display", false}});
++  }
++#endif
++
+   /**
+    * @brief Get the locale setting. This endpoint does not require authentication.
+    * @param response The HTTP response object.
+@@ -2376,6 +2392,9 @@ namespace confighttp {
+     server.resource["^/api/clients/update$"]["POST"] = updateClient;
+     server.resource["^/api/config$"]["GET"] = getConfig;
+     server.resource["^/api/config$"]["POST"] = saveConfig;
++#if defined(__APPLE__) && defined(AURORA_SUNSHINE_HOST)
++    server.resource["^/api/aurora/privacy$"]["GET"] = getAuroraPrivacy;
++#endif
+     server.resource["^/api/configLocale$"]["GET"] = getLocale;
+     server.resource["^/api/covers/([0-9]+)$"]["GET"] = getCover;
+     server.resource["^/api/covers/upload$"]["POST"] = uploadCover;
+diff --git a/src/main.cpp b/src/main.cpp
+index f5565cc..bdc9951 100644
+--- a/src/main.cpp
++++ b/src/main.cpp
+@@ -52,6 +52,9 @@
+ #include "system_tray.h"
+ #include "upnp.h"
+ #include "video.h"
++#ifdef AURORA_MACOS_PRIVACY_PREVIEW
++  #include "src/platform/macos/aurora_privacy.h"
++#endif
+ 
+ #ifdef __linux__
+   #include "platform/common.h"
+@@ -161,6 +164,12 @@ constexpr bool tray_is_enabled = false;
+  * @param shutdown_event Shutdown event.
+  */
+ void mainThreadLoop(const std::shared_ptr<safe::event_t<bool>> &shutdown_event) {
++#ifdef AURORA_MACOS_PRIVACY_PREVIEW
++  if (config::aurora_privacy_screensaver) {
++    aurora_privacy::run_main_loop([&]() { return shutdown_event->peek(); });
++    return;
++  }
++#endif
+   bool run_loop = false;
+ 
+   // Conditions that would require the main thread event loop
+diff --git a/src/platform/macos/aurora_privacy.h b/src/platform/macos/aurora_privacy.h
+new file mode 100644
+index 0000000..efe057f
+--- /dev/null
++++ b/src/platform/macos/aurora_privacy.h
+@@ -0,0 +1,27 @@
++/**
++ * @file src/platform/macos/aurora_privacy.h
++ * @brief Lifetime and shared capture object for a protected Aurora session.
++ */
++#pragma once
++
++#include <chrono>
++#include <functional>
++#include <memory>
++#include <string_view>
++
++#include <CoreGraphics/CoreGraphics.h>
++#include <CoreMedia/CoreMedia.h>
++
++namespace aurora_privacy {
++  struct session_t;
++  using session_ptr = std::shared_ptr<session_t>;
++
++  void run_main_loop(const std::function<bool()> &quitting);
++  session_ptr begin(std::string_view selected_display, int width, int height, int fps);
++  void end(const session_ptr &session);
++  session_ptr current();
++  bool healthy(const session_ptr &session);
++  CGDirectDisplayID display_id(const session_ptr &session);
++  CMSampleBufferRef copy_first_frame(const session_ptr &session);
++  CMSampleBufferRef copy_frame(const session_ptr &session, std::chrono::nanoseconds timeout);
++}
+diff --git a/src/platform/macos/aurora_privacy.mm b/src/platform/macos/aurora_privacy.mm
+new file mode 100644
+index 0000000..1961842
+--- /dev/null
++++ b/src/platform/macos/aurora_privacy.mm
+@@ -0,0 +1,296 @@
++/**
++ * @file src/platform/macos/aurora_privacy.mm
++ * @brief Local AppKit curtain and ScreenCaptureKit exclusion for Aurora.
++ */
++#include "aurora_privacy.h"
++#include "sc_capture.h"
++
++#import <AppKit/AppKit.h>
++
++#include <atomic>
++#include <future>
++#include <mutex>
++#include <string>
++#include <thread>
++#include <utility>
++#include <unistd.h>
++
++#include "src/logging.h"
++#include "src/utility.h"
++
++namespace aurora_privacy {
++  using namespace std::chrono_literals;
++
++  struct session_t {
++    std::atomic<bool> valid {true};
++    std::atomic<bool> armed {false};
++    uint64_t generation {};
++    CGDirectDisplayID display {};
++    CGWindowID window {};
++    SCCapture *capture {};
++    CMSampleBufferRef first_frame {};
++
++    ~session_t() {
++      if (first_frame) {
++        CFRelease(first_frame);
++      }
++    }
++  };
++
++  namespace {
++    std::mutex session_mutex;
++    std::weak_ptr<session_t> reserved_session;
++    uint64_t next_generation {};
++
++    // Read and mutate these only on the AppKit main thread.
++    NSWindow *curtain;
++    std::weak_ptr<session_t> curtain_session;
++    uint64_t curtain_generation {};
++    bool observing_display_changes = false;
++
++    void display_reconfigured(CGDirectDisplayID, CGDisplayChangeSummaryFlags, void *) {
++      std::lock_guard lock {session_mutex};
++      if (auto session = reserved_session.lock()) {
++        session->valid = false;
++      }
++    }
++
++    bool has_single_builtin_display(CGDirectDisplayID display) {
++      CGDirectDisplayID displays[2] {};
++      uint32_t count {};
++      return display != kCGNullDirectDisplay &&
++             CGGetOnlineDisplayList(2, displays, &count) == kCGErrorSuccess && count == 1 &&
++             displays[0] == display && CGDisplayIsBuiltin(display) && CGDisplayIsActive(display) &&
++             !CGDisplayIsAsleep(display) && !CGDisplayIsInMirrorSet(display);
++    }
++
++    void invalidate_curtain() {
++      if (const auto session = curtain_session.lock()) {
++        session->valid = false;
++      }
++    }
++
++    void remove_curtain(uint64_t generation) {
++      if (curtain_generation == generation) {
++        [curtain orderOut:nil];
++        curtain = nil;
++        curtain_session.reset();
++        curtain_generation = 0;
++      }
++    }
++
++    bool show_curtain(const session_ptr &session, const std::string &configured_display) {
++      if (!session->valid || curtain || !observing_display_changes || !CGPreflightScreenCaptureAccess()) {
++        return false;
++      }
++      NSArray<NSScreen *> *screens = NSScreen.screens;
++      const auto display = CGMainDisplayID();
++      if (screens.count != 1 || !has_single_builtin_display(display) ||
++          (!configured_display.empty() && configured_display != std::to_string(display))) {
++        return false;
++      }
++
++      NSScreen *screen = screens.firstObject;
++      if ([screen.deviceDescription[@"NSScreenNumber"] unsignedIntValue] != display ||
++          NSIsEmptyRect(screen.frame)) {
++        return false;
++      }
++
++      NSWindow *window = [[NSWindow alloc] initWithContentRect:screen.frame
++                                                   styleMask:NSWindowStyleMaskBorderless
++                                                     backing:NSBackingStoreBuffered
++                                                       defer:NO];
++      window.releasedWhenClosed = NO;
++      window.opaque = YES;
++      window.backgroundColor = NSColor.blackColor;
++      window.hasShadow = NO;
++      window.ignoresMouseEvents = YES;
++      window.hidesOnDeactivate = NO;
++      window.level = CGWindowLevelForKey(kCGScreenSaverWindowLevel);
++      window.collectionBehavior = NSWindowCollectionBehaviorCanJoinAllSpaces |
++                                  NSWindowCollectionBehaviorFullScreenAuxiliary |
++                                  NSWindowCollectionBehaviorStationary |
++                                  NSWindowCollectionBehaviorIgnoresCycle;
++      [window orderFrontRegardless];
++
++      if (!session->valid || !window.isVisible || window.windowNumber <= 0 || !NSEqualRects(window.frame, screen.frame)) {
++        [window orderOut:nil];
++        return false;
++      }
++      session->display = display;
++      session->window = static_cast<CGWindowID>(window.windowNumber);
++      curtain = window;
++      curtain_generation = session->generation;
++      curtain_session = session;
++      return true;
++    }
++
++    SCContentFilter *create_filter(const session_ptr &session) {
++      dispatch_semaphore_t ready = dispatch_semaphore_create(0);
++      __block SCShareableContent *shareable;
++      [SCShareableContent getShareableContentExcludingDesktopWindows:NO
++                                                onScreenWindowsOnly:YES
++                                                  completionHandler:^(SCShareableContent *content, NSError *error) {
++        if (!error) {
++          shareable = content;
++        }
++        dispatch_semaphore_signal(ready);
++      }];
++      if (dispatch_semaphore_wait(ready, dispatch_time(DISPATCH_TIME_NOW, 3 * NSEC_PER_SEC)) != 0 ||
++          !session->valid || shareable.displays.count != 1) {
++        return nil;
++      }
++
++      SCDisplay *display = shareable.displays.firstObject;
++      if (display.displayID != session->display) {
++        return nil;
++      }
++      for (SCWindow *window in shareable.windows) {
++        if (window.windowID == session->window && window.owningApplication.processID == getpid() &&
++            window.isOnScreen && window.windowLayer >= CGWindowLevelForKey(kCGScreenSaverWindowLevel) &&
++            CGRectContainsRect(window.frame, display.frame)) {
++          return [[SCContentFilter alloc] initWithDisplay:display excludingWindows:@[window]];
++        }
++      }
++      // The first shareable snapshot may predate WindowServer committing the curtain.
++      return nil;
++    }
++  }
++
++  void run_main_loop(const std::function<bool()> &quitting) {
++    @autoreleasepool {
++      [NSApplication sharedApplication];
++      [NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory];
++      observing_display_changes = CGDisplayRegisterReconfigurationCallback(display_reconfigured, nullptr) == kCGErrorSuccess;
++      NSNotificationCenter *app_notifications = NSNotificationCenter.defaultCenter;
++      NSNotificationCenter *workspace_notifications = NSWorkspace.sharedWorkspace.notificationCenter;
++      auto invalidate = ^(NSNotification *) { invalidate_curtain(); };
++      auto display_observer = [app_notifications addObserverForName:NSApplicationDidChangeScreenParametersNotification
++                                                            object:nil queue:NSOperationQueue.mainQueue usingBlock:invalidate];
++      auto space_observer = [workspace_notifications addObserverForName:NSWorkspaceActiveSpaceDidChangeNotification
++                                                                object:nil queue:NSOperationQueue.mainQueue usingBlock:invalidate];
++      auto session_observer = [workspace_notifications addObserverForName:NSWorkspaceSessionDidResignActiveNotification
++                                                                  object:nil queue:NSOperationQueue.mainQueue usingBlock:invalidate];
++      auto sleep_observer = [workspace_notifications addObserverForName:NSWorkspaceWillSleepNotification
++                                                                object:nil queue:NSOperationQueue.mainQueue usingBlock:invalidate];
++      NSTimer *timer = [NSTimer timerWithTimeInterval:0.05 repeats:YES block:^(NSTimer *) {
++        if (const auto session = curtain_session.lock()) {
++          if (!curtain.isVisible || !has_single_builtin_display(session->display)) {
++            session->valid = false;
++          }
++        }
++        if (quitting()) {
++          invalidate_curtain();
++          [NSApp stop:nil];
++          [NSApp postEvent:[NSEvent otherEventWithType:NSEventTypeApplicationDefined
++                                             location:NSZeroPoint modifierFlags:0 timestamp:0
++                                         windowNumber:0 context:nil subtype:0 data1:0 data2:0]
++                   atStart:NO];
++        }
++      }];
++      [NSRunLoop.mainRunLoop addTimer:timer forMode:NSRunLoopCommonModes];
++      if (!quitting()) {
++        [NSApp run];
++      }
++      [timer invalidate];
++      if (observing_display_changes) {
++        CGDisplayRemoveReconfigurationCallback(display_reconfigured, nullptr);
++        observing_display_changes = false;
++      }
++      [app_notifications removeObserver:display_observer];
++      [workspace_notifications removeObserver:space_observer];
++      [workspace_notifications removeObserver:session_observer];
++      [workspace_notifications removeObserver:sleep_observer];
++      // Keep the curtain ordered until workers have stopped. WindowServer removes
++      // the window when the host exits, including on forced termination.
++    }
++  }
++
++  session_ptr begin(std::string_view selected_display, int width, int height, int fps) {
++    @autoreleasepool {
++      if (width <= 0 || height <= 0 || width % 2 || height % 2 || fps <= 0 ||
++          fps > INT32_MAX / 10) {
++        return {};
++      }
++
++      auto session = std::make_shared<session_t>();
++      {
++        std::lock_guard lock {session_mutex};
++        if (!reserved_session.expired()) {
++          return {};
++        }
++        session->generation = ++next_generation;
++        reserved_session = session;
++      }
++      auto cleanup = util::fail_guard([&]() { end(session); });
++      auto result = std::make_shared<std::promise<bool>>();
++      auto shown = result->get_future();
++      const std::string configured_display {selected_display};
++      dispatch_async(dispatch_get_main_queue(), ^{
++        result->set_value(show_curtain(session, configured_display));
++      });
++      if (shown.wait_for(2s) != std::future_status::ready || !shown.get()) {
++        return {};
++      }
++
++      SCContentFilter *filter = create_filter(session);
++      if (!filter && session->valid) {
++        std::this_thread::sleep_for(50ms);
++        filter = create_filter(session);
++      }
++      if (!filter || !session->valid) {
++        return {};
++      }
++      session->capture = [[SCCapture alloc] initWithFilter:filter width:width height:height frameRate:fps];
++      if (![session->capture start]) {
++        return {};
++      }
++      session->first_frame = [session->capture copyLatestSampleBufferWaiting:NSEC_PER_SEC];
++      const auto image = session->first_frame ? CMSampleBufferGetImageBuffer(session->first_frame) : nullptr;
++      if (!healthy(session) || !image || CVPixelBufferGetWidth(image) != static_cast<size_t>(width) ||
++          CVPixelBufferGetHeight(image) != static_cast<size_t>(height) ||
++          CVPixelBufferGetPixelFormatType(image) != kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange) {
++        return {};
++      }
++
++      session->armed = true;
++      cleanup.disable();
++      return session;
++    }
++  }
++
++  void end(const session_ptr &session) {
++    if (!session) {
++      return;
++    }
++    session->valid = false;
++    [session->capture stop];
++    const auto generation = session->generation;
++    dispatch_async(dispatch_get_main_queue(), ^{
++      remove_curtain(generation);
++    });
++  }
++
++  session_ptr current() {
++    std::lock_guard lock {session_mutex};
++    auto session = reserved_session.lock();
++    return session && session->armed ? session : nullptr;
++  }
++
++  bool healthy(const session_ptr &session) {
++    return session->valid && ![session->capture failed];
++  }
++
++  CGDirectDisplayID display_id(const session_ptr &session) {
++    return session->display;
++  }
++
++  CMSampleBufferRef copy_first_frame(const session_ptr &session) {
++    return healthy(session) && session->first_frame ?
++      (CMSampleBufferRef) CFRetain(session->first_frame) : nullptr;
++  }
++
++  CMSampleBufferRef copy_frame(const session_ptr &session, std::chrono::nanoseconds timeout) {
++    return [session->capture copyLatestSampleBufferWaiting:timeout.count()];
++  }
++}
+diff --git a/src/platform/macos/display.mm b/src/platform/macos/display.mm
+index d5fe3d0..67d3d93 100644
+--- a/src/platform/macos/display.mm
++++ b/src/platform/macos/display.mm
+@@ -18,6 +18,9 @@
+ #include "src/platform/macos/av_video.h"
+ #include "src/platform/macos/misc.h"
+ #include "src/platform/macos/nv12_zero_device.h"
++#ifdef AURORA_MACOS_PRIVACY_PREVIEW
++  #include "src/platform/macos/aurora_privacy.h"
++#endif
+ 
+ // Avoid conflict between AVFoundation and libavutil both defining AVMediaType
+ /**
+@@ -214,12 +217,104 @@ namespace platf {
+     }
+   };
+ 
++#ifdef AURORA_MACOS_PRIVACY_PREVIEW
++  struct privacy_display_t: public display_t {
++    aurora_privacy::session_ptr privacy;
++    std::unique_ptr<display_device::DisplayPowerGuardInterface> display_power_guard;
++
++    int use_sample(CMSampleBufferRef sample, img_t &out) const {
++      auto image = sample ? CMSampleBufferGetImageBuffer(sample) : nullptr;
++      if (!image || CVPixelBufferGetWidth(image) != static_cast<size_t>(width) ||
++          CVPixelBufferGetHeight(image) != static_cast<size_t>(height) ||
++          CVPixelBufferGetPixelFormatType(image) != kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange) {
++        return -1;
++      }
++      auto &av_image = static_cast<av_img_t &>(out);
++      auto pixel_buffer = std::make_shared<av_pixel_buf_t>(sample);
++      av_image.pixel_buffer.reset();
++      av_image.sample_buffer = std::make_shared<av_sample_buf_t>(sample);
++      av_image.pixel_buffer = std::move(pixel_buffer);
++      out.width = width;
++      out.height = height;
++      out.row_pitch = static_cast<int>(CVPixelBufferGetBytesPerRowOfPlane(image, 0));
++      out.pixel_pitch = 1;
++      out.data = static_cast<uint8_t *>(CVPixelBufferGetBaseAddressOfPlane(image, 0));
++      return 0;
++    }
++
++    capture_e capture(const push_captured_image_cb_t &push_image, const pull_free_image_cb_t &pull_image, bool *) override {
++      while (aurora_privacy::healthy(privacy)) {
++        auto sample = aurora_privacy::copy_frame(privacy, 50ms);
++        auto release_sample = util::fail_guard([sample]() {
++          if (sample) CFRelease(sample);
++        });
++        if (!aurora_privacy::healthy(privacy)) {
++          break;
++        }
++        std::shared_ptr<img_t> image;
++        if (!pull_image(image)) {
++          return capture_e::ok;
++        }
++        if (!aurora_privacy::healthy(privacy) || (sample && use_sample(sample, *image) != 0)) {
++          break;
++        }
++        if (!push_image(std::move(image), sample != nullptr)) {
++          return capture_e::ok;
++        }
++      }
++      return capture_e::error;
++    }
++
++    std::shared_ptr<img_t> alloc_img() override {
++      return std::make_shared<av_img_t>();
++    }
++
++    int dummy_img(img_t *image) override {
++      auto sample = aurora_privacy::copy_first_frame(privacy);
++      if (!sample) return -1;
++      auto release_sample = util::fail_guard([sample]() { CFRelease(sample); });
++      return use_sample(sample, *image);
++    }
++
++    std::unique_ptr<avcodec_encode_device_t> make_avcodec_encode_device(pix_fmt_e format) override {
++      if (format != pix_fmt_e::nv12) return nullptr;
++      auto device = std::make_unique<nv12_zero_device>();
++      // The capture stream is already running at the negotiated dimensions and format.
++      device->init(this, format, [](void *, int, int) {}, [](void *, int) {});
++      return device;
++    }
++  };
++#endif
++
+   std::shared_ptr<display_t> display(platf::mem_type_e hwdevice_type, const std::string &display_name, const video::config_t &config) {
+     if (hwdevice_type != platf::mem_type_e::system && hwdevice_type != platf::mem_type_e::videotoolbox) {
+       BOOST_LOG(error) << "Could not initialize display with the given hw device type."sv;
+       return nullptr;
+     }
+ 
++#ifdef AURORA_MACOS_PRIVACY_PREVIEW
++    if (auto privacy = aurora_privacy::current()) {
++      if (hwdevice_type != mem_type_e::videotoolbox || !aurora_privacy::healthy(privacy)) {
++        return nullptr;
++      }
++      const auto display_id = aurora_privacy::display_id(privacy);
++      if (!display_name.empty() && display_name != std::to_string(display_id)) {
++        return nullptr;
++      }
++      auto display = std::make_shared<privacy_display_t>();
++      display->privacy = std::move(privacy);
++      display->display_power_guard = display_device::keep_display_awake("Aurora protected capture");
++      display->width = config.width;
++      display->height = config.height;
++      const auto bounds = CGDisplayBounds(display_id);
++      display->env_width = display->logical_width = static_cast<int>(bounds.size.width);
++      display->env_height = display->logical_height = static_cast<int>(bounds.size.height);
++      display->env_logical_width = display->logical_width;
++      display->env_logical_height = display->logical_height;
++      return display;
++    }
++#endif
++
+     auto display = std::make_shared<av_display_t>();
+ 
+     BOOST_LOG(debug) << "Waking display for capture selector ["sv << display_name << ']';
+diff --git a/src/platform/macos/sc_capture.h b/src/platform/macos/sc_capture.h
+new file mode 100644
+index 0000000..e8c2002
+--- /dev/null
++++ b/src/platform/macos/sc_capture.h
+@@ -0,0 +1,21 @@
++/**
++ * @file src/platform/macos/sc_capture.h
++ * @brief Narrow ScreenCaptureKit backport from Sunshine PR #5511, by martona
++ *        and contributors (GPL-3.0). Aurora supplies the verified content filter.
++ */
++#pragma once
++
++#import <CoreMedia/CoreMedia.h>
++#import <CoreVideo/CoreVideo.h>
++#import <ScreenCaptureKit/ScreenCaptureKit.h>
++
++@interface SCCapture: NSObject <SCStreamDelegate, SCStreamOutput>
++- (instancetype)initWithFilter:(SCContentFilter *)filter
++                         width:(int)width
++                        height:(int)height
++                     frameRate:(int)frameRate;
++- (BOOL)start;
++- (void)stop;
++- (BOOL)failed;
++- (CMSampleBufferRef)copyLatestSampleBufferWaiting:(int64_t)timeout_ns CF_RETURNS_RETAINED;
++@end
+diff --git a/src/platform/macos/sc_capture.mm b/src/platform/macos/sc_capture.mm
+new file mode 100644
+index 0000000..a821aeb
+--- /dev/null
++++ b/src/platform/macos/sc_capture.mm
+@@ -0,0 +1,144 @@
++/**
++ * @file src/platform/macos/sc_capture.mm
++ * @brief SCStream setup, latest-wins buffer and stop delegate adapted from
++ *        Sunshine PR #5511 (d48326113000210a8e301261167a60f76583118d, GPL-3.0).
++ */
++#import "sc_capture.h"
++
++#include "src/logging.h"
++
++static BOOL isUsableImageSampleBuffer(CMSampleBufferRef sampleBuffer) {
++  return sampleBuffer && CMSampleBufferIsValid(sampleBuffer) && CMSampleBufferGetImageBuffer(sampleBuffer);
++}
++
++@implementation SCCapture {
++  SCStream *_stream;
++  dispatch_semaphore_t _frameSignal;
++  CMSampleBufferRef _latestSampleBuffer;
++  BOOL _stopping;
++  BOOL _streamFailed;
++}
++
++- (instancetype)initWithFilter:(SCContentFilter *)filter
++                         width:(int)width
++                        height:(int)height
++                     frameRate:(int)frameRate {
++  self = [super init];
++  if (self) {
++    SCStreamConfiguration *config = [[SCStreamConfiguration alloc] init];
++    config.width = width;
++    config.height = height;
++    config.pixelFormat = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange;
++    config.showsCursor = YES;
++    config.captureResolution = SCCaptureResolutionBest;
++    config.preservesAspectRatio = YES;
++    // Upstream #5511 avoids phase locking with WindowServer and gives the
++    // latest-wins slot and VideoToolbox enough surfaces to make progress.
++    config.minimumFrameInterval = CMTimeMake(9, frameRate * 10);
++    config.queueDepth = 8;
++    _frameSignal = dispatch_semaphore_create(0);
++    _stream = [[SCStream alloc] initWithFilter:filter configuration:config delegate:self];
++  }
++  return self;
++}
++
++- (BOOL)start {
++  SCStream *stream = _stream;
++  if (!stream || ![stream addStreamOutput:self type:SCStreamOutputTypeScreen sampleHandlerQueue:nil error:nullptr]) {
++    return NO;
++  }
++
++  dispatch_semaphore_t started = dispatch_semaphore_create(0);
++  __block BOOL succeeded = NO;
++  [stream startCaptureWithCompletionHandler:^(NSError *error) {
++    BOOL stopped;
++    @synchronized(self) {
++      stopped = self->_stopping;
++      succeeded = !error && !stopped;
++    }
++    if (!error && stopped) {
++      [stream stopCaptureWithCompletionHandler:^(NSError *) {}];
++    }
++    dispatch_semaphore_signal(started);
++  }];
++  if (dispatch_semaphore_wait(started, dispatch_time(DISPATCH_TIME_NOW, 3 * NSEC_PER_SEC)) != 0) {
++    [self stop];
++    return NO;
++  }
++  return succeeded;
++}
++
++- (void)clearLatestSampleBuffer {
++  if (_latestSampleBuffer) {
++    CFRelease(_latestSampleBuffer);
++    _latestSampleBuffer = nullptr;
++  }
++}
++
++- (void)storeSampleBuffer:(CMSampleBufferRef)sampleBuffer {
++  @synchronized(self) {
++    if (_stopping || _streamFailed) {
++      return;
++    }
++
++    const BOOL shouldSignal = _latestSampleBuffer == nullptr;
++    [self clearLatestSampleBuffer];
++    _latestSampleBuffer = (CMSampleBufferRef) CFRetain(sampleBuffer);
++
++    if (shouldSignal) {
++      dispatch_semaphore_signal(_frameSignal);
++    }
++  }
++}
++
++- (CMSampleBufferRef)copyLatestSampleBufferWaiting:(int64_t)timeout_ns {
++  dispatch_semaphore_wait(_frameSignal, dispatch_time(DISPATCH_TIME_NOW, timeout_ns));
++  @synchronized(self) {
++    CMSampleBufferRef sampleBuffer = _latestSampleBuffer;
++    _latestSampleBuffer = nullptr;
++    return sampleBuffer;
++  }
++}
++
++- (BOOL)failed {
++  @synchronized(self) {
++    return _streamFailed || _stopping;
++  }
++}
++
++- (void)stream:(SCStream *)stream didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer ofType:(SCStreamOutputType)type {
++  if (type == SCStreamOutputTypeScreen && isUsableImageSampleBuffer(sampleBuffer)) {
++    [self storeSampleBuffer:sampleBuffer];
++  }
++}
++
++- (void)stream:(SCStream *)stream didStopWithError:(NSError *)stop_error {
++  @synchronized(self) {
++    if (!_stopping) {
++      BOOST_LOG(error) << "Aurora ScreenCaptureKit stopped";
++      _streamFailed = YES;
++      [self clearLatestSampleBuffer];
++      dispatch_semaphore_signal(_frameSignal);
++    }
++  }
++}
++
++- (void)stop {
++  SCStream *stream;
++  @synchronized(self) {
++    _stopping = YES;
++    stream = _stream;
++    _stream = nil;
++    [self clearLatestSampleBuffer];
++    dispatch_semaphore_signal(_frameSignal);
++  }
++  if (stream) {
++    [stream removeStreamOutput:self type:SCStreamOutputTypeScreen error:nullptr];
++    [stream stopCaptureWithCompletionHandler:^(NSError *) {}];
++  }
++}
++
++- (void)dealloc {
++  [self clearLatestSampleBuffer];
++}
++@end
+diff --git a/src/stream.cpp b/src/stream.cpp
+index 1291c9c..aed4588 100644
+--- a/src/stream.cpp
++++ b/src/stream.cpp
+@@ -36,6 +36,9 @@ extern "C" {
+ #include "system_tray.h"
+ #include "thread_safe.h"
+ #include "utility.h"
++#ifdef AURORA_MACOS_PRIVACY_PREVIEW
++  #include "src/platform/macos/aurora_privacy.h"
++#endif
+ 
+ constexpr int IDX_START_A = 0;  ///< Control-stream message index for the first stream-start packet.
+ constexpr int IDX_START_B = 1;  ///< Control-stream message index for the second stream-start packet.
+@@ -493,6 +496,10 @@ namespace stream {
+ 
+     std::shared_ptr<input::input_t> input;  ///< Platform input device state for this stream.
+ 
++#ifdef AURORA_MACOS_PRIVACY_PREVIEW
++    aurora_privacy::session_ptr privacy;
++#endif
++
+     std::jthread audioThread;  ///< Audio thread.
+     std::jthread videoThread;  ///< Video thread.
+ 
+@@ -2228,6 +2235,10 @@ namespace stream {
+ 
+       BOOST_LOG(debug) << "Waiting for video to end..."sv;
+       session.videoThread.join();
++#ifdef AURORA_MACOS_PRIVACY_PREVIEW
++      aurora_privacy::end(session.privacy);
++      session.privacy.reset();
++#endif
+       BOOST_LOG(debug) << "Waiting for audio to end..."sv;
+       session.audioThread.join();
+       BOOST_LOG(debug) << "Waiting for control to end..."sv;
+@@ -2270,6 +2281,26 @@ namespace stream {
+         return -1;
+       }
+ 
++#if defined(__APPLE__) && defined(AURORA_SUNSHINE_HOST)
++      if (config::aurora_privacy_screensaver) {
++  #ifdef AURORA_MACOS_PRIVACY_PREVIEW
++        const auto &monitor = session.config.monitor;
++        if (session.client_cert.empty() || monitor.dynamicRange || monitor.chromaSamplingType ||
++            !video::aurora_privacy_uses_videotoolbox()) {
++          BOOST_LOG(error) << "Aurora privacy needs a paired client and an SDR 4:2:0 VideoToolbox stream"sv;
++          return -1;
++        }
++        session.privacy = aurora_privacy::begin(config::video.output_name, monitor.width, monitor.height, monitor.framerate);
++        if (!session.privacy) {
++          BOOST_LOG(error) << "Aurora privacy could not confirm the local curtain and filtered capture"sv;
++          return -1;
++        }
++  #else
++        BOOST_LOG(error) << "Aurora privacy is configured but this macOS host was built without curtain support"sv;
++        return -1;
++  #endif
++      }
++#endif
+       session.control.expected_peer_address = addr_string;
+       BOOST_LOG(debug) << "Expecting incoming session connections from "sv << addr_string;
+ 
+diff --git a/src/video.cpp b/src/video.cpp
+index a25291e..a972c54 100644
+--- a/src/video.cpp
++++ b/src/video.cpp
+@@ -1470,6 +1470,11 @@ namespace video {
+   };
+ 
+   static encoder_t *chosen_encoder;
++#ifdef AURORA_MACOS_PRIVACY_PREVIEW
++  bool aurora_privacy_uses_videotoolbox() {
++    return chosen_encoder == &videotoolbox;
++  }
++#endif
+   int active_hevc_mode;  ///< HEVC mode selected by the most recent encoder probe.
+   static int active_av1_mode;  ///< AV1 mode selected by the most recent encoder probe.
+   static bool last_encoder_probe_supported_ref_frames_invalidation = false;  ///< Whether the last probe found reference-frame invalidation support.
+diff --git a/src/video.h b/src/video.h
+index 3225ac3..1e1d2da 100644
+--- a/src/video.h
++++ b/src/video.h
+@@ -678,6 +678,9 @@ namespace video {
+    */
+   using hdr_info_t = std::unique_ptr<hdr_info_raw_t>;
+ 
++#ifdef AURORA_MACOS_PRIVACY_PREVIEW
++  bool aurora_privacy_uses_videotoolbox();
++#endif
+   extern int active_hevc_mode;
+ 
+   enum class encoder_probe_status { probing, ready, failed };

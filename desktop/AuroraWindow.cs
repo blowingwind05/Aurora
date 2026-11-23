@@ -64,6 +64,7 @@ public sealed partial class AuroraWindow : Window
     private int hostRevision;
     private string managedHostError;
     private bool connecting;
+    private bool requestingDevicePower;
     private bool closed;
     private bool stoppingHost;
     private bool canClose;
@@ -462,7 +463,9 @@ public sealed partial class AuroraWindow : Window
             RenderHost(hostError);
             if (!changingManagedHost.HasValue && host?.Installed == true)
             {
-                if (HostPage.IsVisible || AutomaticPairing.IsConfigured) OpenHostSettings();
+                var prepareEmbeddedPairing = host.Managed && host.SettingsAvailable &&
+                    network?.IsAuthenticated == true && network.Mode == TailscaleMode.Embedded;
+                if (HostPage.IsVisible || prepareEmbeddedPairing || AutomaticPairing.IsConfigured) OpenHostSettings();
                 if (sunshinePage != null) _ = sunshinePage.SetNetwork(network);
             }
         }
@@ -488,7 +491,7 @@ public sealed partial class AuroraWindow : Window
                 DeviceCards.Children.Add(new DeviceCard(device, i, Launch,
                     (address, source) => CopyAddressValue(device.CanConnect && address != null
                         ? new System.Net.IPEndPoint(address, BundledSunshine.BasePort).ToString()
-                        : address?.ToString(), source, Page.Devices), previewPaths[i]));
+                        : address?.ToString(), source, Page.Devices), RequestDevicePower, previewPaths[i]));
             }
             PlaceDevices(force: true);
         }
@@ -720,7 +723,43 @@ public sealed partial class AuroraWindow : Window
         }
     }
 
-    private async Task Launch(Device device)
+    private static async Task VerifyDeviceIdentity(Device device, (long? Owner, string LocalId) account, CancellationToken token)
+    {
+        var verified = await Task.Run(Upstream.ReadNetwork, token).WaitAsync(token);
+        if (!verified.IsAuthenticated || account != (verified.Owner, verified.LocalId) ||
+            !verified.Devices.Any(peer => peer.Id == device.Id && Equals(peer.Address, device.Address)))
+            throw new InvalidOperationException("Tailscale 账号或设备身份已变化，请重新登录或刷新设备。");
+    }
+
+    private async Task RequestDevicePower(Device device, DevicePowerAction action)
+    {
+        if (requestingDevicePower || closed || !device.SupportsPower || network?.IsAuthenticated != true) return;
+        var account = (network?.Owner, network?.LocalId);
+        var restart = action == DevicePowerAction.Restart;
+        var label = restart ? "重启" : "关机";
+        var title = restart ? $"要重启「{device.Name}」吗？" : $"要将「{device.Name}」关机吗？";
+        var description = "此操作会断开远程连接。请先保存被控设备上未完成的工作。";
+        if (!restart) description += "关机后需要重新开机才能连接。";
+        requestingDevicePower = true;
+        try
+        {
+            if (!await ConfirmAction(title, description, "确认" + label, destructive: true) || closed)
+                return;
+            var token = lifetime.Token;
+            await VerifyDeviceIdentity(device, account, token);
+            var route = await Discovery.ChoosePowerRoute(device, token);
+            await Upstream.RequestDevicePower(route, action, token);
+            if (!closed) SetFeedback($"已向「{device.Name}」发送{label}请求。", Page.Devices, transient: true);
+        }
+        catch (OperationCanceledException) when (closed || lifetime.IsCancellationRequested) { }
+        catch (OperationCanceledException) { SetFeedback("未收到被控端确认，请先检查设备状态。", Page.Devices); }
+        catch (Exception error) { if (!closed) SetFeedback(error.Message, Page.Devices); }
+        finally { requestingDevicePower = false; }
+    }
+
+    private Task Launch(Device device) => Launch(device, null);
+
+    private async Task Launch(Device device, StreamSessionWindow previousSession)
     {
         if (connecting || !device.CanConnect || closed) return;
         if (network?.IsAuthenticated != true)
@@ -736,29 +775,55 @@ public sealed partial class AuroraWindow : Window
         using var currentAccess = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
         streamAccess = currentAccess;
         var token = currentAccess.Token;
+        var session = previousSession;
+        var keepFailureVisible = false;
+
+        void ReportProgress(string message)
+        {
+            if (session != null) session.ShowProgress(message);
+            else SetFeedback(message);
+        }
+
+        void ReportFailure(string message)
+        {
+            if (token.IsCancellationRequested) return;
+            if (session == null)
+            {
+                SetFeedback(message);
+                return;
+            }
+            session.ShowFailure(message);
+            keepFailureVisible = true;
+        }
+
         try
         {
-            var verified = await Task.Run(Upstream.ReadNetwork, token).WaitAsync(token);
-            if (!verified.IsAuthenticated || sessionNetwork != (verified.Owner, verified.LocalId) ||
-                !verified.Devices.Any(peer => peer.Id == device.Id && Equals(peer.Address, device.Address)))
-                throw new InvalidOperationException("Tailscale 账号或设备身份已变化，请重新登录或刷新设备。");
-            SetFeedback("正在检查设备连接…");
-            var route = await Discovery.ChooseRoute(device, () => SetFeedback("正在等待被控端检测编码器…"), token);
+            session?.ShowConnecting(currentAccess);
+            var runtime = Upstream.FindMoonlight();
+            if (session == null && OperatingSystem.IsWindows() && await StreamSessionWindow.IsSupported(runtime, token))
+            {
+                token.ThrowIfCancellationRequested();
+                session = new StreamSessionWindow(device.Name, window => Launch(device, window));
+                session.ShowConnecting(currentAccess);
+            }
+            ReportProgress("正在检查设备连接…");
+            await VerifyDeviceIdentity(device, sessionNetwork, token);
+            var route = await Discovery.ChooseRoute(device, () => ReportProgress("正在等待被控端检测编码器…"), token);
             if (closed) return;
-            SetFeedback("正在确认设备信任…");
+            ReportProgress("正在确认设备信任…");
             if (!await IsPaired(route, token))
             {
                 if (device.Tailnet == null)
                     throw new InvalidOperationException("首次自动配对需要两台设备登录同一 Tailscale 账号。");
-                using var helpTimeout = CancellationTokenSource.CreateLinkedTokenSource(token);
-                helpTimeout.CancelAfter(TimeSpan.FromSeconds(8));
-                var moonlight = await Upstream.FindBackgroundMoonlight(helpTimeout.Token);
-                if (device.Tailnet.ViaEmbeddedTailnet) await Upstream.RequireRelayRuntime(moonlight, helpTimeout.Token);
-                SetFeedback("正在与对端 Aurora 建立信任…");
+                using var probeTimeout = CancellationTokenSource.CreateLinkedTokenSource(token);
+                probeTimeout.CancelAfter(TimeSpan.FromSeconds(8));
+                var moonlight = await Upstream.FindBackgroundMoonlight(probeTimeout.Token);
+                if (device.Tailnet.ViaEmbeddedTailnet) await Upstream.RequireRelayRuntime(moonlight, probeTimeout.Token);
+                ReportProgress("正在与对端 Aurora 建立信任…");
                 await AutomaticPairing.Pair(device, moonlight, token);
                 // Retry LAN after Moonlight has pinned the host certificate.
                 if (route != device.Tailnet && await IsPaired(route, token))
-                    SetFeedback("已自动配对，正在通过局域网连接…");
+                    ReportProgress("已自动配对，正在通过局域网连接…");
                 else if (await IsPaired(device.Tailnet, token))
                     route = device.Tailnet;
                 else
@@ -767,14 +832,16 @@ public sealed partial class AuroraWindow : Window
             token.ThrowIfCancellationRequested();
             var source = route == device.Lan ? "局域网" : "Tailscale";
             using var stream = await EmbeddedTailnet.OpenStream(route, token);
-            var runtime = Upstream.FindMoonlight();
             int? exitCode;
-            if (OperatingSystem.IsWindows() && await StreamSessionWindow.IsSupported(runtime, token))
+            if (session != null)
             {
-                SetFeedback(source + "连接：正在打开 Aurora 串流窗口。");
-                var session = new StreamSessionWindow(device.Name);
                 var result = await session.Run(runtime, stream.Route, token);
-                exitCode = result.Fallback ? await LaunchStandalone(runtime, stream.Route, source, token) : result.ExitCode;
+                if (result.AttachmentFailed)
+                {
+                    ReportFailure("无法加载串流画面，请重试。");
+                    return;
+                }
+                exitCode = result.ExitCode;
             }
             else
             {
@@ -784,18 +851,19 @@ public sealed partial class AuroraWindow : Window
                 (!device.TailnetVisible || sessionNetwork == (network?.Owner, network?.LocalId)))
                 wallpaperAfterSession = (device, previewPath);
             if (exitCode is int errorCode && errorCode != 0)
-                SetFeedback($"操作未完成（串流组件：{errorCode}）。请检查被控端的状态后重试。");
+                ReportFailure($"串流组件退出（{errorCode}）。请检查被控端后重新连接。");
         }
         catch (MoonlightNotFoundException error)
         {
-            SetFeedback(error.Message);
+            ReportFailure(error.Message);
             OpenPage(Upstream.MoonlightReleasesUrl);
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested) { }
-        catch (OperationCanceledException) { SetFeedback("连接或自动配对超时，请检查两端状态后重试。"); }
-        catch (Exception error) { SetFeedback(error.Message); }
+        catch (OperationCanceledException) { ReportFailure("连接或自动配对超时，请检查两端状态后重试。"); }
+        catch (Exception error) { ReportFailure(error.Message); }
         finally
         {
+            if (!keepFailureVisible) session?.Finish();
             streamAccess = null;
             connecting = false;
             if (!closed) UpdateActions();

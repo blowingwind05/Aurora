@@ -1,0 +1,13 @@
+Aurora macOS ScreenCaptureKit preview
+Sunshine base: 63d35f702ee9e362e43263742981836ec0710384 (v2026.914.233613)
+Backport: Sunshine PR #5511, https://github.com/SunshineStream/Sunshine/pull/5511
+Merged revision: d48326113000210a8e301261167a60f76583118d (2026-11-11)
+Upstream source: https://github.com/SunshineStream/Sunshine/tree/d48326113000210a8e301261167a60f76583118d/src/platform/macos
+Source license: GPL-3.0-only; see the accompanying Sunshine LICENSE and NOTICE.
+Derived files: src/platform/macos/sc_capture.h and sc_capture.mm.
+The controller keeps the upstream SCStream configuration, latest-wins sample
+slot and stop delegate. Aurora supplies the exact filter, bounded startup, and
+the session-scoped AppKit curtain. The upstream default backend switch,
+AVFoundation fallback and encoder timestamp changes are outside this backport.
+Original PR diff SHA-256:
+e9e13bf69bb02b69f1d7e7fbf489244ada2d2f13d96eafc20649cf6d0c4ff41d

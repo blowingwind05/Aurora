@@ -269,6 +269,12 @@
     <Style Selector="Button.icon:pointerover /template/ ContentPresenter#PART_ContentPresenter">
       <Setter Property="Background" Value="Transparent" />
     </Style>
+    <Style Selector="Button.streamTool:pointerover /template/ ContentPresenter#PART_ContentPresenter, Button.streamTool:focus-visible /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="#E8EDF4" />
+    </Style>
+    <Style Selector="Button.streamTool.streamDisconnect:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="#FBE4E6" />
+    </Style>
     <Style Selector=":is(Button).quietAction:pointerover:not(:disabled) /template/ ContentPresenter#PART_ContentPresenter, :is(Button).quietAction:focus-visible:not(:disabled) /template/ ContentPresenter#PART_ContentPresenter, :is(Button).quietAction:pressed:not(:disabled) /template/ ContentPresenter#PART_ContentPresenter">
       <Setter Property="Background" Value="Transparent" />
       <Setter Property="Foreground" Value="#087CF5" />

@@ -9,7 +9,7 @@ internal static class StreamPreferences
     private const string Enabled = "on";
     private const string Disabled = "off";
     private const string ViewerDisplayMode = "windowed";
-    // Moonlight Qt 6.0.0 StreamingPreferences::reload() fallbacks.
+    // Moonlight Qt 6.0.0 fallbacks with Aurora's desktop-oriented viewer defaults.
     private static readonly Dictionary<string, string> Defaults = new(StringComparer.Ordinal)
     {
         ["resolution"] = "1280x720",
@@ -21,7 +21,7 @@ internal static class StreamPreferences
         ["audio-on-host"] = Disabled,
         ["mute-on-focus-loss"] = Disabled,
         ["keep-awake"] = Enabled,
-        ["absolute-mouse"] = Disabled,
+        ["absolute-mouse"] = Enabled,
         ["capture-system-keys"] = "never",
         ["touchscreen-trackpad"] = Disabled,
         ["mouse-buttons-swap"] = Disabled,
@@ -78,12 +78,19 @@ internal static class StreamPreferences
         return (resolutionFactor * frameRateFactor * 1000).ToString(CultureInfo.InvariantCulture);
     }
 
-    internal static string[] Arguments(bool useViewerDefault = false)
+    internal static string[] Arguments(bool useViewerDefault = false, bool useBundledDefaults = false)
     {
         Dictionary<string, string> effective;
         lock (Overrides) effective = new Dictionary<string, string>(Overrides, StringComparer.Ordinal);
 
         if (useViewerDefault) effective.TryAdd("display-mode", ViewerDisplayMode);
+        effective.TryAdd("absolute-mouse", Defaults["absolute-mouse"]);
+        if (useBundledDefaults)
+        {
+            effective.TryAdd("vsync", Defaults["vsync"]);
+            effective.TryAdd("frame-pacing", Defaults["frame-pacing"]);
+            effective.TryAdd("keep-awake", Defaults["keep-awake"]);
+        }
         if (effective.GetValueOrDefault("vsync") == Disabled)
             effective["frame-pacing"] = Disabled;
         if (effective.GetValueOrDefault("hdr") == Enabled)

@@ -56,7 +56,7 @@ try {
     finally { Pop-Location }
 
     $executable = Join-Path $deploy 'AuroraStream.exe'
-    Copy-Item -LiteralPath (Join-Path $build 'app/release/Moonlight.exe') -Destination $executable
+    Copy-Item -LiteralPath (Join-Path $build 'app/release/AuroraStream.exe') -Destination $executable
     Copy-Item -Path (Join-Path $source 'libs/windows/lib/x64/*.dll') -Destination $deploy
     Copy-Item -LiteralPath (Join-Path $build 'AntiHooking/release/AntiHooking.dll'),
         (Join-Path $source 'app/SDL_GameControllerDB/gamecontrollerdb.txt') -Destination $deploy

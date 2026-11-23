@@ -49,7 +49,7 @@ Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'Info.plist') -Destination $cont
 $resources = Join-Path $contents 'Resources'
 $null = New-Item -ItemType Directory -Force -Path $resources
 Copy-Item -LiteralPath (Join-Path $repository 'THIRD-PARTY-NOTICES.txt'), (Join-Path $repository 'LICENSE') -Destination $resources
-Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'Assets/Aurora.icns') -Destination $resources
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'Platform/Mac/Assets/Aurora.icns') -Destination $resources
 if ($TailscaleDirectory) {
     $tailnetRuntime = Join-Path $executableDirectory 'AuroraTailnet'
     Copy-Item -LiteralPath (Join-Path $TailscaleDirectory 'AuroraTailnet') -Destination $tailnetRuntime

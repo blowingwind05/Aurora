@@ -38,7 +38,9 @@ inline int prepareAuroraStreamInvocation(int& argc, char** argv)
     }
     if (argc < 3 || std::strcmp(argv[1], "--aurora-runtime") != 0 ||
         (std::strcmp(argv[2], "pair") != 0 && std::strcmp(argv[2], "list") != 0 &&
-         std::strcmp(argv[2], "stream") != 0 && std::strcmp(argv[2], "wallpaper") != 0)) {
+         std::strcmp(argv[2], "stream") != 0 && std::strcmp(argv[2], "wallpaper") != 0 &&
+         std::strcmp(argv[2], "power") != 0 &&
+         std::strcmp(argv[2], "privacy") != 0)) {
         std::fputs("Aurora Stream is launched by Aurora.\n", stderr);
         return 2;
     }

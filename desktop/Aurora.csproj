@@ -5,6 +5,7 @@
     <RuntimeIdentifiers>win-x64;osx-arm64;osx-x64</RuntimeIdentifiers>
     <AssemblyName>Aurora</AssemblyName>
     <ApplicationIcon Condition="'$(RuntimeIdentifier)' == 'win-x64'">Assets/Aurora.ico</ApplicationIcon>
+    <ApplicationManifest Condition="'$(RuntimeIdentifier)' == 'win-x64'">Aurora.manifest</ApplicationManifest>
     <Version>0.8.0</Version>
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
   </PropertyGroup>

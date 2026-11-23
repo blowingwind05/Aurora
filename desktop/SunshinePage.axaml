@@ -57,9 +57,14 @@
         <Border x:Name="PrivacySettings" Classes="panel settingsGroup" IsVisible="False">
           <StackPanel>
             <Grid Classes="settingGroupHeader" ColumnDefinitions="*,Auto">
-              <TextBlock x:Name="DisplayHeading" Text="远控显示" Classes="sectionTitle" />
+              <TextBlock x:Name="DisplayHeading" Text="隐私保护" Classes="sectionTitle" />
             </Grid>
-            <Grid Classes="formRow" ColumnSpacing="8">
+            <Grid x:Name="PrivacyScreensaverRow" Classes="formRow" ColumnDefinitions="*,Auto">
+              <TextBlock Text="旧版自动隐私屏保" Classes="settingLabel" />
+              <ToggleSwitch x:Name="PrivacyScreensaver" Grid.Column="1" Classes="settingSwitch"
+                            AutomationProperties.Name="旧版自动隐私屏保" />
+            </Grid>
+            <Grid x:Name="PrivacyDisplayRow" Classes="formRow" ColumnSpacing="8">
               <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="*" MaxWidth="235" />

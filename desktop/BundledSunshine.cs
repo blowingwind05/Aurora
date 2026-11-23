@@ -139,6 +139,7 @@ internal static class BundledSunshine
             using var admin = SunshineAdmin.OpenBundled();
             if (await admin.CheckAccess().ConfigureAwait(false) != SunshineAccess.SignedIn)
                 throw new InvalidOperationException("内置被控组件未完成 Aurora 托管登录，请更新 Aurora 后重试。");
+            HostSleepPrevention.SetHostActive(true);
         }
         catch
         {
@@ -283,6 +284,7 @@ internal static class BundledSunshine
             host = null;
             adminPassword = null;
         }
+        HostSleepPrevention.SetHostActive(false);
         if (current == null) return;
 
         using (current)

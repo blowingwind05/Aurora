@@ -36,4 +36,26 @@ try {
 }
 finally { $config.Dispose() }
 
-'Sunshine native catalog, validation, and configuration merge tests passed.'
+$parsePrivacy = $admin.GetMethod('ParsePrivacySettings', $flags)
+$virtualId = '{82ae1b01-31af-4430-88cd-09c56dbf7af2}'
+$json = [Text.Json.JsonDocument]::Parse("{`"saved`":`"$virtualId`",`"active`":`"$virtualId`",`"displays`":[{`"id`":`"$virtualId`",`"name`":`"Test display`"}]}")
+try {
+    $legacy = $parsePrivacy.Invoke($null, @($json.RootElement))
+    if (!$legacy.SupportsVirtualDisplay -or $legacy.SupportsScreensaver -or !$legacy.Saved.Exclusive -or
+        $legacy.Saved.Id -cne $virtualId -or $legacy.Displays.Count -ne 1) {
+        throw 'The privacy parser lost a previous virtual-display-only configuration.'
+    }
+}
+finally { $json.Dispose() }
+
+$json = [Text.Json.JsonDocument]::Parse('{"supports_virtual_display":false,"supports_screensaver":true,"saved_screensaver":true,"active_screensaver":false}')
+try {
+    $curtain = $parsePrivacy.Invoke($null, @($json.RootElement))
+    if ($curtain.SupportsVirtualDisplay -or !$curtain.SupportsScreensaver -or !$curtain.Saved.Screensaver -or
+        $curtain.Active.Screensaver -or $curtain.Displays.Count -ne 0) {
+        throw 'The privacy parser must accept a screensaver-only host and distinguish saved and loaded settings.'
+    }
+}
+finally { $json.Dispose() }
+
+'Sunshine native catalog, validation, configuration merge, and privacy capabilities tests passed.'

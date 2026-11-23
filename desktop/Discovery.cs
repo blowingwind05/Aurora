@@ -19,6 +19,8 @@ internal sealed record StreamHost(IPEndPoint Endpoint, string Id, string Name)
 {
     internal bool ViaEmbeddedTailnet { get; init; }
     internal bool EncoderProbePending { get; init; }
+    internal bool SupportsPower { get; init; }
+    internal bool SupportsSessionPrivacy { get; init; }
 }
 internal sealed record LanSnapshot(IPAddress Address, IReadOnlyList<StreamHost> Hosts, IReadOnlyList<PresentDevice> Devices);
 internal sealed record TailnetSnapshot(IReadOnlyList<StreamHost> Hosts, IReadOnlyList<PresentDevice> Devices,
@@ -185,7 +187,12 @@ internal static class Discovery
         var id = ((string)root.Element("uniqueid"))?.Trim();
         var name = ((string)root.Element("hostname"))?.Trim();
         return string.IsNullOrWhiteSpace(id) || id.Length > 128 || string.IsNullOrWhiteSpace(name)
-            ? null : new(endpoint, id, name) { EncoderProbePending = (string)root.Element("AuroraEncoderStatus") == "probing" };
+            ? null : new(endpoint, id, name)
+            {
+                EncoderProbePending = (string)root.Element("AuroraEncoderStatus") == "probing",
+                SupportsPower = (string)root.Element("AuroraPower") == "1",
+                SupportsSessionPrivacy = (string)root.Element("AuroraSessionPrivacy") == "1"
+            };
     }
 
     internal static List<Device> Merge(IEnumerable<Device> peers, LanSnapshot lan, TailnetSnapshot tailnet)
@@ -248,19 +255,24 @@ internal static class Discovery
         throw new InvalidOperationException("无法连接这台设备。请确认 Sunshine 正在运行，再刷新设备列表。");
     }
 
+    private static async Task<(StreamHost Route, StreamHost Current)> ProbeRoutes(Device device, CancellationToken token, bool requirePower)
+    {
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
+        timeout.CancelAfter(TimeSpan.FromSeconds(4));
+        return await TryRoutes(device, async route =>
+        {
+            var current = await ReadHost(route.Endpoint, timeout.Token, route.ViaEmbeddedTailnet);
+            token.ThrowIfCancellationRequested();
+            return requirePower && current?.SupportsPower != true ? null : current;
+        });
+    }
+
+    internal static async Task<StreamHost> ChoosePowerRoute(Device device, CancellationToken token) =>
+        (await ProbeRoutes(device, token, requirePower: true)).Route;
+
     public static async Task<StreamHost> ChooseRoute(Device device, Action onEncoderWait, CancellationToken token)
     {
-        (StreamHost Route, StreamHost Current) selected;
-        using (var timeout = CancellationTokenSource.CreateLinkedTokenSource(token))
-        {
-            timeout.CancelAfter(TimeSpan.FromSeconds(4));
-            selected = await TryRoutes(device, async route =>
-            {
-                var current = await ReadHost(route.Endpoint, timeout.Token, route.ViaEmbeddedTailnet);
-                token.ThrowIfCancellationRequested();
-                return current;
-            });
-        }
+        var selected = await ProbeRoutes(device, token, requirePower: false);
 
         if (selected.Current.EncoderProbePending)
         {
