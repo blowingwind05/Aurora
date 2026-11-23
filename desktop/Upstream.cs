@@ -489,7 +489,7 @@ namespace Aurora
         }
 
         internal static Process LaunchMoonlight(string path, StreamHost route, bool pair, string embeddedSession = null,
-            bool readConnectionDetails = false)
+            bool readConnectionDetails = false, string deviceName = null)
         {
             var arguments = MoonlightArguments(route, pair);
             if (!pair)
@@ -498,11 +498,12 @@ namespace Aurora
                 var useViewerDefault = bundled && (OperatingSystem.IsMacOS() || embeddedSession != null);
                 arguments = arguments.Concat(StreamPreferences.Arguments(useViewerDefault, useBundledDefaults: bundled)).ToArray();
             }
-            return StartMoonlight(path, arguments, redirect: readConnectionDetails, embeddedSession, route, readConnectionDetails);
+            var redirect = readConnectionDetails || (!pair && OperatingSystem.IsMacOS());
+            return StartMoonlight(path, arguments, redirect, embeddedSession, route, readConnectionDetails, deviceName);
         }
 
         internal static Process StartMoonlight(string path, string[] arguments, bool redirect, string embeddedSession = null,
-            StreamHost streamRoute = null, bool readConnectionDetails = false)
+            StreamHost streamRoute = null, bool readConnectionDetails = false, string deviceName = null)
         {
             var options = new ProcessStartInfo(path)
             {
@@ -516,6 +517,13 @@ namespace Aurora
             {
                 options.Environment.Remove("AURORA_EMBEDDED_SESSION");
                 if (embeddedSession != null) options.Environment["AURORA_EMBEDDED_SESSION"] = embeddedSession;
+            }
+            options.Environment.Remove("AURORA_STREAM_DEVICE_NAME");
+            options.Environment.Remove("AURORA_STREAM_PREFERENCES");
+            if (OperatingSystem.IsMacOS() && !string.IsNullOrWhiteSpace(deviceName))
+            {
+                options.Environment["AURORA_STREAM_DEVICE_NAME"] = deviceName;
+                if (redirect) options.Environment["AURORA_STREAM_PREFERENCES"] = StreamPreferences.SessionControlSnapshot();
             }
             options.Environment.Remove("AURORA_CONNECTION_DETAILS");
             if (readConnectionDetails) options.Environment["AURORA_CONNECTION_DETAILS"] = "1";

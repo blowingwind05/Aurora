@@ -430,7 +430,6 @@ internal static class WindowsVisualTests
         var maximize = (Button)type.GetField("maximize", Private).GetValue(window);
         var disconnect = (Button)type.GetField("disconnect", Private).GetValue(window);
         var slot = (Grid)type.GetField("disconnectSlot", Private).GetValue(window);
-        var restore = (MenuItem)type.GetField("fullscreenItem", Private).GetValue(window);
         var frame = (Border)window.Content;
         using var stop = new CancellationTokenSource();
 
@@ -447,7 +446,7 @@ internal static class WindowsVisualTests
                 foreach (var button in toolbar.GetVisualDescendants().OfType<Button>())
                 {
                     var midpoint = button.TranslatePoint(new Point(button.Bounds.Width / 2, button.Bounds.Height / 2), toolbar).Value.Y;
-                    Require(Math.Abs(midpoint - toolbar.Bounds.Height / 2) <= 0.51, "Caption control is off center.");
+                    Require(Math.Abs(midpoint - toolbar.Bounds.Height / 2) <= 0.51, $"{state}: {AutomationProperties.GetName(button)} midpoint {midpoint}, toolbar {toolbar.Bounds.Height}, button {button.Bounds}, visible {button.IsVisible}.");
                 }
 
                 if (state == WindowState.Maximized)
@@ -483,9 +482,40 @@ internal static class WindowsVisualTests
             Call(panel, "Update", noLatency);
             Require(!panel.GetVisualDescendants().OfType<TextBlock>().Any(text => text.Text == "网络延迟"), "An unavailable metric should be hidden.");
             Console.WriteLine("Windows connection details parse, placement and unavailable fields verified.");
+            var menu = (Flyout)type.GetField("controlMenu", Private).GetValue(window);
+            var center = (Control)menu.Content;
+            var controls = (Button)type.GetField("controls", Private).GetValue(window);
+            Button MenuButton(string name) => center.GetVisualDescendants().OfType<Button>()
+                .Single(button => AutomationProperties.GetName(button) == name);
+            menu.ShowAt(controls);
+            await Until(() => menu.IsOpen && center.Bounds.Width > 0);
+            Require(TopLevel.GetTopLevel(center) != window, "Control center must appear over native video.");
+            foreach (var name in new[] { "画质", "声音", "输入", "安全", "全屏" })
+                Require(MenuButton(name).IsEffectivelyEnabled, name + " is unavailable.");
+            using (var menuPicture = Draw(center.GetVisualAncestors().OfType<FlyoutPresenter>().First(), 1.25))
+                menuPicture.Save(Path.Combine(output, "stream-control-center.png"));
+            Click(MenuButton("画质"));
+            await Until(() => center.GetVisualDescendants().OfType<Slider>().Any(slider => slider.Bounds.Width > 0));
+            await Task.Delay(100);
+            Require(center.GetVisualDescendants().OfType<TextBlock>().Any(text => text.Text == "下次连接生效"),
+                "Settings that take effect on reconnect must be labeled.");
+            using (var qualityPicture = Draw(center.GetVisualAncestors().OfType<FlyoutPresenter>().First(), 1.25))
+                qualityPicture.Save(Path.Combine(output, "stream-control-quality.png"));
+            Click(MenuButton("返回控制中心"));
+            Click(MenuButton("声音"));
+            await Until(() => center.GetVisualDescendants().OfType<ToggleSwitch>().Count() == 2);
+            Click(MenuButton("返回控制中心"));
+            Click(MenuButton("输入"));
+            await Until(() => center.GetVisualDescendants().OfType<ToggleSwitch>().Count() == 2);
+            Click(MenuButton("返回控制中心"));
+            Click(MenuButton("安全"));
+            Require(center.GetVisualDescendants().OfType<TextBlock>().Any(text => text.Text == "当前会话不支持隐私屏保"),
+                "Unsupported privacy controls should explain their availability.");
+            Click(MenuButton("返回控制中心"));
+            menu.Hide();
             Call(window, "ToggleFullscreen");
             await Until(() => popup.IsOpen && popup.Child.Bounds.Height > 0);
-            Require(!toolbar.IsVisible && Equals(restore.Header, "退出全屏"), "Fullscreen controls are unavailable.");
+            Require(!toolbar.IsVisible , "Fullscreen controls are unavailable.");
             Require(AutomationProperties.GetName((Button)popup.Child) == "控制中心", "The floating button needs an accessible label.");
             var popupRoot = TopLevel.GetTopLevel(popup.Child);
             Require(popupRoot != window, "The floating button must be above the native video surface.");
@@ -495,10 +525,10 @@ internal static class WindowsVisualTests
 
             var trigger = (Button)popup.Child;
             trigger.Flyout.ShowAt(trigger);
-            await Until(() => ((MenuFlyout)trigger.Flyout).IsOpen);
+            await Until(() => menu.IsOpen && center.Bounds.Width > 0);
+            var restore = MenuButton("退出全屏");
             Require(restore.IsEffectivelyEnabled, "The fullscreen menu cannot restore the window.");
-            trigger.Flyout.Hide();
-            restore.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+            Click(restore);
             await Until(() => window.WindowState == WindowState.Maximized && !popup.IsOpen && toolbar.IsVisible);
             await Task.Delay(100);
             window.UpdateLayout();

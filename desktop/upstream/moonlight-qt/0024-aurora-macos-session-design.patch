@@ -1,0 +1,944 @@
+Subject: [PATCH] Reuse Aurora session chrome for macOS connection states
+
+diff --git a/app/app.pro b/app/app.pro
+--- a/app/app.pro
++++ b/app/app.pro
+@@ -390,7 +390,7 @@
+         HEADERS += cli/aurora-mac-stream.h
+         HEADERS += streaming/aurora-session-toolbar.h streaming/aurora-session-privacy.h \
+                    streaming/aurora-session-toolbar-layout.h
+-        LIBS += -framework CoreFoundation
++        LIBS += -framework CoreFoundation -framework QuartzCore
+     }
+ 
+     SOURCES += \
+diff --git a/app/cli/aurora-mac-stream.mm b/app/cli/aurora-mac-stream.mm
+--- a/app/cli/aurora-mac-stream.mm
++++ b/app/cli/aurora-mac-stream.mm
+@@ -1,10 +1,14 @@
+ #include "aurora-mac-stream.h"
+ #include "startstream.h"
+ #include "backend/computermanager.h"
++#include "streaming/aurora-session-toolbar.h"
+ #include "streaming/session.h"
+ 
+ #import <AppKit/AppKit.h>
+-
++#import <QuartzCore/QuartzCore.h>
++
++#include <algorithm>
++#include <cmath>
+ #include <QDebug>
+ #include <QGuiApplication>
+ #include <QScreen>
+@@ -13,153 +17,214 @@
+ #include <functional>
+ 
+ namespace {
++constexpr int RetryConnection = 75;
++constexpr CGFloat ProgressSize = 26;
++
+ NSString* nativeText(const QString& text)
+ {
+     return [NSString stringWithUTF8String:text.toUtf8().constData()];
+ }
+-}
++
++NSColor* rgb(unsigned color)
++{
++    return [NSColor colorWithSRGBRed:((color >> 16) & 255) / 255.0
++                               green:((color >> 8) & 255) / 255.0 blue:(color & 255) / 255.0 alpha:1];
++}
++}
++
++@interface AuroraConnectSpinner : NSView {
++    CAShapeLayer* _arc;
++}
++- (void)setRunning:(BOOL)running;
++@end
++
++@implementation AuroraConnectSpinner
++- (instancetype)init
++{
++    self = [super initWithFrame:NSMakeRect(0, 0, ProgressSize, ProgressSize)];
++    if (self) {
++        self.wantsLayer = YES;
++        auto* track = [CAShapeLayer layer];
++        _arc = [CAShapeLayer layer];
++        const auto circle = CGPathCreateWithEllipseInRect(CGRectInset(NSRectToCGRect(self.bounds), 1, 1), nullptr);
++        for (CAShapeLayer* part in @[track, _arc]) {
++            part.frame = self.bounds;
++            part.fillColor = NSColor.clearColor.CGColor;
++            part.lineWidth = 2;
++            part.path = circle;
++            [self.layer addSublayer:part];
++        }
++        CGPathRelease(circle);
++        track.strokeColor = rgb(0xd4e0f2).CGColor;
++        _arc.strokeColor = rgb(0x087cf5).CGColor;
++        _arc.strokeEnd = .26;
++        _arc.lineCap = kCALineCapRound;
++        [self setAccessibilityElement:NO];
++    }
++    return self;
++}
++
++- (void)setRunning:(BOOL)running
++{
++    self.hidden = !running;
++    if (!running || NSWorkspace.sharedWorkspace.accessibilityDisplayShouldReduceMotion) {
++        [_arc removeAnimationForKey:@"rotation"];
++    } else if (![_arc animationForKey:@"rotation"]) {
++        auto* rotate = [CABasicAnimation animationWithKeyPath:@"transform.rotation.z"];
++        rotate.toValue = @(-6.28318530718);
++        rotate.duration = .85;
++        rotate.repeatCount = HUGE_VALF;
++        [_arc addAnimation:rotate forKey:@"rotation"];
++    }
++}
++@end
+ 
+ @interface AuroraConnectWindow : NSWindowController <NSWindowDelegate> {
+ @public
+     std::function<void()> dismiss;
++    std::function<void()> retry;
+     std::function<void()> confirmQuit;
+ @private
+     NSTextField* _title;
+     NSTextView* _detail;
+     NSScrollView* _detailScroll;
+-    NSProgressIndicator* _spinner;
+-    NSButton* _dismissButton;
++    AuroraConnectSpinner* _spinner;
++    NSButton* _retryButton;
+     NSButton* _quitButton;
+ }
++- (instancetype)initWithDeviceName:(NSString*)deviceName;
+ - (void)showTitle:(NSString*)title detail:(NSString*)detail
+          progress:(BOOL)progress failure:(BOOL)failure offerQuit:(BOOL)offerQuit;
++- (void)stopProgress;
+ @end
+ 
+ @implementation AuroraConnectWindow
+-- (instancetype)init
+-{
+-    NSWindow* window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 520, 310)
+-        styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskMiniaturizable
++- (instancetype)initWithDeviceName:(NSString*)deviceName
++{
++    const auto usable = NSScreen.mainScreen.visibleFrame;
++    const CGFloat width = std::max<CGFloat>(400, std::min<CGFloat>(1000, NSWidth(usable) - 36));
++    const CGFloat height = std::max<CGFloat>(236, std::min<CGFloat>(576, NSHeight(usable) - 72));
++    auto* window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, width, height)
++        styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable |
++                  NSWindowStyleMaskMiniaturizable | NSWindowStyleMaskResizable
+         backing:NSBackingStoreBuffered defer:NO];
+     if (!window) {
+         [self release];
+         return nil;
+     }
+-    window.title = @"Aurora";
++    window.title = deviceName;
+     window.releasedWhenClosed = NO;
++    window.contentMinSize = NSMakeSize(400, 236);
+     self = [super initWithWindow:window];
+     [window release];
+     if (!self) return nil;
+ 
+     self.window.delegate = self;
++    installAuroraConnectionToolbar(self.window, deviceName, self, @selector(dismissWindow:));
+     [self.window center];
+     NSView* content = self.window.contentView;
+-
+-    NSString* brandPath = [NSBundle.mainBundle pathForResource:@"AuroraStreamBrand" ofType:@"png"];
+-    NSImage* brand = brandPath ? [[[NSImage alloc] initWithContentsOfFile:brandPath] autorelease] : nil;
+-    NSImageView* logo = [[[NSImageView alloc] initWithFrame:NSMakeRect(30, 226, 52, 52)] autorelease];
+-    logo.image = brand ?: NSApp.applicationIconImage;
+-    logo.imageScaling = NSImageScaleProportionallyUpOrDown;
+-    [content addSubview:logo];
+-
+-    NSTextField* name = [NSTextField labelWithString:@"Aurora"];
+-    name.font = [NSFont systemFontOfSize:22 weight:NSFontWeightSemibold];
+-    name.frame = NSMakeRect(94, 237, 382, 30);
+-    [content addSubview:name];
++    content.wantsLayer = YES;
++    content.layer.backgroundColor = rgb(0xf9fafc).CGColor;
+ 
+     _title = [NSTextField labelWithString:@""];
+-    _title.frame = NSMakeRect(30, 178, 460, 30);
+-    _title.font = [NSFont systemFontOfSize:19 weight:NSFontWeightSemibold];
++    _title.font = [NSFont systemFontOfSize:18 weight:NSFontWeightSemibold];
++    _title.textColor = rgb(0x19283f);
++    _title.alignment = NSTextAlignmentCenter;
+     _title.lineBreakMode = NSLineBreakByTruncatingTail;
+     [content addSubview:_title];
+ 
+-    _detailScroll = [[[NSScrollView alloc] initWithFrame:NSMakeRect(25, 75, 470, 96)] autorelease];
++    _spinner = [[[AuroraConnectSpinner alloc] init] autorelease];
++    [content addSubview:_spinner];
++
++    _detailScroll = [[[NSScrollView alloc] initWithFrame:NSZeroRect] autorelease];
+     _detailScroll.drawsBackground = NO;
+     _detailScroll.hasVerticalScroller = YES;
+     _detailScroll.autohidesScrollers = YES;
+-    _detail = [[[NSTextView alloc] initWithFrame:_detailScroll.contentView.bounds] autorelease];
++    _detail = [[[NSTextView alloc] initWithFrame:NSMakeRect(0, 0, 380, 72)] autorelease];
+     _detail.drawsBackground = NO;
+     _detail.editable = NO;
+     _detail.selectable = YES;
+     _detail.verticallyResizable = YES;
+-    _detail.textContainer.containerSize = NSMakeSize(NSWidth(_detail.bounds), CGFLOAT_MAX);
+     _detail.autoresizingMask = NSViewWidthSizable;
+     _detail.textContainer.widthTracksTextView = YES;
++    _detail.textContainer.lineFragmentPadding = 0;
+     _detailScroll.documentView = _detail;
+     [content addSubview:_detailScroll];
+ 
+-    _spinner = [[[NSProgressIndicator alloc] initWithFrame:NSMakeRect(30, 27, 22, 22)] autorelease];
+-    _spinner.style = NSProgressIndicatorStyleSpinning;
+-    _spinner.indeterminate = YES;
+-    _spinner.displayedWhenStopped = NO;
+-    [content addSubview:_spinner];
+-
+-    _dismissButton = [NSButton buttonWithTitle:@"" target:self action:@selector(dismissWindow:)];
+-    _dismissButton.keyEquivalent = @"\033";
+-    [content addSubview:_dismissButton];
+-
+-    _quitButton = [NSButton buttonWithTitle:nativeText(QStringLiteral("退出应用"))
+-                                    target:self action:@selector(quitPreviousApp:)];
++    _retryButton = [NSButton buttonWithTitle:@"重试" target:self action:@selector(retryConnection:)];
++    _retryButton.bezelStyle = NSBezelStyleRounded;
++    _retryButton.bezelColor = rgb(0x087cf5);
++    [content addSubview:_retryButton];
++    _quitButton = [NSButton buttonWithTitle:@"退出应用" target:self action:@selector(quitPreviousApp:)];
++    _quitButton.bezelStyle = NSBezelStyleRounded;
+     [content addSubview:_quitButton];
+-
+     return self;
++}
++
++- (void)layoutBody
++{
++    const NSRect area = self.window.contentView.bounds;
++    const CGFloat width = std::min<CGFloat>(420, NSWidth(area) - 40);
++    const CGFloat left = NSMidX(area) - width / 2;
++    const CGFloat middle = NSMidY(area);
++    if (!_spinner.hidden) {
++        // The ring and heading share the video's visual center.
++        _spinner.frame = NSMakeRect(NSMidX(area) - ProgressSize / 2, middle + 5, ProgressSize, ProgressSize);
++        _title.frame = NSMakeRect(left, middle - 31, width, 24);
++        return;
++    }
++
++    _title.frame = NSMakeRect(left, middle + 57, width, 24);
++    _detailScroll.frame = NSMakeRect(left, middle - 34, width, 72);
++    const auto buttonFrame = NSMakeRect(NSMidX(area) - 48, middle - 75, 96, 32);
++    _retryButton.frame = buttonFrame;
++    _quitButton.frame = buttonFrame;
+ }
+ 
+ - (void)showTitle:(NSString*)title detail:(NSString*)detail
+          progress:(BOOL)progress failure:(BOOL)failure offerQuit:(BOOL)offerQuit
+ {
++    setAuroraConnectionToolbarFailed(self.window, failure);
+     _title.stringValue = title;
+-    _title.toolTip = title;
+-    _detail.string = detail;
+-    _detail.font = [NSFont systemFontOfSize:14];
+-    _detail.textColor = NSColor.secondaryLabelColor;
++    _title.toolTip = progress ? detail : title;
++    if (progress && detail.length) {
++        [_title setAccessibilityHelp:detail];
++    } else {
++        [_title setAccessibilityHelp:nil];
++    }
++    _detailScroll.hidden = progress || !detail.length;
++    _detail.string = progress ? @"" : detail;
++    _detail.font = [NSFont systemFontOfSize:13];
++    _detail.textColor = rgb(0x526176);
++    _detail.alignment = NSTextAlignmentCenter;
+     [_detail scrollRangeToVisible:NSMakeRange(0, 0)];
+-    if (progress) {
+-        [_spinner startAnimation:nil];
+-    } else {
+-        [_spinner stopAnimation:nil];
+-    }
+-
+-    _dismissButton.title = nativeText(failure ? QStringLiteral("关闭") : QStringLiteral("取消"));
+-    _dismissButton.keyEquivalent = failure ? @"\r" : @"\033";
+-    [_dismissButton sizeToFit];
+-    [_quitButton sizeToFit];
+-    const NSSize dismissSize = _dismissButton.frame.size;
+-    const NSSize quitSize = _quitButton.frame.size;
+-    _dismissButton.frame = NSMakeRect(490 - dismissSize.width, 22, dismissSize.width, dismissSize.height);
+-    _quitButton.frame = NSMakeRect(NSMinX(_dismissButton.frame) - quitSize.width - 8, 22,
+-                                   quitSize.width, quitSize.height);
++    _retryButton.hidden = !failure;
++    _retryButton.keyEquivalent = failure ? @"\r" : @"";
+     _quitButton.hidden = !offerQuit;
+-
++    [_spinner setRunning:progress];
++    [self layoutBody];
+     if (!self.window.visible) [self.window makeKeyAndOrderFront:nil];
+ }
+ 
+-- (void)dismissWindow:(id)sender
+-{
+-    dismiss();
+-}
+-
+-- (void)quitPreviousApp:(id)sender
+-{
+-    confirmQuit();
+-}
++- (void)windowDidResize:(NSNotification*)notification { [self layoutBody]; }
++- (void)stopProgress { [_spinner setRunning:NO]; }
++- (void)dismissWindow:(id)sender { if (dismiss) dismiss(); }
++- (void)retryConnection:(id)sender { if (retry) retry(); }
++- (void)quitPreviousApp:(id)sender { if (confirmQuit) confirmQuit(); }
+ 
+ - (BOOL)windowShouldClose:(NSWindow*)sender
+ {
+-    dismiss();
++    if (dismiss) dismiss();
+     return NO;
+ }
+ @end
+ 
+-int runAuroraMacStream(QGuiApplication& app, const QString& host, const QString& appName,
+-                       StreamingPreferences* preferences)
++static int runConnectionAttempt(QGuiApplication& app, const QString& host, const QString& appName,
++                                StreamingPreferences* preferences, AuroraConnectWindow* window)
+ {
+     @autoreleasepool {
+-        app.setApplicationDisplayName(QStringLiteral("Aurora"));
+         ComputerManager manager(preferences);
+         CliStartStream::Launcher launcher(host, appName, preferences);
+-        auto* window = [[AuroraConnectWindow alloc] init];
+-        if (!window) return 1;
+ 
+         Session* session = nullptr;
+         bool cancelled = false;
+@@ -170,8 +235,7 @@
+ 
+         auto showProgress = [&](const QString& detail) {
+             if (cancelled) return;
+-            [window showTitle:nativeText(QStringLiteral("正在连接 %1").arg(host))
+-                       detail:nativeText(detail) progress:YES failure:NO offerQuit:NO];
++            [window showTitle:@"正在连接…" detail:nativeText(detail) progress:YES failure:NO offerQuit:NO];
+         };
+         auto showFailure = [&](const QString& detail) {
+             if (cancelled || failed) return;
+@@ -190,6 +254,9 @@
+             }
+             cancelled = true;
+             session->cancelAuroraConnection();
++        };
++        window->retry = [&]() {
++            if (failed && session == nullptr) app.exit(RetryConnection);
+         };
+         window->confirmQuit = [&]() {
+             quittingPreviousApp = true;
+@@ -231,6 +298,7 @@
+             });
+             QObject::connect(session, &Session::connectionStarted, &launcher, [&]() {
+                 connected = true;
++                [window stopProgress];
+                 [window.window orderOut:nil];
+             });
+             QObject::connect(session, &Session::sessionFinished, &launcher, [&](int portTestResult) {
+@@ -275,6 +343,29 @@
+ 
+         // Keep the paired host and Session alive until deferred stream cleanup has finished.
+         QThreadPool::globalInstance()->waitForDone();
++        window->dismiss = {};
++        window->confirmQuit = {};
++        window->retry = {};
++        return result;
++    }
++}
++
++int runAuroraMacStream(QGuiApplication& app, const QString& host, const QString& appName,
++                       StreamingPreferences* preferences)
++{
++    @autoreleasepool {
++        app.setApplicationDisplayName(QStringLiteral("Aurora"));
++        const auto preferred = qEnvironmentVariable("AURORA_STREAM_DEVICE_NAME").simplified();
++        auto* window = [[AuroraConnectWindow alloc] initWithDeviceName:
++            preferred.isEmpty() ? @"远程设备" : nativeText(preferred)];
++        if (!window) return 1;
++
++        int result;
++        do {
++            result = runConnectionAttempt(app, host, appName, preferences, window);
++        } while (result == RetryConnection);
++
++        [window stopProgress];
+         window.window.delegate = nil;
+         [window.window close];
+         [window release];
+diff --git a/app/streaming/aurora-session-toolbar-layout.h b/app/streaming/aurora-session-toolbar-layout.h
+--- a/app/streaming/aurora-session-toolbar-layout.h
++++ b/app/streaming/aurora-session-toolbar-layout.h
+@@ -5,28 +5,31 @@
+ struct AuroraSessionToolbarLayout {
+     int device;
+     int status;
+-    int fullscreen;
++    int display;
+     int controls;
+     int disconnect;
+     bool brand;
+ 
+-    int actionsWidth() const {
+-        return fullscreen + controls + disconnect + 8 + (brand ? 28 : 0);
+-    }
++    int contextWidth() const { return device + status + display + 14; }
++    int actionsWidth() const { return controls + disconnect + 4 + (brand ? 36 : 0); }
+ };
+ 
+ inline AuroraSessionToolbarLayout auroraSessionToolbarLayout(
+         int width, int trafficRight, int nameWidth, bool brandAvailable)
+ {
++    const bool compact = width < 760;
+     AuroraSessionToolbarLayout layout{
+-        0, width < 490 ? 25 : 94,
+-        width < 760 ? 32 : 80, width < 760 ? 32 : 94,
+-        width < 490 ? 32 : 58, brandAvailable};
+-    // Leave room for AppKit's toolbar margins and the flexible gap between groups.
+-    const int available = width - std::max(78, trafficRight) - 40 - layout.status - 8;
+-    if (layout.brand && available - layout.actionsWidth() < 64) {
++        0, width < 490 ? 25 : 94, compact ? 32 : 152,
++        compact ? 32 : 94, width < 490 ? 32 : 58, brandAvailable};
++
++    // Leave breathing room for the native traffic lights and toolbar margins.
++    const int content = width - std::max(78, trafficRight) - 40;
++    if (layout.brand && content - layout.contextWidth() - layout.actionsWidth() < 48) {
+         layout.brand = false;
+     }
+-    layout.device = std::max(36, std::min({nameWidth, 240, available - layout.actionsWidth()}));
++    if (content - layout.contextWidth() - layout.actionsWidth() < 40) {
++        layout.display = 32;
++    }
++    layout.device = std::max(36, std::min({nameWidth, 240, content - layout.contextWidth() - layout.actionsWidth()}));
+     return layout;
+ }
+diff --git a/app/streaming/aurora-session-toolbar.h b/app/streaming/aurora-session-toolbar.h
+--- a/app/streaming/aurora-session-toolbar.h
++++ b/app/streaming/aurora-session-toolbar.h
+@@ -21,3 +21,11 @@
+ void prepareAuroraSessionToolbarForFullscreenChange(SDL_Window* window, bool enteringFullscreen);
+ void closeAuroraFullscreenControls(SDL_Window* window);
+ void setAuroraSessionToolbarConnectionQuality(SDL_Window* window, bool poor);
++
++#ifdef __OBJC__
++  #import <objc/objc.h>
++@class NSWindow;
++@class NSString;
++void installAuroraConnectionToolbar(NSWindow* window, NSString* deviceName, id cancelTarget, SEL cancelAction);
++void setAuroraConnectionToolbarFailed(NSWindow* window, bool failed);
++#endif
+diff --git a/app/streaming/aurora-session-toolbar.mm b/app/streaming/aurora-session-toolbar.mm
+--- a/app/streaming/aurora-session-toolbar.mm
++++ b/app/streaming/aurora-session-toolbar.mm
+@@ -12,7 +12,9 @@
+ #include <cmath>
+ 
+ namespace {
+-    constexpr CGFloat GroupHeight = 36;
++    constexpr CGFloat GroupHeight = 44;
++    constexpr CGFloat DisplayTabHeight = 37;
++    constexpr CGFloat BrandSize = 28;
+     constexpr CGFloat ButtonHeight = 32;
+     constexpr CGFloat FloatingButtonSize = 40;
+     constexpr CGFloat FloatingButtonInset = 14;
+@@ -80,12 +82,12 @@
+ @end
+ 
+ @interface AuroraToolbarButton : NSButton {
+-    NSString* _label;
++    NSImageView* _glyph;
++    NSTextField* _caption;
+     NSTrackingArea* _tracking;
+     BOOL _hover;
+     BOOL _warning;
+     BOOL _menuOpen;
+-    BOOL _configuredLabel;
+     BOOL _showsLabel;
+ }
+ - (instancetype)initWithLabel:(NSString*)label symbol:(NSString*)symbol
+@@ -100,36 +102,69 @@
+ {
+     self = [super initWithFrame:NSMakeRect(0, 0, ButtonHeight, ButtonHeight)];
+     if (self) {
+-        _label = [label copy];
+         _warning = warning;
++        // The inherited AppKit cell only handles activation and keyboard focus.
++        // A single content group positions the icon and text without cell padding.
+         self.bordered = NO;
++        self.title = @"";
+         self.target = target;
+         self.action = action;
+         self.focusRingType = NSFocusRingTypeExterior;
+-        self.imageScaling = NSImageScaleNone;
+-        self.contentTintColor = rgb(0x19283f);
+         self.toolTip = label;
+         [self setAccessibilityLabel:label];
++
++        _glyph = [[[NSImageView alloc] initWithFrame:NSZeroRect] autorelease];
++        _glyph.imageScaling = NSImageScaleProportionallyDown;
+         NSImage* image = [NSImage imageWithSystemSymbolName:symbol accessibilityDescription:nil];
+-        self.image = [image imageWithSymbolConfiguration:[NSImageSymbolConfiguration
+-            configurationWithPointSize:16 weight:NSFontWeightRegular]];
++        _glyph.image = [image imageWithSymbolConfiguration:[NSImageSymbolConfiguration
++            configurationWithPointSize:15 weight:NSFontWeightRegular]];
++        [_glyph setAccessibilityElement:NO];
++        [self addSubview:_glyph];
++
++        _caption = [NSTextField labelWithString:label];
++        _caption.font = [NSFont systemFontOfSize:12];
++        _caption.lineBreakMode = NSLineBreakByTruncatingTail;
++        [_caption setAccessibilityElement:NO];
++        [self addSubview:_caption];
++        [self setEnabled:YES];
+         [self showLabel:YES];
+     }
+     return self;
+ }
+ 
++- (void)setEnabled:(BOOL)enabled
++{
++    [super setEnabled:enabled];
++    NSColor* ink = rgb(enabled ? 0x19283f : 0x9ba7b7);
++    _glyph.contentTintColor = ink;
++    _caption.textColor = ink;
++}
++
+ - (void)showLabel:(BOOL)show
+ {
+-    if (_configuredLabel && _showsLabel == show) return;
+-    _configuredLabel = YES;
+     _showsLabel = show;
+-    self.imagePosition = show ? NSImageLeft : NSImageOnly;
+-    NSAttributedString* title = [[NSAttributedString alloc] initWithString:show ? _label : @""
+-        attributes:@{NSFontAttributeName: [NSFont systemFontOfSize:12],
+-                     NSForegroundColorAttributeName: rgb(0x19283f)}];
+-    self.attributedTitle = title;
+-    [title release];
+-}
++    _caption.hidden = !show;
++    self.needsLayout = YES;
++}
++
++- (void)layout
++{
++    [super layout];
++    constexpr CGFloat iconSize = 16;
++    constexpr CGFloat spacing = 5;
++    const NSSize captionSize = _caption.intrinsicContentSize;
++    const CGFloat maxLabelWidth = std::max<CGFloat>(0, NSWidth(self.bounds) - iconSize - spacing - 4);
++    const CGFloat labelWidth = _showsLabel ? std::min(std::ceil(captionSize.width), maxLabelWidth) : 0;
++    const CGFloat rowWidth = iconSize + (labelWidth > 0 ? spacing + labelWidth : 0);
++    const CGFloat left = std::floor((NSWidth(self.bounds) - rowWidth) / 2);
++    const CGFloat middle = NSMidY(self.bounds);
++    _glyph.frame = NSMakeRect(left, middle - iconSize / 2, iconSize, iconSize);
++    const CGFloat captionHeight = std::ceil(captionSize.height);
++    _caption.frame = NSMakeRect(left + iconSize + spacing, std::floor(middle - captionHeight / 2),
++                                labelWidth, captionHeight);
++}
++
++- (NSView*)hitTest:(NSPoint)point { return [super hitTest:point] ? self : nil; }
+ 
+ - (void)updateTrackingAreas
+ {
+@@ -190,7 +225,6 @@
+ {
+     if (_tracking) [self removeTrackingArea:_tracking];
+     [_tracking release];
+-    [_label release];
+     [super dealloc];
+ }
+ @end
+@@ -221,15 +255,86 @@
+ @interface AuroraStatusDot : NSView {
+ @public
+     BOOL poor;
++    BOOL connecting;
++    BOOL failed;
+ }
+ @end
+ 
+ @implementation AuroraStatusDot
+ - (void)drawRect:(NSRect)dirtyRect
+ {
+-    [rgb(poor ? 0xbf8219 : 0x244fc5) setFill];
++    if (connecting) {
++        const NSRect pathBounds = NSInsetRect(self.bounds, .5, .5);
++        [rgb(0xd4e0f2) setStroke];
++        [[NSBezierPath bezierPathWithOvalInRect:pathBounds] stroke];
++        auto* arc = [NSBezierPath bezierPath];
++        [arc appendBezierPathWithArcWithCenter:NSMakePoint(NSMidX(pathBounds), NSMidY(pathBounds))
++                                       radius:NSWidth(pathBounds) / 2 startAngle:35 endAngle:125];
++        [rgb(0x087cf5) setStroke];
++        [arc stroke];
++        return;
++    }
++    [rgb(failed ? 0xad384e : poor ? 0xbf8219 : 0x244fc5) setFill];
+     [[NSBezierPath bezierPathWithOvalInRect:self.bounds] fill];
+ }
++- (BOOL)mouseDownCanMoveWindow { return YES; }
++@end
++
++@interface AuroraDisplayTab : NSView {
++    NSImageView* _glyph;
++    NSTextField* _caption;
++}
++- (void)showLabel:(BOOL)show;
++@end
++
++@implementation AuroraDisplayTab
++- (instancetype)init
++{
++    self = [super initWithFrame:NSZeroRect];
++    if (self) {
++        _glyph = [[[NSImageView alloc] initWithFrame:NSZeroRect] autorelease];
++        _glyph.imageScaling = NSImageScaleProportionallyDown;
++        _glyph.image = [[NSImage imageWithSystemSymbolName:@"display" accessibilityDescription:nil]
++            imageWithSymbolConfiguration:[NSImageSymbolConfiguration configurationWithPointSize:14 weight:NSFontWeightRegular]];
++        _glyph.contentTintColor = rgb(0x19283f);
++        [_glyph setAccessibilityElement:NO];
++        [self addSubview:_glyph];
++        _caption = [NSTextField labelWithString:@"显示器 1"];
++        _caption.font = [NSFont systemFontOfSize:12];
++        _caption.textColor = rgb(0x19283f);
++        [_caption setAccessibilityElement:NO];
++        [self addSubview:_caption];
++        [self setAccessibilityElement:YES];
++        [self setAccessibilityRole:NSAccessibilityStaticTextRole];
++        [self setAccessibilityLabel:@"显示器 1"];
++    }
++    return self;
++}
++
++- (void)showLabel:(BOOL)show
++{
++    _caption.hidden = !show;
++    self.needsLayout = YES;
++}
++
++- (void)layout
++{
++    [super layout];
++    const CGFloat middle = NSMidY(self.bounds);
++    const CGFloat left = _caption.hidden ? std::floor((NSWidth(self.bounds) - 14) / 2) : 11;
++    _glyph.frame = NSMakeRect(left, middle - 7, 14, 14);
++    const CGFloat height = std::ceil(_caption.intrinsicContentSize.height);
++    _caption.frame = NSMakeRect(left + 20, std::floor(middle - height / 2),
++                                std::max<CGFloat>(0, NSWidth(self.bounds) - left - 26), height);
++}
++
++- (void)drawRect:(NSRect)dirtyRect
++{
++    [rgb(0xffffff) setFill];
++    [[NSBezierPath bezierPathWithRoundedRect:self.bounds xRadius:10 yRadius:10] fill];
++    NSRectFill(NSMakeRect(0, 0, NSWidth(self.bounds), 10));
++}
++
+ - (BOOL)mouseDownCanMoveWindow { return YES; }
+ @end
+ 
+@@ -258,7 +363,8 @@
+     NSMenuItem* _fullscreenDetailsItem;
+     AuroraStatusDot* _dot;
+     NSTextField* _statusText;
+-    AuroraToolbarButton* _fullscreen;
++    AuroraDisplayTab* _display;
++    BOOL _connectionWindow;
+     AuroraToolbarButton* _controls;
+     AuroraToolbarButton* _disconnect;
+     NSImageView* _brand;
+@@ -269,7 +375,9 @@
+     BOOL _nativeFullscreen;
+     NSSize _videoAspect;
+ }
+-- (instancetype)initWithWindow:(NSWindow*)window deviceName:(NSString*)name;
++- (instancetype)initWithWindow:(NSWindow*)window deviceName:(NSString*)name connecting:(BOOL)connecting;
++- (void)setConnectionFailed:(BOOL)failed cancelTarget:(id)target cancelAction:(SEL)action;
++- (void)updateConnectionResult:(BOOL)failed;
+ - (AuroraToolbarButton*)addButton:(NSString*)title symbol:(NSString*)symbol action:(SEL)action
+                             code:(AuroraToolbarAction)code warning:(BOOL)warning;
+ - (void)resizeItems;
+@@ -291,12 +399,13 @@
+ }
+ 
+ @implementation AuroraSessionToolbarController
+-- (instancetype)initWithWindow:(NSWindow*)window deviceName:(NSString*)name
++- (instancetype)initWithWindow:(NSWindow*)window deviceName:(NSString*)name connecting:(BOOL)connecting
+ {
+     self = [super init];
+     if (!self) return nil;
+ 
+     _window = window;
++    _connectionWindow = connecting;
+     _context = [[AuroraToolbarGroup alloc] init];
+     _actions = [[AuroraToolbarGroup alloc] init];
+     _device = [NSTextField labelWithString:name];
+@@ -308,6 +417,8 @@
+ 
+     _status = [[[AuroraConnectionStatus alloc] initWithFrame:NSZeroRect] autorelease];
+     _status.bordered = NO;
++    _status.title = @"";
++    _status.image = nil;
+     _status.target = self;
+     _status.action = @selector(showConnectionDetails:);
+     _status.toolTip = @"连接详情";
+@@ -324,12 +435,15 @@
+     _statusText.font = [NSFont systemFontOfSize:12];
+     [_status addSubview:_statusText];
+ 
+-    _fullscreen = [self addButton:@"全屏" symbol:@"viewfinder" action:@selector(sendButtonAction:)
+-                              code:AuroraToolbarAction::ToggleFullscreen warning:NO];
++    _display = [[[AuroraDisplayTab alloc] init] autorelease];
++    [_context addSubview:_display];
++
+     _controls = [self addButton:@"控制中心" symbol:@"slider.horizontal.3" action:@selector(showControls:)
+                             code:AuroraToolbarAction::ReleaseMouse warning:NO];
+-    _disconnect = [self addButton:@"断开" symbol:@"rectangle.portrait.and.arrow.right" action:@selector(sendButtonAction:)
+-                               code:AuroraToolbarAction::Disconnect warning:YES];
++    _disconnect = [self addButton:connecting ? @"取消" : @"断开"
++                           symbol:connecting ? @"xmark" : @"rectangle.portrait.and.arrow.right"
++                           action:@selector(sendButtonAction:)
++                             code:AuroraToolbarAction::Disconnect warning:!connecting];
+ 
+     NSString* brandPath = [NSBundle.mainBundle pathForResource:@"AuroraStreamBrand" ofType:@"png"];
+     NSImage* brand = brandPath ? [[[NSImage alloc] initWithContentsOfFile:brandPath] autorelease] : nil;
+@@ -362,10 +476,9 @@
+     release.tag = static_cast<NSInteger>(AuroraToolbarAction::ReleaseMouse);
+     release.keyEquivalentModifierMask = NSEventModifierFlagControl | NSEventModifierFlagOption | NSEventModifierFlagShift;
+     [_controlMenu addItem:[NSMenuItem separatorItem]];
+-    _exitFullscreen = [_controlMenu addItemWithTitle:@"退出全屏" action:@selector(sendMenuAction:) keyEquivalent:@""];
++    _exitFullscreen = [_controlMenu addItemWithTitle:@"全屏" action:@selector(sendMenuAction:) keyEquivalent:@""];
+     _exitFullscreen.target = self;
+     _exitFullscreen.tag = static_cast<NSInteger>(AuroraToolbarAction::ToggleFullscreen);
+-    _exitFullscreen.hidden = YES;
+     NSMenuItem* disconnect = [_controlMenu addItemWithTitle:@"断开连接" action:@selector(sendMenuAction:) keyEquivalent:@""];
+     disconnect.target = self;
+     disconnect.tag = static_cast<NSInteger>(AuroraToolbarAction::Disconnect);
+@@ -394,26 +507,67 @@
+ {
+     NSButton* zoom = [_window standardWindowButton:NSWindowZoomButton];
+     const auto trafficEdge = zoom ? NSMaxX([zoom convertRect:zoom.bounds toView:nil]) : 0;
++    const NSSize nameInk = [_device.stringValue sizeWithAttributes:@{NSFontAttributeName: _device.font}];
+     const auto layout = auroraSessionToolbarLayout(
+         static_cast<int>(NSWidth(_window.frame)), static_cast<int>(std::ceil(trafficEdge)),
+-        static_cast<int>(std::ceil(_device.intrinsicContentSize.width)) + 2, _brand != nil);
+-    [_context resizeToWidth:layout.device + layout.status + 8];
++        static_cast<int>(std::ceil(nameInk.width)) + 4, _brand != nil);
++    [_context resizeToWidth:layout.contextWidth()];
+     [_actions resizeToWidth:layout.actionsWidth()];
+ 
+-    _device.frame = NSMakeRect(0, (GroupHeight - 20) / 2, layout.device, 20);
+-    _status.frame = NSMakeRect(layout.device + 8, 4, layout.status, 28);
+-    _statusText.hidden = layout.status == 25;
+-    _dot.frame = NSMakeRect(_statusText.hidden ? 3 : 6, 11, 6, 6);
+-    _statusText.frame = NSMakeRect(19, 6, layout.status - 33, 16);
+-    _statusChevron.frame = NSMakeRect(layout.status - 12, 8, 9, 12);
+-    [_fullscreen showLabel:layout.fullscreen > 32];
++    const CGFloat middle = GroupHeight / 2;
++    const CGFloat deviceHeight = std::ceil(_device.intrinsicContentSize.height);
++    _device.frame = NSMakeRect(0, std::floor(middle - deviceHeight / 2), layout.device, deviceHeight);
++    _status.frame = NSMakeRect(layout.device + 8, middle - 14, layout.status, 28);
++    const BOOL compactStatus = layout.status == 25;
++    const BOOL arrow = !_connectionWindow;
++    _statusText.hidden = compactStatus;
++    _statusChevron.hidden = !arrow;
++    const CGFloat dot = _dot->connecting ? 9 : 6;
++    const CGFloat leading = compactStatus && !arrow ? (layout.status - dot) / 2 : 4;
++    _dot.frame = NSMakeRect(leading, 14 - dot / 2, dot, dot);
++    const CGFloat textX = NSMaxX(_dot.frame) + 6;
++    const CGFloat textHeight = std::ceil(_statusText.intrinsicContentSize.height);
++    const CGFloat textWidth = std::min(std::ceil(_statusText.intrinsicContentSize.width),
++        std::max<CGFloat>(0, layout.status - textX - (arrow ? 15 : 0)));
++    _statusText.frame = NSMakeRect(textX, std::floor(14 - textHeight / 2), textWidth, textHeight);
++    const CGFloat arrowX = compactStatus ? layout.status - 10 : NSMaxX(_statusText.frame) + 5;
++    _statusChevron.frame = NSMakeRect(arrowX, 8, 9, 12);
++
++    [_display showLabel:layout.display > 32];
++    _display.frame = NSMakeRect(NSMaxX(_status.frame) + 6, 0, layout.display, DisplayTabHeight);
++
+     [_controls showLabel:layout.controls > 32];
+     [_disconnect showLabel:layout.disconnect > 32];
+-    _fullscreen.frame = NSMakeRect(0, 2, layout.fullscreen, ButtonHeight);
+-    _controls.frame = NSMakeRect(layout.fullscreen + 4, 2, layout.controls, ButtonHeight);
+-    _disconnect.frame = NSMakeRect(layout.fullscreen + layout.controls + 8, 2, layout.disconnect, ButtonHeight);
++    _controls.frame = NSMakeRect(0, middle - ButtonHeight / 2, layout.controls, ButtonHeight);
++    _disconnect.frame = NSMakeRect(layout.controls + 4, middle - ButtonHeight / 2, layout.disconnect, ButtonHeight);
+     _brand.hidden = !layout.brand;
+-    _brand.frame = NSMakeRect(NSMaxX(_disconnect.frame) + 8, 8, 20, 20);
++    _brand.frame = NSMakeRect(NSMaxX(_disconnect.frame) + 8, middle - BrandSize / 2,
++                              BrandSize, BrandSize);
++}
++
++- (void)updateConnectionResult:(BOOL)failed
++{
++    [self setConnectionFailed:failed cancelTarget:_disconnect.target cancelAction:_disconnect.action];
++}
++
++- (void)setConnectionFailed:(BOOL)failed cancelTarget:(id)target cancelAction:(SEL)action
++{
++    _controls.enabled = NO;
++    _status.enabled = NO;
++    _status.toolTip = nil;
++    _dot->connecting = !failed;
++    _dot->failed = failed;
++    _dot.needsDisplay = YES;
++    NSString* text = failed ? @"连接失败" : @"连接中";
++    _statusText.stringValue = text;
++    _statusText.textColor = rgb(failed ? 0xad384e : 0x52647b);
++    [_status setAccessibilityLabel:text];
++    [_status setAccessibilityRole:NSAccessibilityStaticTextRole];
++    _disconnect.target = target;
++    _disconnect.action = action;
++    _disconnect.keyEquivalent = failed ? @"" : @"\033";
++    _disconnect.hidden = failed;
++    [self resizeItems];
+ }
+ 
+ - (void)showIfWindowed
+@@ -433,7 +587,7 @@
+ 
+ - (void)showFullscreenControls:(BOOL)visible
+ {
+-    _exitFullscreen.hidden = !visible;
++    _exitFullscreen.title = visible ? @"退出全屏" : @"全屏";
+     _fullscreenDetailsItem.hidden = !visible;
+     if (!visible) {
+         if (_floatingPanel.parentWindow == _window) [_window removeChildWindow:_floatingPanel];
+@@ -529,6 +683,7 @@
+     _statusText.stringValue = text;
+     _statusText.textColor = rgb(poor ? 0x946317 : 0x52647b);
+     [_status setAccessibilityLabel:[text stringByAppendingString:@"，查看连接详情"]];
++    [self resizeItems];
+ }
+ 
+ - (void)sendButtonAction:(NSButton*)sender
+@@ -731,43 +886,10 @@
+ }
+ @end
+ 
+-bool installAuroraSessionToolbar(SDL_Window* window, const QString& deviceName, bool connectionPoor,
+-                                 const std::shared_ptr<AuroraSessionPrivacy>& privacy, int videoWidth, int videoHeight)
+-{
+-    if (![NSThread isMainThread] || !window) return false;
+-    NSWindow* native = nativeWindow(window);
+-    if (!native) return false;
+-
+-    const BOOL fullscreen = (SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN) ||
+-                            (native.styleMask & NSWindowStyleMaskFullScreen);
+-    if (!fullscreen && (!(native.styleMask & NSWindowStyleMaskTitled) ||
+-                        (native.styleMask & NSWindowStyleMaskFullSizeContentView))) return false;
+-
+-    auto* controller = auroraToolbar(native);
+-    if (!controller) {
+-        const auto utf8 = deviceName.toUtf8();
+-        NSString* name = [NSString stringWithUTF8String:utf8.constData()];
+-        controller = [[AuroraSessionToolbarController alloc] initWithWindow:native
+-            deviceName:name.length ? name : @"远程设备"];
+-        controller->streamWindowId = SDL_GetWindowID(window);
+-        controller->privacy = privacy;
+-        objc_setAssociatedObject(native, &ControllerKey, controller, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+-        [controller release];
+-        [controller updateConnectionQuality:connectionPoor];
+-        [controller updatePrivacyMenu];
+-    }
+-
+-    [controller setVideoWidth:videoWidth height:videoHeight fullscreen:fullscreen];
+-    [controller showFullscreenControls:fullscreen];
+-    if (fullscreen) return false;
+-    if (native.toolbar.delegate == controller) {
+-        [controller showIfWindowed];
+-        return true;
+-    }
+-
+-    // AppKit lays out the real traffic lights and the titlebar. Keep SDL's
+-    // content view as-is, below the bar, with the same video content size.
+-    const NSSize videoSize = native.contentView.bounds.size;
++static void installSessionToolbar(NSWindow* native, AuroraSessionToolbarController* controller)
++{
++    // AppKit owns the traffic lights and titlebar. Preserve the content geometry.
++    const NSSize contentSize = native.contentView.bounds.size;
+     native.titleVisibility = NSWindowTitleHidden;
+     native.toolbarStyle = NSWindowToolbarStyleUnifiedCompact;
+     native.titlebarSeparatorStyle = NSTitlebarSeparatorStyleNone;
+@@ -783,8 +905,8 @@
+     native.toolbar = toolbar;
+     [toolbar release];
+ 
+-    if (!NSEqualSizes(native.contentView.bounds.size, videoSize)) {
+-        [native setContentSize:videoSize];
++    if (!NSEqualSizes(native.contentView.bounds.size, contentSize)) {
++        [native setContentSize:contentSize];
+     }
+     NSSize minimum = native.contentMinSize;
+     if (minimum.width < 400) {
+@@ -792,6 +914,60 @@
+         native.contentMinSize = minimum;
+     }
+     [controller resizeItems];
++}
++
++void installAuroraConnectionToolbar(NSWindow* window, NSString* deviceName, id cancelTarget, SEL cancelAction)
++{
++    auto* controller = [[AuroraSessionToolbarController alloc] initWithWindow:window
++        deviceName:deviceName connecting:YES];
++    objc_setAssociatedObject(window, &ControllerKey, controller, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
++    [controller setConnectionFailed:NO cancelTarget:cancelTarget cancelAction:cancelAction];
++    installSessionToolbar(window, controller);
++    [controller release];
++}
++
++void setAuroraConnectionToolbarFailed(NSWindow* window, bool failed)
++{
++    auto* controller = auroraToolbar(window);
++    if (controller) [controller updateConnectionResult:failed];
++}
++
++bool installAuroraSessionToolbar(SDL_Window* window, const QString& deviceName, bool connectionPoor,
++                                 const std::shared_ptr<AuroraSessionPrivacy>& privacy, int videoWidth, int videoHeight)
++{
++    if (![NSThread isMainThread] || !window) return false;
++    NSWindow* native = nativeWindow(window);
++    if (!native) return false;
++
++    const BOOL fullscreen = (SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN) ||
++                            (native.styleMask & NSWindowStyleMaskFullScreen);
++    if (!fullscreen && (!(native.styleMask & NSWindowStyleMaskTitled) ||
++                        (native.styleMask & NSWindowStyleMaskFullSizeContentView))) return false;
++
++    auto* controller = auroraToolbar(native);
++    if (!controller) {
++        const auto preferred = qEnvironmentVariable("AURORA_STREAM_DEVICE_NAME").simplified();
++        const auto utf8 = (preferred.isEmpty() ? deviceName : preferred).toUtf8();
++        NSString* name = [NSString stringWithUTF8String:utf8.constData()];
++        controller = [[AuroraSessionToolbarController alloc] initWithWindow:native
++            deviceName:name.length ? name : @"远程设备" connecting:NO];
++        controller->streamWindowId = SDL_GetWindowID(window);
++        controller->privacy = privacy;
++        objc_setAssociatedObject(native, &ControllerKey, controller, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
++        [controller release];
++        [controller updateConnectionQuality:connectionPoor];
++        [controller updatePrivacyMenu];
++    }
++
++    [controller setVideoWidth:videoWidth height:videoHeight fullscreen:fullscreen];
++    [controller showFullscreenControls:fullscreen];
++    if (fullscreen) return false;
++    if (native.toolbar.delegate == controller) {
++        [controller showIfWindowed];
++        return true;
++    }
++
++    installSessionToolbar(native, controller);
+     if (privacy && !privacy->lastStatusCheck.isValid()) {
+         [controller requestPrivacy:AuroraPrivacyOperation::Status];
+     }

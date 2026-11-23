@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Text.Json;
+using System.Threading;
 
 namespace Aurora;
 
@@ -12,16 +13,48 @@ internal static class StreamPreferences
     internal const string FollowHostResolution = "host";
 
     private static readonly StreamPreferenceStore Store = new(GetSettingsPath());
+    private static readonly string[] SessionControlOptions =
+    {
+        "resolution", "fps", "bitrate", "video-codec", "hdr", "performance-overlay",
+        "audio-config", "audio-on-host", "mute-on-focus-loss",
+        "absolute-mouse", "mouse-buttons-swap", "reverse-scroll-direction"
+    };
 
+    private static int revision;
+
+    internal static int Revision => Volatile.Read(ref revision);
     internal static string Get(string option) => Store.Get(option);
-    internal static bool Set(string option, string value) => Store.Set(option, value);
+    internal static bool Set(string option, string value) => RecordChange(Store.Set(option, value));
     internal static bool GetToggle(string option) => Store.GetToggle(option);
-    internal static bool SetToggle(string option, bool value) => Store.SetToggle(option, value);
+    internal static bool SetToggle(string option, bool value) => RecordChange(Store.SetToggle(option, value));
     internal static int GetBitrate() => Store.GetBitrate();
-    internal static bool SetBitrate(int kbps) => Store.SetBitrate(kbps);
-    internal static bool Reset() => Store.Reset();
+    internal static bool SetBitrate(int kbps) => RecordChange(Store.SetBitrate(kbps));
+    internal static bool Reset() => RecordChange(Store.Reset());
+
+    private static bool RecordChange(bool saved)
+    {
+        Interlocked.Increment(ref revision);
+        return saved;
+    }
     internal static string[] Arguments(bool useViewerDefault = false, bool useBundledDefaults = false) =>
         Store.Arguments(useViewerDefault, useBundledDefaults);
+
+    internal static string SessionControlSnapshot()
+    {
+        var values = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var option in SessionControlOptions) values[option] = Get(option);
+        return JsonSerializer.Serialize(values);
+    }
+
+    internal static bool ReceiveSessionControlChange(string line)
+    {
+        const string Prefix = "aurora-stream-setting/1\t";
+        if (line == null || line.Length > 128 || !line.StartsWith(Prefix, StringComparison.Ordinal)) return true;
+        var parts = line[Prefix.Length..].Split('\t');
+        if (parts.Length != 2 || Array.IndexOf(SessionControlOptions, parts[0]) < 0 ||
+            !StreamPreferenceStore.IsValid(parts[0], parts[1])) return true;
+        return Set(parts[0], parts[1]);
+    }
 
     private static string GetSettingsPath()
     {
@@ -154,7 +187,7 @@ internal sealed class StreamPreferenceStore
         return arguments.ToArray();
     }
 
-    private static bool IsValid(string option, string value)
+    internal static bool IsValid(string option, string value)
     {
         if (option == "bitrate")
             return int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out int kbps)

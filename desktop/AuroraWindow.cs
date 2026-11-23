@@ -154,7 +154,7 @@ public sealed partial class AuroraWindow : Window
         };
         Activated += (_, _) =>
         {
-            settings?.RefreshStartup();
+            settings?.Refresh();
             _ = RefreshWallpapers();
         };
         Deactivated += (_, _) => wallpaperRefresh?.Cancel();
@@ -900,7 +900,7 @@ public sealed partial class AuroraWindow : Window
             }
             else
             {
-                exitCode = await LaunchStandalone(runtime, stream.Route, source, token);
+                exitCode = await LaunchStandalone(runtime, stream.Route, source, device.Name, token);
             }
             if (exitCode == 0 && previewPath != null &&
                 (!device.TailnetVisible || sessionNetwork == (network?.Owner, network?.LocalId)))
@@ -927,11 +927,24 @@ public sealed partial class AuroraWindow : Window
         }
     }
 
-    private async Task<int> LaunchStandalone(string runtime, StreamHost route, string source, CancellationToken token)
+    private async Task<int> LaunchStandalone(string runtime, StreamHost route, string source, string deviceName, CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
-        using var process = Upstream.LaunchMoonlight(runtime, route, pair: false);
+        using var process = Upstream.LaunchMoonlight(runtime, route, pair: false, deviceName: deviceName);
         SetFeedback(source + "连接：正在打开串流窗口。");
+        if (process.StartInfo.RedirectStandardOutput)
+        {
+            process.OutputDataReceived += (_, data) =>
+            {
+                if (!StreamPreferences.ReceiveSessionControlChange(data.Data))
+                    Dispatcher.UIThread.Post(() =>
+                    {
+                        if (!closed) SetFeedback("串流设置暂时无法写入磁盘。");
+                    });
+            };
+            process.BeginOutputReadLine();
+            process.BeginErrorReadLine();
+        }
         try
         {
             await process.WaitForExitAsync(token);
@@ -1149,7 +1162,7 @@ public sealed partial class AuroraWindow : Window
         if (SettingsPage.IsVisible)
         {
             if (settings == null) SettingsPage.Content = settings = new StreamSettingsPage();
-            else settings.RefreshStartup();
+            else settings.Refresh();
         }
         tailscalePage?.SetActive(TailnetPage.IsVisible);
         UpdatePageHeader();

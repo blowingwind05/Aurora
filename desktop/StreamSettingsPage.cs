@@ -30,6 +30,7 @@ internal sealed class StreamSettingsPage : UserControl
     };
     private Control[] panels;
     private Action refreshStartup;
+    private int preferencesRevision;
 
     public StreamSettingsPage()
     {
@@ -115,6 +116,7 @@ internal sealed class StreamSettingsPage : UserControl
 
     private void BuildPanels(bool trayChangeFailed = false, bool sleepChangeFailed = false)
     {
+        preferencesRevision = StreamPreferences.Revision;
         var bitrate = Bitrate(out var refreshBitrate);
         panels = new[] { Quality(refreshBitrate), Audio(), General(trayChangeFailed, sleepChangeFailed), Advanced(bitrate) };
     }
@@ -193,7 +195,15 @@ internal sealed class StreamSettingsPage : UserControl
             !StreamPreferences.GetToggle("audio-on-host"),
             value => ShowSaveResult(StreamPreferences.SetToggle("audio-on-host", !value))), stretchEditor: false)));
 
-    internal void RefreshStartup() => refreshStartup?.Invoke();
+    internal void Refresh()
+    {
+        if (preferencesRevision != StreamPreferences.Revision)
+        {
+            BuildPanels();
+            Select(Array.FindIndex(tabs, tab => tab.IsChecked == true));
+        }
+        refreshStartup?.Invoke();
+    }
 
     private Control General(bool trayChangeFailed, bool sleepChangeFailed)
     {

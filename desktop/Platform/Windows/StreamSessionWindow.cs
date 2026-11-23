@@ -21,7 +21,6 @@ namespace Aurora;
 internal sealed class StreamSessionWindow : Window
 {
     private const int AttachmentFailed = 74;
-    private const string MaximizeIcon = "M8 3H5a2 2 0 0 0-2 2v3 M16 3h3a2 2 0 0 1 2 2v3 M21 16v3a2 2 0 0 1-2 2h-3 M8 21H5a2 2 0 0 1-2-2v-3";
     private const string DisconnectIcon = "M10 17l5-5-5-5 M15 12H3 M12 3h6a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-6";
     private readonly string id = Guid.NewGuid().ToString("N");
     private CancellationTokenSource stop;
@@ -36,6 +35,8 @@ internal sealed class StreamSessionWindow : Window
         HorizontalContentAlignment = HorizontalAlignment.Center, VerticalContentAlignment = VerticalAlignment.Center,
         Background = Brushes.Transparent, IsHitTestVisible = false, Focusable = false };
     private readonly Control statusArrow;
+    private readonly Border displayTab;
+    private readonly TextBlock displayCaption;
     private readonly Flyout connectionFlyout;
     private readonly StreamConnectionDetails connectionDetails = new();
     private readonly TextBlock stageTitle = new()
@@ -53,21 +54,16 @@ internal sealed class StreamSessionWindow : Window
         Content = "重试", Classes = { "action", "accent" }, HorizontalAlignment = HorizontalAlignment.Center, IsVisible = false
     };
     private readonly Border stage;
-    private readonly Button fullscreen = new() { Height = 32, Classes = { "icon", "streamTool" } };
-    private readonly Button controls = new() { Height = 32, Classes = { "icon", "streamTool" } };
-    private readonly Button disconnect = new() { Height = 32, Classes = { "icon", "streamTool", "streamDisconnect" } };
-    private readonly TextBlock fullscreenText = new() { FontSize = 12, VerticalAlignment = VerticalAlignment.Center };
+    private readonly Button controls = new() { Height = 32, VerticalAlignment = VerticalAlignment.Center, Classes = { "icon", "streamTool" } };
+    private readonly Button disconnect = new() { Height = 32, VerticalAlignment = VerticalAlignment.Center, Classes = { "icon", "streamTool", "streamDisconnect" } };
     private readonly TextBlock controlsText = new() { Text = "控制中心", FontSize = 12, VerticalAlignment = VerticalAlignment.Center };
     private readonly TextBlock disconnectText = new() { FontSize = 12, VerticalAlignment = VerticalAlignment.Center };
     private readonly Button maximize;
     private readonly Grid toolbar;
-    private readonly Grid disconnectSlot = new();
+    private readonly Grid disconnectSlot = new() { VerticalAlignment = VerticalAlignment.Center };
     private readonly Popup fullscreenControls;
-    private readonly MenuFlyout controlMenu;
-    private readonly MenuItem fullscreenItem = new();
-    private readonly MenuItem fullscreenDetailsItem = new() { Header = "连接详情", IsVisible = false };
-    private readonly MenuItem privacyStatus = new() { IsEnabled = false };
-    private readonly MenuItem privacyAction = new() { StaysOpenOnClick = true };
+    private readonly Flyout controlMenu;
+    private readonly WindowsStreamControlCenter controlCenter;
     private Func<SessionPrivacyCommand, Task<SessionPrivacyState>> privacyRequest;
     private SessionPrivacyState? privacyState;
     private bool privacyBusy;
@@ -115,58 +111,83 @@ internal sealed class StreamSessionWindow : Window
         connectionFlyout = new Flyout { Placement = PlacementMode.BottomEdgeAlignedLeft, VerticalOffset = 4, Content = connectionDetails };
         connectionFlyout.FlyoutPresenterClasses.Add("streamDetails");
         statusButton.Flyout = connectionFlyout;
+        displayCaption = new TextBlock { Text = "显示器 1", FontSize = 12, VerticalAlignment = VerticalAlignment.Center };
+        displayTab = new Border
+        {
+            Width = 152, Height = 37, Margin = new Thickness(14, 0, 0, 0), VerticalAlignment = VerticalAlignment.Bottom,
+            Background = Brushes.White, CornerRadius = new CornerRadius(9, 9, 0, 0),
+            Child = new StackPanel
+            {
+                Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Left,
+                VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(10, 0, 0, 0), Spacing = 6,
+                Children = { AuroraVisual.Icon(AuroraVisual.Monitor, size: 16), displayCaption }
+            }
+        };
+        ToolTip.SetTip(displayTab, "当前串流显示器");
         var identity = new Grid
         {
-            ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto"), ColumnSpacing = 9,
-            Margin = new Thickness(13, 0, 10, 0), VerticalAlignment = VerticalAlignment.Center,
+            ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto,Auto"), ColumnSpacing = 7, Height = 44,
+            Margin = new Thickness(10, 0, 8, 0), VerticalAlignment = VerticalAlignment.Center,
             HorizontalAlignment = HorizontalAlignment.Left,
-            Children = { mark, name, statusButton }
+            Children = { mark, name, statusButton, displayTab }
         };
+        mark.VerticalAlignment = statusButton.VerticalAlignment = VerticalAlignment.Center;
         Grid.SetColumn(name, 1);
         Grid.SetColumn(statusButton, 2);
+        Grid.SetColumn(displayTab, 3);
 
-        fullscreen.Click += (_, _) => ToggleFullscreen();
         disconnect.Click += (_, _) => Close();
         retryButton.Click += async (_, _) => await retry(this);
-        SetToolContent(fullscreen, fullscreenText, "全屏", MaximizeIcon);
-        SetToolContent(controls, controlsText, "控制中心", AuroraVisual.Gear);
-        var mouseHelp = new MenuItem
+        SetToolContent(controls, controlsText, "控制中心", WindowsStreamControlCenter.Sliders);
+        var floatingControls = new Button
         {
-            Header = "Ctrl+Alt+Shift+M 切换鼠标模式", IsEnabled = false
+            Width = 40, Height = 40, Classes = { "streamTool" }, Padding = new Thickness(0), CornerRadius = new CornerRadius(13),
+            HorizontalContentAlignment = HorizontalAlignment.Center, VerticalContentAlignment = VerticalAlignment.Center,
+            Background = Brush.Parse("#F7F9FD"), BorderBrush = Brush.Parse("#C6D1E0"), BorderThickness = new Thickness(1),
+            Foreground = Brush.Parse("#19283F")
         };
-        fullscreenItem.Click += (_, _) => ToggleFullscreen();
-        var security = new MenuItem { Header = "安全", Items = { privacyStatus, privacyAction } };
-        security.SubmenuOpened += async (_, _) => await UpdatePrivacy(SessionPrivacyCommand.Status);
-        privacyAction.Click += async (_, _) => await UpdatePrivacy(privacyState switch
+        floatingControls.Content = AuroraVisual.Icon(WindowsStreamControlCenter.Sliders, floatingControls, size: 18);
+        AuroraVisual.Label(floatingControls, "控制中心");
+        controlCenter = new WindowsStreamControlCenter(() =>
+        {
+            controlMenu.Hide();
+            ToggleFullscreen();
+        }, () =>
+        {
+            controlMenu.Hide();
+            connectionFlyout.ShowAt(floatingControls);
+        }, () =>
+        {
+            controlMenu.Hide();
+            Close();
+        }, () => UpdatePrivacy(SessionPrivacyCommand.Status), () => UpdatePrivacy(privacyState switch
         {
             SessionPrivacyState.Off => SessionPrivacyCommand.Enable,
             SessionPrivacyState.On => SessionPrivacyCommand.Disable,
             _ => SessionPrivacyCommand.Status
-        });
-        var disconnectItem = new MenuItem { Header = "断开连接" };
-        disconnectItem.Click += (_, _) => Close();
-        controlMenu = new MenuFlyout
+        }));
+        controlMenu = new Flyout { Placement = PlacementMode.BottomEdgeAlignedRight, Content = controlCenter };
+        controlMenu.FlyoutPresenterClasses.Add("streamControlCenter");
+        controls.Flyout = floatingControls.Flyout = controlMenu;
+        controlMenu.Opening += (_, _) =>
         {
-            Placement = PlacementMode.BottomEdgeAlignedRight,
-            Items = { fullscreenItem, fullscreenDetailsItem, security, mouseHelp, new Separator(), disconnectItem }
+            connectionFlyout.Hide();
+            var floating = WindowState == WindowState.FullScreen;
+            if (!floating && toolbar.Bounds.Width < 530 &&
+                controls.TranslatePoint(new Point(controls.Bounds.Width, 0), toolbar) is { } right)
+                controlMenu.HorizontalOffset = toolbar.Bounds.Width - right.X - 8;
+            else
+                controlMenu.HorizontalOffset = 0;
+            (floating ? floatingControls : controls).Classes.Add("flyoutOpen");
+            controlCenter.Home();
         };
-        controls.Flyout = controlMenu;
-        controlMenu.Opening += (_, _) => connectionFlyout.Hide();
+        controlMenu.Closed += (_, _) =>
+        {
+            controls.Classes.Remove("flyoutOpen");
+            floatingControls.Classes.Remove("flyoutOpen");
+            controlCenter.SaveBitrate();
+        };
         connectionFlyout.Opening += (_, _) => controlMenu.Hide();
-        var floatingControls = new Button
-        {
-            Width = 40, Height = 40, Padding = new Thickness(0), CornerRadius = new CornerRadius(13),
-            HorizontalContentAlignment = HorizontalAlignment.Center, VerticalContentAlignment = VerticalAlignment.Center,
-            Background = Brush.Parse("#F7F9FD"), BorderBrush = Brush.Parse("#C6D1E0"), BorderThickness = new Thickness(1),
-            Foreground = Brush.Parse("#19283F"), Flyout = controlMenu
-        };
-        floatingControls.Content = AuroraVisual.Icon(AuroraVisual.Gear, floatingControls, size: 18);
-        AuroraVisual.Label(floatingControls, "控制中心");
-        fullscreenDetailsItem.Click += (_, _) =>
-        {
-            controlMenu.Hide();
-            connectionFlyout.ShowAt(floatingControls);
-        };
         ShowPrivacyState();
 
         var minimize = CaptionButton("最小化", AuroraVisual.Minus, () => WindowState = WindowState.Minimized);
@@ -176,9 +197,9 @@ internal sealed class StreamSessionWindow : Window
         disconnectSlot.Children.Add(disconnect);
         var buttons = new StackPanel
         {
-            Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center,
+            Orientation = Orientation.Horizontal, Height = 44, VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(0, 0, 4, 0), Spacing = 3,
-            Children = { fullscreen, controls, disconnectSlot, minimize, maximize, close }
+            Children = { controls, disconnectSlot, minimize, maximize, close }
         };
 
         toolbar = new Grid
@@ -233,7 +254,12 @@ internal sealed class StreamSessionWindow : Window
 
         UpdateWindowActions();
         ResizeToolbar(Width);
-        SizeChanged += (_, args) => ResizeToolbar(args.NewSize.Width);
+        SizeChanged += (_, args) =>
+        {
+            ResizeToolbar(args.NewSize.Width);
+            controlCenter.Fit(args.NewSize.Height);
+        };
+        controlCenter.Fit(Height);
         PropertyChanged += (_, args) =>
         {
             if (args.Property != WindowStateProperty) return;
@@ -264,12 +290,15 @@ internal sealed class StreamSessionWindow : Window
     {
         var compact = width < 760;
         var narrow = width < 490;
-        fullscreenText.IsVisible = controlsText.IsVisible = !compact;
-        fullscreen.Width = compact ? 32 : 86;
-        controls.Width = compact ? 32 : 92;
+        controlsText.IsVisible = !compact;
+        controls.Width = compact ? 32 : 94;
+        displayTab.Width = compact ? 36 : 152;
+        displayTab.Margin = new Thickness(compact ? 0 : 14, 0, 0, 0);
+        displayCaption.IsVisible = !compact;
         disconnectText.IsVisible = status.IsVisible = !narrow;
         disconnect.Width = disconnectSlot.Width = narrow ? 32 : 60;
-        statusButton.Width = narrow ? 30 : 94;
+        statusButton.Width = narrow ? 25 : double.NaN;
+        statusButton.MinWidth = narrow ? 0 : 84;
     }
 
     private static void SetToolContent(Button button, TextBlock text, string label, string geometry)
@@ -300,23 +329,23 @@ internal sealed class StreamSessionWindow : Window
         AutomationProperties.SetName(statusButton, connected ? text + "，查看连接详情" : text);
     }
 
-    private void ShowPrivacyState()
+    private void ShowPrivacyState(bool changing = false)
     {
-        privacyStatus.Header = privacyBusy ? "正在检查隐私屏保…" : privacyState switch
+        var statusText = privacyBusy ? (changing ? "正在切换隐私屏保…" : "正在检查隐私屏保…") : privacyState switch
         {
             SessionPrivacyState.On => "隐私屏保已开启",
             SessionPrivacyState.Off => "隐私屏保已关闭",
             SessionPrivacyState.Unavailable => "当前会话不支持隐私屏保",
             _ => "隐私屏保状态未确认"
         };
-        privacyAction.Header = privacyState switch
+        var actionText = privacyState switch
         {
             SessionPrivacyState.On => "关闭隐私屏保",
             SessionPrivacyState.Off => "开启隐私屏保",
             _ => "重新检查"
         };
-        privacyAction.IsVisible = privacyRequest != null && privacyState != SessionPrivacyState.Unavailable;
-        privacyAction.IsEnabled = privacyAction.IsVisible && !privacyBusy;
+        var available = privacyRequest != null && privacyState != SessionPrivacyState.Unavailable;
+        controlCenter.SetPrivacy(statusText, actionText, available, available && !privacyBusy);
     }
 
     private async Task UpdatePrivacy(SessionPrivacyCommand command)
@@ -324,8 +353,7 @@ internal sealed class StreamSessionWindow : Window
         var request = privacyRequest;
         if (!connected || stop.IsCancellationRequested || privacyBusy || request == null) return;
         privacyBusy = true;
-        ShowPrivacyState();
-        if (command != SessionPrivacyCommand.Status) privacyStatus.Header = "正在切换隐私屏保…";
+        ShowPrivacyState(changing: command != SessionPrivacyCommand.Status);
         SessionPrivacyState? result = null;
         try { result = await request(command); }
         catch (Exception error) when (error is InvalidOperationException or OperationCanceledException or Win32Exception) { }
@@ -342,7 +370,7 @@ internal sealed class StreamSessionWindow : Window
 
     private static Button CaptionButton(string label, string geometry, Action action, int width = 42)
     {
-        var button = new Button { Width = width, Classes = { "caption" } };
+        var button = new Button { Width = width, Height = 32, VerticalAlignment = VerticalAlignment.Center, Classes = { "caption" } };
         SetCaption(button, label, geometry);
         if (action != null) button.Click += (_, _) => action();
         return button;
@@ -359,15 +387,12 @@ internal sealed class StreamSessionWindow : Window
         var full = WindowState == WindowState.FullScreen;
         var maximized = WindowState == WindowState.Maximized;
         var fullLabel = full ? "退出全屏" : "全屏";
-        fullscreen.IsVisible = !full;
         SetCaption(maximize, full ? fullLabel : maximized ? "还原窗口" : "最大化",
             full || maximized ? AuroraVisual.RestoreWindow : AuroraVisual.Square);
-        fullscreenItem.Header = fullLabel;
-        fullscreenItem.Icon = AuroraVisual.Icon(full ? AuroraVisual.RestoreWindow : MaximizeIcon, size: 16);
+        controlCenter.SetFullscreen(full);
         var showFloatingControls = full && connected;
         if (fullscreenControls.IsOpen && !showFloatingControls) controlMenu.Hide();
         fullscreenControls.IsOpen = showFloatingControls;
-        fullscreenDetailsItem.IsVisible = showFloatingControls;
         toolbar.IsVisible = !showFloatingControls;
     }
 
@@ -376,6 +401,7 @@ internal sealed class StreamSessionWindow : Window
         stop = cancellation;
         connected = allowClose = false;
         sizing.SetAspect(0);
+        controlMenu.Hide();
         connectionFlyout.Hide();
         connectionDetails.Update(null);
         privacyState = SessionPrivacyState.Unavailable;
@@ -383,7 +409,7 @@ internal sealed class StreamSessionWindow : Window
         surface.IsVisible = false;
         stage.IsVisible = progress.IsVisible = true;
         retryButton.IsVisible = false;
-        controls.IsEnabled = fullscreen.IsEnabled = fullscreenItem.IsEnabled = false;
+        controls.IsEnabled = false;
         SetStatus("连接中", "#087CF5");
         disconnect.IsVisible = true;
         SetToolContent(disconnect, disconnectText, "取消", AuroraVisual.Close);
@@ -405,6 +431,7 @@ internal sealed class StreamSessionWindow : Window
     internal void ShowFailure(string message)
     {
         connected = false;
+        controlMenu.Hide();
         sizing.SetAspect(0);
         connectionFlyout.Hide();
         allowClose = true;
@@ -412,7 +439,7 @@ internal sealed class StreamSessionWindow : Window
         stage.IsVisible = true;
         progress.IsVisible = false;
         retryButton.IsVisible = true;
-        controls.IsEnabled = fullscreen.IsEnabled = fullscreenItem.IsEnabled = false;
+        controls.IsEnabled = false;
         SetStatus("连接失败", "#AD384E");
         disconnect.IsVisible = false;
         UpdateWindowActions();
@@ -425,7 +452,7 @@ internal sealed class StreamSessionWindow : Window
         connected = true;
         surface.IsVisible = true;
         stage.IsVisible = false;
-        controls.IsEnabled = fullscreen.IsEnabled = fullscreenItem.IsEnabled = true;
+        controls.IsEnabled = true;
         SetStatus("已连接", "#087CF5");
         SetToolContent(disconnect, disconnectText, "断开", DisconnectIcon);
         UpdateWindowActions();
@@ -522,7 +549,7 @@ internal sealed class StreamSessionWindow : Window
                 if (!exit.IsCompleted)
                 {
                     SetStatus("正在断开", "#526176");
-                    controls.IsEnabled = fullscreen.IsEnabled = fullscreenItem.IsEnabled = false;
+                    controls.IsEnabled = false;
                     disconnectSignal.Set();
                     if (await Task.WhenAny(exit, Task.Delay(TimeSpan.FromSeconds(6))) != exit)
                     {
