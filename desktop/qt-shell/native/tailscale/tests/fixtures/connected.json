@@ -1,0 +1,70 @@
+{
+  "id": "fixture",
+  "ok": true,
+  "result": {
+    "BackendState": "Running",
+    "AuthURL": "https://login.tailscale.com/a/ignored",
+    "TailscaleIPs": ["100.100.100.100", "fd7a:115c:a1e0::53", "100.76.1.10", "fd7a:115c:a1e0::10"],
+    "Self": {"ID": "stable-local", "UserID": 9007199254740992, "Tags": null},
+    "CurrentTailnet": {"Name": "fixture.example.invalid", "StableID": "stable-tailnet"},
+    "User": {
+      "9007199254740992": {"ID": 9007199254740992, "DisplayName": "Fixture owner", "LoginName": "owner@example.invalid"},
+      "9007199254740993": {"ID": 9007199254740993, "DisplayName": "Different owner"}
+    },
+    "Peer": {
+      "nodekey:rotatable-key": {
+        "ID": "stable-peer", "UserID": 9007199254740992, "Online": true, "OS": "windows",
+        "HostName": "Desk", "TailscaleIPs": ["fd7a:115c:a1e0::20", "100.76.1.20"]
+      },
+      "nodekey:ipv6": {
+        "ID": "stable-v6", "UserID": 9007199254740992, "Online": false,
+        "DNSName": "desk-v6.fixture.", "TailscaleIPs": ["fd7a:115c:a1e0::30"]
+      },
+      "nodekey:other-owner": {
+        "ID": "other-owner", "UserID": 9007199254740993, "TailscaleIPs": ["100.76.1.21"]
+      },
+      "nodekey:fractional-owner": {
+        "ID": "rounded-owner", "UserID": 9007199254740992.5, "TailscaleIPs": ["100.76.1.22"]
+      },
+      "nodekey:exponent-owner": {
+        "ID": "exponent-owner", "UserID": 9.007199254740992e15, "TailscaleIPs": ["100.76.1.23"]
+      },
+      "nodekey:string-owner": {
+        "ID": "string-owner", "UserID": "9007199254740992", "TailscaleIPs": ["100.76.1.24"]
+      },
+      "nodekey:tagged": {
+        "ID": "tagged", "UserID": 9007199254740992, "Tags": ["tag:device"], "TailscaleIPs": ["100.76.1.25"]
+      },
+      "nodekey:shared": {
+        "ID": "shared", "UserID": 9007199254740992, "ShareeNode": true, "TailscaleIPs": ["100.76.1.26"]
+      },
+      "nodekey:alt-sharer": {
+        "ID": "alt-sharer", "UserID": 9007199254740992, "AltSharerUserID": 53, "TailscaleIPs": ["100.76.1.27"]
+      },
+      "nodekey:malformed-sharer": {
+        "ID": "null-sharer", "UserID": 9007199254740992, "AltSharerUserID": null, "TailscaleIPs": ["100.76.1.28"]
+      },
+      "nodekey:duplicate1": {
+        "ID": "duplicate", "UserID": 9007199254740992, "TailscaleIPs": ["100.76.1.31"]
+      },
+      "nodekey:duplicate2": {
+        "ID": "duplicate", "UserID": 9007199254740992, "TailscaleIPs": ["100.76.1.32"]
+      },
+      "nodekey:self": {
+        "ID": "stable-local", "UserID": 9007199254740992, "TailscaleIPs": ["100.76.1.33"]
+      },
+      "nodekey:missing-id": {
+        "UserID": 9007199254740992, "TailscaleIPs": ["100.76.1.34"]
+      },
+      "nodekey:local-address": {
+        "ID": "local-address", "UserID": 9007199254740992, "TailscaleIPs": ["100.76.1.10"]
+      },
+      "nodekey:reserved-addresses": {
+        "ID": "reserved-addresses", "UserID": 9007199254740992,
+        "TailscaleIPs": ["127.0.0.1", "192.0.2.1", "100.100.0.12", "100.115.92.1", "100.115.93.1",
+          "100.101.102.103", "100.076.1.12", "fd7a:115c:a1e0:b1a::2", "fd7a:115c:a1e0::20%3"]
+      }
+    }
+  },
+  "error": null
+}

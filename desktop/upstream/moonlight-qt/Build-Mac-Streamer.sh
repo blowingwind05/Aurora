@@ -86,6 +86,10 @@ expected_arch="$(uname -m)"
 if [[ "$expected_arch" == "$native_arch" ]]; then
   [[ "$("$stage/MacOS/Moonlight" --aurora-runtime-info)" == aurora-stream/1 ]] ||
     { echo 'The private Aurora streaming entry point is missing.' >&2; exit 1; }
+  cmake -S "$repository/tests/qt-native-instance" -B "$work/instance-test" -DCMAKE_BUILD_TYPE=Release \
+    "-DCMAKE_PREFIX_PATH=$qt_prefix" "-DCMAKE_OSX_ARCHITECTURES=$native_arch"
+  cmake --build "$work/instance-test" --config Release
+  (cd "$work/instance-test" && ctest -C Release --output-on-failure)
 fi
 
 # Keep @executable_path/../Frameworks and the Qt plug-in paths from macdeployqt.
@@ -98,9 +102,11 @@ for directory in Frameworks PlugIns Resources; do
   fi
 done
 if [[ "$expected_arch" == "$native_arch" ]]; then
-  /usr/bin/env -u QT_PLUGIN_PATH -u QT_QPA_PLATFORM_PLUGIN_PATH -u QML2_IMPORT_PATH -u QML_IMPORT_PATH \
-    QT_QPA_PLATFORM=cocoa "$destination/MacOS/AuroraQtShell" --check-ui \
-    "$destination/Resources/QtPreview/desktop/qt-shell/bridge/Live.qml"
+  for probe in --check-ui --check-native; do
+    /usr/bin/env -u QT_PLUGIN_PATH -u QT_QPA_PLATFORM_PLUGIN_PATH -u QML2_IMPORT_PATH -u QML_IMPORT_PATH \
+      QT_QPA_PLATFORM=cocoa "$destination/MacOS/AuroraQtShell" "$probe" \
+      "$destination/Resources/QtPreview/desktop/qt-shell/bridge/Live.qml"
+  done
 fi
 
 mkdir -p "$destination/Resources"

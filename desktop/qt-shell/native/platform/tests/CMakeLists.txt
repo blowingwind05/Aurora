@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: GPL-3.0-only
+cmake_minimum_required(VERSION 3.16)
+project(AuroraNativePlatformTests LANGUAGES CXX)
+if(APPLE)
+    enable_language(OBJCXX)
+endif()
+
+add_subdirectory(.. platform)
+enable_testing()
+add_executable(AuroraNativePlatformTests PlatformTests.cpp)
+target_link_libraries(AuroraNativePlatformTests PRIVATE aurora_native_platform)
+if(MSVC)
+    target_compile_options(AuroraNativePlatformTests PRIVATE /utf-8)
+endif()
+add_test(NAME AuroraNativePlatformTests COMMAND AuroraNativePlatformTests)
+set_tests_properties(AuroraNativePlatformTests PROPERTIES TIMEOUT 25)

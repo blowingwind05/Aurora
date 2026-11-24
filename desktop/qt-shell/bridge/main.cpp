@@ -1,9 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "AuroraMore.h"
+#include "../native/NativeDesktop.h"
+#include "../native/NativeInstance.h"
 
+#include <QApplication>
 #include <QByteArray>
 #include <QCoreApplication>
 #include <QDesktopServices>
+#include <QFileInfo>
 #include <QGuiApplication>
 #include <QIcon>
 #include <QJsonDocument>
@@ -19,6 +23,7 @@
 
 #include <cstdio>
 #include <cstring>
+#include <memory>
 
 #ifdef Q_OS_WIN
 #include <windows.h>
@@ -38,12 +43,13 @@ class AuroraBridge : public QObject
     Q_PROPERTY(QVariantMap state READ state NOTIFY stateChanged)
 
 public:
-    AuroraBridge(bool windowsSession, bool checkUi, bool prepareMacTitleBar) : windowsSession(windowsSession)
+    AuroraBridge(bool windowsSession, bool checkUi, bool prepareMacTitleBar, bool native)
+        : windowsSession(windowsSession), inProcess(native), pipeEnabled(!checkUi && !native)
     {
         // Let the first host snapshot show the Cocoa window after its titlebar is installed.
         if (checkUi || prepareMacTitleBar)
             snapshot.insert(QStringLiteral("windowVisible"), false);
-        if (checkUi)
+        if (!pipeEnabled)
             return;
         // Anonymous pipes on Windows cannot be watched by QSocketNotifier.
         connect(&pollTimer, &QTimer::timeout, this, &AuroraBridge::readInput);
@@ -51,6 +57,14 @@ public:
     }
 
     QVariantMap state() const { return snapshot; }
+
+    void setState(const QVariantMap &next)
+    {
+        if (next == snapshot)
+            return;
+        snapshot = next;
+        emit stateChanged();
+    }
 
     Q_INVOKABLE void send(const QString &action, const QString &deviceId = {}, int deviceEpoch = 0)
     {
@@ -81,10 +95,17 @@ public:
 
 signals:
     void stateChanged();
+    void requestReceived(const QJsonObject &request);
 
 private:
-    static void sendRequest(const QJsonObject &request)
+    void sendRequest(const QJsonObject &request)
     {
+        if (inProcess) {
+            emit requestReceived(request);
+            return;
+        }
+        if (!pipeEnabled)
+            return;
         const auto line = QJsonDocument(request).toJson(QJsonDocument::Compact) + '\n';
         const auto size = static_cast<size_t>(line.size());
         if (std::fwrite(line.constData(), 1, size, stdout) != size || std::fflush(stdout) != 0)
@@ -125,19 +146,16 @@ private:
                 break;
             const auto document = QJsonDocument::fromJson(pending.left(newline));
             pending.remove(0, newline + 1);
-            if (document.isObject() && document.object().contains(windowsSession ? "panelKind" : "deviceAccess")) {
-                const auto next = document.object().toVariantMap();
-                if (next != snapshot) {
-                    snapshot = next;
-                    emit stateChanged();
-                }
-            }
+            if (document.isObject() && document.object().contains(windowsSession ? "panelKind" : "deviceAccess"))
+                setState(document.object().toVariantMap());
         }
         if (pending.size() > 8 * 1024 * 1024)
             QCoreApplication::quit();
     }
 
     const bool windowsSession;
+    const bool inProcess;
+    const bool pipeEnabled;
     QTimer pollTimer;
     QByteArray pending;
     QVariantMap snapshot;
@@ -195,6 +213,10 @@ static void connectSessionPopup(QGuiApplication &app, QWindow &popup, AuroraBrid
 int main(int argc, char *argv[])
 {
     const bool checkUi = argc > 1 && std::strcmp(argv[1], "--check-ui") == 0;
+    const bool checkNative = argc > 1 && std::strcmp(argv[1], "--check-native") == 0;
+    const bool namedLauncher = argc == 1 &&
+        QFileInfo(QString::fromLocal8Bit(argv[0])).completeBaseName().compare(QStringLiteral("Aurora"), Qt::CaseInsensitive) == 0;
+    const bool native = namedLauncher || checkNative || (argc > 1 && std::strcmp(argv[1], "--native") == 0);
 #ifdef Q_OS_WIN
     const bool windowsSession = argc > 1 && std::strcmp(argv[1], "--windows-session") == 0;
 #else
@@ -205,7 +227,12 @@ int main(int argc, char *argv[])
     QCoreApplication::setAttribute(Qt::AA_UseHighDpiPixmaps);
 #endif
     QGuiApplication::setHighDpiScaleFactorRoundingPolicy(Qt::HighDpiScaleFactorRoundingPolicy::PassThrough);
-    QGuiApplication app(argc, argv);
+    std::unique_ptr<QGuiApplication> application;
+    if (native)
+        application = std::make_unique<QApplication>(argc, argv);
+    else
+        application = std::make_unique<QGuiApplication>(argc, argv);
+    auto &app = *application;
 #ifdef Q_OS_WIN
     QIcon icon(QStringLiteral(":/aurora/brand/Aurora.ico"));
     if (icon.availableSizes().isEmpty())
@@ -213,8 +240,11 @@ int main(int argc, char *argv[])
     app.setWindowIcon(icon);
 #endif
     const auto arguments = app.arguments();
-    if (arguments.size() != (windowsSession ? 5 : checkUi ? 3 : 2)) {
-        qWarning("Usage: AuroraQtShell [--check-ui] <Live.qml> or --windows-session <popup.qml> <owner> <owner-pid>");
+    const bool validArguments = native ? arguments.size() <= 3
+        : arguments.size() == (windowsSession ? 5 : checkUi ? 3 : 2);
+    if (!validArguments) {
+        qWarning("Usage: AuroraQtShell [--check-ui] <Live.qml>, --native [<Live.qml>], --check-native [<Live.qml>], "
+                 "or --windows-session <popup.qml> <owner> <owner-pid>");
         return 2;
     }
 
@@ -239,7 +269,29 @@ int main(int argc, char *argv[])
 #else
     constexpr bool prepareMacTitleBar = false;
 #endif
-    AuroraBridge bridge(windowsSession, checkUi, prepareMacTitleBar);
+    AuroraBridge bridge(windowsSession, checkUi, prepareMacTitleBar, native);
+    std::unique_ptr<NativeDesktop> nativeDesktop;
+    std::unique_ptr<NativeInstance> instance;
+    if (native) {
+        QCoreApplication::setApplicationName(QStringLiteral("Aurora"));
+        const auto dataDirectory = checkNative ? QString() : Aurora::Preferences::defaultDirectory();
+        nativeDesktop = std::make_unique<NativeDesktop>(QStringLiteral(AURORA_DESKTOP_VERSION), dataDirectory);
+        QObject::connect(&bridge, &AuroraBridge::requestReceived, nativeDesktop.get(), &NativeDesktop::handleRequest);
+        QObject::connect(nativeDesktop.get(), &NativeDesktop::stateChanged, &bridge, &AuroraBridge::setState);
+        bridge.setState(nativeDesktop->state());
+        if (!checkNative) {
+            instance = std::make_unique<NativeInstance>(dataDirectory);
+            const auto result = instance->start();
+            if (result == NativeInstance::Result::Activated)
+                return 0;
+            if (result == NativeInstance::Result::Error) {
+                qWarning("Aurora could not start or activate the native desktop instance.");
+                return 1;
+            }
+            QObject::connect(instance.get(), &NativeInstance::activationRequested, nativeDesktop.get(),
+                             [&nativeDesktop] { nativeDesktop->activate(); });
+        }
+    }
     QNetworkAccessManager network;
     AuroraMore more(network, &QDesktopServices::openUrl);
     QQmlApplicationEngine engine;
@@ -249,8 +301,12 @@ int main(int argc, char *argv[])
         QObject::connect(&bridge, &AuroraBridge::stateChanged, &more, [&bridge, &more] {
             more.setApplicationVersion(bridge.state().value(QStringLiteral("applicationVersion")).toString());
         });
+        if (native)
+            more.setApplicationVersion(nativeDesktop->state().value(QStringLiteral("applicationVersion")).toString());
     }
-    engine.load(QUrl::fromLocalFile(arguments.at(windowsSession || checkUi ? 2 : 1)));
+    const auto entry = native ? (arguments.size() == 3 ? arguments.at(2) : NativeDesktop::bundledEntryPoint())
+        : arguments.at(windowsSession || checkUi ? 2 : 1);
+    engine.load(QUrl::fromLocalFile(entry));
     if (engine.rootObjects().isEmpty())
         return 1;
     const auto window = qobject_cast<QWindow *>(engine.rootObjects().constFirst());
@@ -264,6 +320,24 @@ int main(int argc, char *argv[])
 #endif
     if (checkUi) {
         return window && !window->isVisible() && macTitleBarReady ? 0 : 1;
+    }
+    if (checkNative) {
+        if (!window || window->isVisible() || !window->property("managedClose").toBool() || !macTitleBarReady)
+            return 1;
+        bridge.sendPreference(QStringLiteral("read-general-settings"), 1, {});
+        const auto settings = bridge.state().value(QStringLiteral("generalSettings")).toMap();
+        if (settings.value(QStringLiteral("acknowledgedRequestId")).toInt() != 1)
+            return 1;
+        // Exercise QML's normal close request through the in-process bridge.
+        QTimer::singleShot(0, &bridge, [&bridge] { bridge.send(QStringLiteral("window-close")); });
+        QTimer::singleShot(2000, &app, [&app] { app.exit(1); });
+        return app.exec();
+    }
+    if (native) {
+        if (!window)
+            return 1;
+        app.setQuitOnLastWindowClosed(false);
+        nativeDesktop->start();
     }
 #ifdef Q_OS_WIN
     if (windowsSession) {

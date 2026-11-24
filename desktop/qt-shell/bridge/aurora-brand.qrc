@@ -2,5 +2,7 @@
     <qresource prefix="/aurora/brand">
         <file alias="Aurora.ico">../../Assets/Aurora.ico</file>
         <file alias="Aurora-Windows-32.png">../../Assets/Aurora-Windows-32.png</file>
+        <file alias="AuroraMenuBarTemplate.png">../../Assets/AuroraMenuBarTemplate.png</file>
+        <file alias="AuroraMenuBarTemplate@2x.png">../../Assets/AuroraMenuBarTemplate@2x.png</file>
     </qresource>
 </RCC>

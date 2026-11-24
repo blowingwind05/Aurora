@@ -78,6 +78,8 @@ try {
         --dir $deploy --no-opengl-sw --no-sql --no-compiler-runtime $executable (Join-Path $deploy 'AuroraQtShell.exe')
     if ($LASTEXITCODE -ne 0) { throw 'Deploying Qt failed.' }
     Get-ChildItem -LiteralPath $crt.FullName -File -Filter '*.dll' | Copy-Item -Destination $deploy
+    & (Join-Path $deploy 'AuroraQtShell.exe') --check-native (Join-Path $deploy 'QtPreview/desktop/qt-shell/bridge/Live.qml')
+    if ($LASTEXITCODE -ne 0) { throw 'Checking the native Aurora desktop entry point failed.' }
     $launch = [Diagnostics.ProcessStartInfo]::new($executable)
     $launch.UseShellExecute = $false
     $launch.RedirectStandardOutput = $true

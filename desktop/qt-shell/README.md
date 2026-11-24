@@ -39,6 +39,10 @@ macOS 的完整构建由 `Build-Mac.ps1` 调用串流构建脚本。Qt 6 的 `qm
 
 ## 离线回放
 
+调试原生进程时，用 `AuroraQtShell --native <Live.qml>` 启动同一套 QML。应用由 Qt 管理启动、重复启动激活、托盘和通用偏好。已选用内置节点的安装可以读取现有 Tailscale 状态。正式包目前还通过 C# 提供完整的设备发现、配对、串流和本机被控流程。
+
+`AuroraQtShell --check-native <Live.qml>` 在后台加载窗口，并通过进程内桥接完成一次设置读取和退出，不会启动网络组件。打包阶段也运行这个检查。最终发行目录可以用 [Check-NativeDesktopPackage.py](../../tests/Check-NativeDesktopPackage.py) 检查 .NET 启动器、CLR 程序集和托管运行时。macOS 可以直接检查发布用的 ZIP。
+
 回放使用实际 C# 管道类和实际 Qt 主窗口。它用固定账户和设备数据检查宽窗及窄窗、刷新等待与结果、带 ID 的连接信号、切换账户状态后清空设备、以及两端关闭时回收进程。在同一 PowerShell 会话中可于启动真实 Aurora 前执行。
 
 ```powershell
