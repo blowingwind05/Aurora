@@ -361,10 +361,11 @@ public sealed partial class AuroraWindow : Window
         }
         else if (activePage == Page.Host)
         {
-            var running = host?.SettingsAvailable == true && !changingManagedHost.HasValue;
+            var running = result.HostError == null && host?.SettingsAvailable == true && !changingManagedHost.HasValue;
             var message = running ? "检测完成，Sunshine 正在运行。" :
                 result.HostError != null || host == null ? "暂时无法检测 Sunshine。请检查服务后重试。" :
                 host.Installed ? "Sunshine 未运行。启动后可重新检测。" : "尚未启用 Sunshine。";
+            if (qtHostAction == "hostRefresh") ReportQtHostFeedback(message, failed: !running);
             SetFeedback(message, activePage, transient: running);
         }
     }
@@ -388,15 +389,26 @@ public sealed partial class AuroraWindow : Window
             : address.ToString();
     }
 
-    private async Task CopyAddressValue(string address, string source, Page target)
+    private async Task CopyAddressValue(string address, string source, Page target, Action<string, bool> report = null)
     {
-        if (address == null || Clipboard == null) return;
+        if (address == null || Clipboard == null)
+        {
+            report?.Invoke("无法复制地址。", true);
+            return;
+        }
         try
         {
             await Clipboard.SetTextAsync(address);
-            SetFeedback($"已复制 {source} 地址。", target);
+            var message = $"已复制 {source} 地址。";
+            SetFeedback(message, target);
+            report?.Invoke(message, false);
         }
-        catch (Exception error) { SetFeedback("复制失败：" + error.Message, target); }
+        catch (Exception error)
+        {
+            var message = "复制失败：" + error.Message;
+            SetFeedback(message, target);
+            report?.Invoke(message, true);
+        }
     }
 
     private void UpdateActions()
@@ -488,6 +500,8 @@ public sealed partial class AuroraWindow : Window
         _ = RefreshWallpapers();
         if (Upstream.SupportsHost)
         {
+            if (hostRevisionAtStart == hostRevision && !changingManagedHost.HasValue)
+                qtHostDetectionError = hostError;
             RenderHost(hostError);
             if (!changingManagedHost.HasValue && host?.Installed == true)
             {
@@ -766,8 +780,16 @@ public sealed partial class AuroraWindow : Window
         }
         finally
         {
-            try { host = await Task.Run(readHost); }
-            catch (Exception error) { managedHostError ??= "无法确认本机被控状态。" + error.Message; }
+            try
+            {
+                host = await Task.Run(readHost);
+                qtHostDetectionError = null;
+            }
+            catch (Exception error)
+            {
+                qtHostDetectionError = error.Message;
+                managedHostError ??= "无法确认本机被控状态。" + error.Message;
+            }
             if (applied && host?.Installed != enable)
                 managedHostError ??= "本机被控状态未更新，请重新检测后再试。";
             hostRevision++;

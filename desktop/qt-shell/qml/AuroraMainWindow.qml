@@ -24,11 +24,13 @@ Window {
     property var enabledDeviceTools: ({})
     property string accountName: ""
     property string accountSubtitle: ""
+    property var hostState: ({})
     property string currentPage: "devices"
     property Component destinationPage: null
 
     signal navigationRequested(string destination)
     signal moreRequested(string action)
+    signal hostActionRequested(string action)
     signal refreshRequested()
     signal connectRequested(string deviceId)
     signal deviceToolRequested(string deviceId, string action)
@@ -198,6 +200,7 @@ Window {
         width: window.sidebarWidth
         compact: window.compact
         currentPage: window.currentPage
+        hostAvailable: window.hostState.available !== false
         accountName: window.accountName
         accountSubtitle: window.accountSubtitle
         onNavigationRequested: function(destination) { window.navigationRequested(destination) }
@@ -245,9 +248,20 @@ Window {
             onAccountRequested: window.navigationRequested("account")
         }
 
+        HostPage {
+            objectName: "hostPage"
+            anchors.fill: parent
+            visible: window.currentPage === "host"
+            compact: window.compact
+            narrow: window.narrow
+            reduceMotion: window.reduceMotion
+            hostState: window.hostState
+            onActionRequested: function(action) { window.hostActionRequested(action) }
+        }
+
         Loader {
             anchors.fill: parent
-            active: window.currentPage !== "devices"
+            active: window.currentPage !== "devices" && window.currentPage !== "host"
             sourceComponent: window.destinationPage
         }
     }

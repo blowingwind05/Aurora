@@ -13,9 +13,17 @@ namespace Aurora;
 internal sealed record QtShellDevice(string DeviceId, string DisplayName, bool Online, bool CanConnect,
     string LanAddress, string TailscaleAddress, string WallpaperUrl);
 
+internal sealed record QtShellHostState(bool Available, string Status, bool Managed, bool Allowed,
+    bool ToggleAvailable, bool Busy, bool RefreshAvailable, bool Refreshing, bool RetryAvailable,
+    string LanAddress, string TailscaleAddress, bool PermissionsAvailable, bool SettingsAvailable,
+    string Hint, string Feedback, bool FeedbackFailed);
+
 internal sealed record QtShellState(string DeviceAccess, string AccountName, string AccountSubtitle,
     QtShellDevice[] Devices, int DeviceEpoch, bool RefreshAvailable, bool Refreshing, string RefreshFeedback,
-    bool RefreshFailed, bool ConnectionPending, bool ReduceMotion);
+    bool RefreshFailed, bool ConnectionPending, bool ReduceMotion)
+{
+    public QtShellHostState Host { get; init; }
+}
 
 internal sealed record QtShellRequest(string Action, string DeviceId, int DeviceEpoch);
 

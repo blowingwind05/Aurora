@@ -65,9 +65,7 @@ public sealed partial class SunshinePage : UserControl, IDisposable
             {
                 try
                 {
-                    var open = new ProcessStartInfo("/usr/bin/open") { UseShellExecute = false };
-                    open.ArgumentList.Add("x-apple.systempreferences:com.apple.preference.security?Privacy");
-                    using var process = Process.Start(open);
+                    OpenMacPrivacySettings();
                 }
                 catch (Exception error) { Feedback.Text = error.Message; }
             };
@@ -288,6 +286,13 @@ public sealed partial class SunshinePage : UserControl, IDisposable
         displaySettings = null;
         PrivacyDisplay.ItemsSource = null;
         RememberLogin.IsChecked = false;
+    }
+
+    internal static void OpenMacPrivacySettings()
+    {
+        var open = new ProcessStartInfo("/usr/bin/open") { UseShellExecute = false };
+        open.ArgumentList.Add("x-apple.systempreferences:com.apple.preference.security?Privacy");
+        using var process = Process.Start(open);
     }
 
     private async Task Open(byte[] importedPin = null)

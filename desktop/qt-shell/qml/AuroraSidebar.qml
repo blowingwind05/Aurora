@@ -4,6 +4,7 @@ import QtQuick 2.15
 Item {
     id: sidebar
     property bool compact: false
+    property bool hostAvailable: true
     property string currentPage: "devices"
     property string accountName: ""
     property string accountSubtitle: ""
@@ -116,6 +117,7 @@ Item {
         }
         NavButton {
             objectName: "navHost"
+            visible: sidebar.hostAvailable
             text: qsTr("本机被控")
             selected: sidebar.currentPage === "host"
             icon.source: AuroraTheme.icon("panel-top")

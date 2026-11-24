@@ -93,7 +93,7 @@ public sealed partial class AuroraWindow
         }).ToArray() : Array.Empty<QtShellDevice>();
         qtShell.Publish(new QtShellState(access, qtAccountName, accountSubtitle.Text, devices, qtDeviceEpoch,
             ready && !refreshing && !manualRefresh && !qtRefreshing, qtRefreshing, qtFeedback, qtFeedbackFailed,
-            connecting, RefreshNotice.ReduceMotion()));
+            connecting, RefreshNotice.ReduceMotion()) { Host = ReadQtHostState() });
     }
 
     private void ReportQtShellFeedback(string message, bool failed)
@@ -132,6 +132,9 @@ public sealed partial class AuroraWindow
             case "host" when Upstream.SupportsHost:
                 TrayResidency.ShowMainWindow(this);
                 Navigate(Page.Host);
+                break;
+            default:
+                await HandleQtHostRequest(request.Action);
                 break;
         }
     }

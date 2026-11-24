@@ -29,7 +29,7 @@ dotnet desktop/bin/Release/net9.0/win-x64/Aurora.dll --qt-shell $qtShell $live
 
 在 macOS 上用匹配 .NET 目标架构的 Qt 和 CMake 默认生成器构建，将 RID 换成 `osx-arm64` 或 `osx-x64`，将子程序路径换成无 `.exe` 后缀的路径。QML 仍从源码目录加载，以复用现有资源路径。
 
-`--qt-shell` 在 Aurora 首次启动时额外打开 Qt 窗口，同时保留 Avalonia 主窗。当前若已有 Aurora 实例，请从原窗口退出后再启动带参数的副本。Qt 中的账户、设置和本机被控入口打开对应的 Avalonia 页面。关闭 Qt 窗口会结束联调通道，退出 Aurora 会结束 Qt 子进程。设备筛选、刷新文案、身份验证、选路及串流由现有 C# 流程负责。
+`--qt-shell` 在 Aurora 首次启动时额外打开 Qt 窗口，同时保留 Avalonia 主窗。当前若已有 Aurora 实例，请从原窗口退出后再启动带参数的副本。Qt 中的账户和设置入口打开对应的 Avalonia 页面，「本机被控」进入 Qt 页。关闭 Qt 窗口会结束联调通道，退出 Aurora 会结束 Qt 子进程。设备筛选、刷新文案、身份验证、选路及串流由现有 C# 流程负责。
 
 子进程通过重定向的 stdin/stdout 交换 UTF-8 JSON 行。C# 写入完整状态快照，Qt 回写 设备操作与导航请求。连接消息带当前快照的 `deviceEpoch` 和 `deviceId`，以便 C# 拒绝账户切换前的设备操作。标准错误用于 Qt 诊断。
 
@@ -51,3 +51,29 @@ Windows 的 Qt 若提示缺少离屏字体目录，可在回放前给 `QT_QPA_FO
 ## 通用设置预览
 
 用 `qmlscene desktop/qt-shell/demo/SettingsDemo.qml` 打开通用设置。关闭到托盘或菜单栏、开机自启动和防止休眠从宿主读取已确认的值，操作通过 QML 信号传给宿主。预览使用内存数据，当前试验主窗口的「设置」转到实际的 Avalonia 设置。
+
+## 本机被控的宿主接口与离线回放
+
+主窗口的 [HostPage.qml](qml/HostPage.qml) 读取 C# 随设备快照发送的可选 `host` 对象。开关与状态来自宿主，托管服务就绪后才会显示连接地址。Tailscale 地址还要求当前运行方式已登录。未登录时仍可打开本机管理页和使用局域网地址。
+
+| Qt 请求 | C# 处理 |
+| --- | --- |
+| `hostRefresh` | 运行已有检测流程并返回本页反馈。 |
+| `hostEnable` / `hostDisable` | 走既有托管组件启停和偏好保存流程。关闭请求在 Qt 窗口确认后发出。 |
+| `hostRetry` | 按已保存的被控偏好重试启动。 |
+| `hostCopyLan` / `hostCopyTailnet` | 由宿主复制当前有效地址并回传结果。 |
+| `hostOpenPermissions` / `hostContinuePermissions` | 打开已有的 macOS 隐私设置入口，继续时重新检测或重试启动。屏幕录制和辅助功能的授权由系统与 Aurora Host 处理。 |
+| `hostOpenSettings` | 打开 Avalonia 的「本机被控」，沿用常用设置、重启确认、全部配置项及独立 Sunshine 管理入口。 |
+
+使用同一 Qt 子程序运行模拟宿主。回放需要 QtTest 的 QML 模块。它在 Windows Qt 5.15.2 上使用 Qt 鼠标和键盘事件，并检查通过标准输入输出传递的快照和请求。
+
+```powershell
+$env:DOTNET_GENERATE_ASPNET_CERTIFICATE = 'false'
+$env:QT_QPA_PLATFORM = 'offscreen'
+$env:QT_QUICK_BACKEND = 'software'
+$env:QML_DISABLE_DISK_CACHE = '1'
+dotnet build tests/qt-host-shell/HostReplay.csproj --disable-build-servers
+dotnet tests/qt-host-shell/bin/Debug/net9.0/HostReplay.dll $qtShell tests/qt-host-shell/HostReplay.qml
+```
+
+回放检查 1000 和 320 px 布局、未登录时的本机地址、长 IPv6 地址换行、复制请求、重新检测、权限和设置入口、默认聚焦「取消」、Esc、显式取消、确认停止后的状态和启动失败后的重试。地址和服务反馈由回放进程提供，权限操作以收到预期请求为验收条件。

@@ -6,6 +6,7 @@ AuroraMainWindow {
     id: shell
     visible: true
     deviceModel: devices
+    hostState: snapshot.host || ({})
     deviceAccess: snapshot.deviceAccess || "loading"
     accountName: snapshot.accountName || ""
     accountSubtitle: snapshot.accountSubtitle || ""
@@ -41,10 +42,13 @@ AuroraMainWindow {
     }
 
     onSnapshotChanged: syncDevices()
+    onHostActionRequested: function(action) { auroraBridge.send(action, "", 0) }
     onRefreshRequested: auroraBridge.send("refresh", "", 0)
     onConnectRequested: function(deviceId) { auroraBridge.send("connect", deviceId, snapshot.deviceEpoch) }
     onNavigationRequested: function(destination) {
-        if (destination === "account" || destination === "settings" || destination === "host")
+        if (destination === "account" || destination === "settings")
             auroraBridge.send(destination, "", 0)
+        else if (destination === "host" || destination === "devices")
+            shell.currentPage = destination
     }
 }
