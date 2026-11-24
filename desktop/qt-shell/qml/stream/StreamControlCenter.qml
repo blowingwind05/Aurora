@@ -5,6 +5,8 @@ import ".." as Aurora
 Column {
     id: center
     property var session
+    property bool showSettingPages: true
+    property bool offerNativeSettings: false
     property string page: ""
     property string previousPage: ""
     readonly property var groups: [
@@ -14,6 +16,7 @@ Column {
         { id: "safety", label: qsTr("安全"), icon: Qt.resolvedUrl("icons/shield.svg") }
     ]
     signal pageChangedByUser()
+    signal nativeSettingsRequested()
 
     function focusInitial() {
         if (page !== "") {
@@ -26,7 +29,10 @@ Column {
                 return
             }
         }
-        categories.itemAt(0).forceActiveFocus(Qt.TabFocusReason)
+        if (showSettingPages)
+            categories.itemAt(0).forceActiveFocus(Qt.TabFocusReason)
+        else
+            fullScreenButton.forceActiveFocus(Qt.TabFocusReason)
     }
 
     function goBack() {
@@ -44,7 +50,7 @@ Column {
 
         Repeater {
             id: categories
-            model: center.groups
+            model: center.showSettingPages ? center.groups : []
             StreamButton {
                 objectName: "controlPage:" + modelData.id
                 width: parent.width
@@ -61,11 +67,26 @@ Column {
             }
         }
 
+        StreamButton {
+            objectName: "nativeSessionSettings"
+            visible: center.offerNativeSettings
+            width: parent.width
+            height: 34
+            cornerRadius: 6
+            rowStyle: true
+            text: qsTr("更多串流设置")
+            icon.source: Aurora.AuroraTheme.icon("settings")
+            trailingIcon: Aurora.AuroraTheme.icon("chevron-right")
+            onClicked: center.nativeSettingsRequested()
+        }
+
         Item {
+            visible: center.showSettingPages || center.offerNativeSettings
             width: 1
             height: 5
         }
         Rectangle {
+            visible: center.showSettingPages || center.offerNativeSettings
             width: parent.width - 12
             x: 6
             height: 1
@@ -73,10 +94,12 @@ Column {
         }
 
         Item {
+            visible: center.showSettingPages || center.offerNativeSettings
             width: 1
             height: 5
         }
         StreamButton {
+            id: fullScreenButton
             objectName: "fullScreen"
             width: parent.width
             height: 34

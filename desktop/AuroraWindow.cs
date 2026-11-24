@@ -158,13 +158,7 @@ public sealed partial class AuroraWindow : Window
             _ = RefreshWallpapers();
         };
         Deactivated += (_, _) => wallpaperRefresh?.Cancel();
-        Opened += async (_, _) =>
-        {
-            presence ??= new AuroraPresence();
-            timer.Start();
-            await RefreshDevices();
-            await RestoreManagedHost();
-        };
+        Opened += async (_, _) => await InitializeHostAsync();
         Closing += async (_, args) =>
         {
             if (canClose) return;
@@ -271,7 +265,12 @@ public sealed partial class AuroraWindow : Window
         row.Children.Add(labels);
         button.Content = row;
         AuroraVisual.Label(button, name);
-        if (target is { } destination) button.Click += (_, _) => Navigate(destination);
+        if (target is { } destination)
+            button.Click += (_, _) =>
+            {
+                if (destination != Page.Devices || !TryShowQtWindow("devices"))
+                    Navigate(destination);
+            };
         navigation.Add((button, labels, target));
         return label;
     }
@@ -298,6 +297,15 @@ public sealed partial class AuroraWindow : Window
             item.Label.IsVisible = !narrow;
             ((Grid)item.Button.Content).ColumnSpacing = narrow ? 0 : 14;
         }
+    }
+
+    internal async Task InitializeHostAsync()
+    {
+        if (closed || presence != null) return;
+        presence = new AuroraPresence();
+        timer.Start();
+        await RefreshDevices();
+        if (!closed) await RestoreManagedHost();
     }
 
     internal void OpenApplicationSettings() => Navigate(Page.Settings);
@@ -574,8 +582,9 @@ public sealed partial class AuroraWindow : Window
     private static object CardState(Device device) =>
         (device.Id, device.Name, device.Address, device.Online, device.LanAddress, device.Lan, device.Tailnet, device.TailnetVisible);
 
-    private bool CanRefreshWallpapers => !closed && !connecting && !refreshing && IsVisible && IsActive &&
-        WindowState != WindowState.Minimized && DevicesPage.IsVisible;
+    private bool CanRefreshWallpapers => !closed && !connecting && !refreshing &&
+        (qtShell != null && qtWindowVisible ? qtDevicesForeground :
+            IsVisible && IsActive && WindowState != WindowState.Minimized && DevicesPage.IsVisible);
 
     private async Task RefreshWallpapers()
     {
@@ -896,7 +905,7 @@ public sealed partial class AuroraWindow : Window
             if (session == null && OperatingSystem.IsWindows() && await StreamSessionWindow.IsSupported(runtime, token))
             {
                 token.ThrowIfCancellationRequested();
-                session = new StreamSessionWindow(device.Name, window => Launch(device, window));
+                session = new StreamSessionWindow(device.Name, window => Launch(device, window), qtShell?.Launch);
                 session.ShowConnecting(currentAccess);
             }
             ReportProgress("正在检查设备连接…");
@@ -1071,7 +1080,7 @@ public sealed partial class AuroraWindow : Window
         AuroraVisual.Label(TailnetNav, accountLabel.Text + " · " + accountSubtitle.Text);
         if (accountAvatarUri != null && accountAvatar == null && avatarRequest == null && CanLoadAccountAvatar)
             _ = LoadAccountAvatar(account);
-        PublishQtShellState();
+        UpdateQtTailscaleAccount(account);
     }
 
     private bool CanLoadAccountAvatar => !closed && IsVisible && WindowState != WindowState.Minimized;

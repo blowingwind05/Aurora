@@ -124,8 +124,7 @@ public sealed partial class AuroraWindow
                     }
                     break;
                 case "hostOpenSettings":
-                    TrayResidency.ShowMainWindow(this);
-                    Navigate(Page.Host);
+                    ShowAvaloniaPage(Page.Host);
                     break;
             }
         }

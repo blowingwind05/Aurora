@@ -1,6 +1,5 @@
 using System;
 using System.Globalization;
-using System.IO;
 using System.Linq;
 using Avalonia;
 using Avalonia.Automation;
@@ -69,7 +68,7 @@ internal sealed class StreamSettingsPage : UserControl
         {
             ShowSaveResult(StreamPreferences.Reset());
             var trayChangeFailed = !TrayResidency.TrySetCloseToTray(true);
-            var sleepChangeFailed = !TrySetSleepMode(HostSleepMode.System);
+            var sleepChangeFailed = !GeneralSettingsPreferences.TrySetSleepMode(HostSleepMode.System);
             BuildPanels(trayChangeFailed, sleepChangeFailed);
             Select(Array.FindIndex(tabs, tab => tab.IsChecked == true));
         };
@@ -205,6 +204,14 @@ internal sealed class StreamSettingsPage : UserControl
         refreshStartup?.Invoke();
     }
 
+    internal void RefreshGeneralPreferences()
+    {
+        const int general = 2;
+        panels[general] = General(trayChangeFailed: false, sleepChangeFailed: false);
+        if (tabs[general].IsChecked == true)
+            scroll.Content = panels[general];
+    }
+
     private Control General(bool trayChangeFailed, bool sleepChangeFailed)
     {
         var power = PowerSettings(sleepChangeFailed);
@@ -221,21 +228,15 @@ internal sealed class StreamSettingsPage : UserControl
             updatingStartup = true;
             try
             {
-                var state = StartupRegistration.Read();
-                startup.IsEnabled = state != StartupState.Unavailable;
-                startup.IsChecked = state is StartupState.On or StartupState.OtherLocation or StartupState.NeedsApproval;
-                startupNote.Text = error ?? (state switch
-                {
-                    StartupState.NeedsApproval => "请在系统设置的登录项中允许 Aurora。",
-                    StartupState.OtherLocation => "启动项指向另一个位置的 Aurora。关闭后重新开启可更新路径。",
-                    StartupState.Unavailable => "此系统或应用包无法登记开机自启动。",
-                    _ => StartupRegistration.InitializationError,
-                });
+                var preference = GeneralSettingsPreferences.DescribeStartup(StartupRegistration.Read());
+                startup.IsEnabled = preference.Available;
+                startup.IsChecked = preference.Enabled;
+                startupNote.Text = error ?? preference.Feedback;
             }
             catch (Exception)
             {
                 startup.IsEnabled = false;
-                startupNote.Text = "无法读取开机自启动状态。";
+                startupNote.Text = GeneralSettingsPreferences.StartupReadFailed;
             }
             finally { updatingStartup = false; }
             startupNote.IsVisible = !string.IsNullOrEmpty(startupNote.Text);
@@ -244,10 +245,8 @@ internal sealed class StreamSettingsPage : UserControl
         startup.IsCheckedChanged += (_, _) =>
         {
             if (updatingStartup || !startup.IsEnabled) return;
-            string error = null;
-            try { StartupRegistration.Change(startup.IsChecked == true); }
-            catch (Exception) { error = "无法更改开机自启动。"; }
-            ReadStartup(error);
+            ReadStartup(GeneralSettingsPreferences.TrySetStartup(startup.IsChecked == true)
+                ? null : GeneralSettingsPreferences.StartupChangeFailed);
         };
         refreshStartup = () => ReadStartup();
         ReadStartup();
@@ -259,7 +258,7 @@ internal sealed class StreamSettingsPage : UserControl
         const int exitAurora = 1;
         var choice = Combo(label, OperatingSystem.IsMacOS() ? "隐藏到菜单栏" : "最小化到托盘", "退出 Aurora");
         choice.SelectedIndex = TrayResidency.CloseToTray ? keepRunning : exitAurora;
-        var error = Text("无法更改关闭窗口的设置。", 12);
+        var error = Text(GeneralSettingsPreferences.CloseChangeFailed, 12);
         error.IsVisible = trayChangeFailed;
         error.Margin = new Thickness(0, 0, 0, 10);
 
@@ -294,30 +293,17 @@ internal sealed class StreamSettingsPage : UserControl
         selector.SelectionChanged += (_, _) =>
         {
             if (restoring || selector.SelectedIndex < 0) return;
-            if (TrySetSleepMode(modes[selector.SelectedIndex]))
+            if (GeneralSettingsPreferences.TrySetSleepMode(modes[selector.SelectedIndex]))
             {
                 message.Text = explanation;
                 return;
             }
-            message.Text = "无法保存自动休眠设置。";
+            message.Text = GeneralSettingsPreferences.SleepChangeFailed;
             restoring = true;
             selector.SelectedIndex = Array.IndexOf(modes, HostSleepPrevention.Mode);
             restoring = false;
         };
         return Card("电源", Row(label, selector), message);
-    }
-
-    private static bool TrySetSleepMode(HostSleepMode mode)
-    {
-        try
-        {
-            HostSleepPrevention.SetMode(mode);
-            return true;
-        }
-        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
-        {
-            return false;
-        }
     }
 
     private Control[] InputSettings()

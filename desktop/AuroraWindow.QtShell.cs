@@ -10,6 +10,11 @@ namespace Aurora;
 public sealed partial class AuroraWindow
 {
     private QtShellBridge qtShell;
+    private bool qtWindowVisible = true;
+    private bool qtDevicesForeground;
+    private int qtWindowActivation;
+    private string qtWindowPage;
+    private readonly QtShellGeneralSettings qtGeneralSettings = new();
     private (int Version, long? Owner, string LocalId, int? Generation) qtCatalogContext;
     private int qtDeviceEpoch;
     private string qtAccountName = "";
@@ -23,14 +28,14 @@ public sealed partial class AuroraWindow
         network?.IsAuthenticated == true && network.Generation == TailscaleRuntime.Generation &&
         !TailscaleRuntime.IsTransitioning;
 
-    internal void StartQtShell(string[] args)
+    internal bool StartQtShell(string[] args)
     {
         var index = Array.IndexOf(args ?? Array.Empty<string>(), "--qt-shell");
-        if (index < 0) return;
+        if (index < 0) return false;
         if (index + 2 >= args.Length)
         {
             Console.Error.WriteLine("Usage: --qt-shell <companion executable> <Live.qml>");
-            return;
+            return false;
         }
 
         try
@@ -42,25 +47,67 @@ public sealed partial class AuroraWindow
             Win32Exception or ArgumentException)
         {
             Console.Error.WriteLine($"Qt Shell could not start: {error.Message}");
-            return;
+            return false;
         }
 
         var bridge = qtShell;
         Closed += (_, _) => DetachQtShell(bridge);
         _ = ObserveQtShell(bridge);
+        ReadQtTailscaleCapabilities();
         PublishQtShellState();
+        return true;
+    }
+
+    internal bool TryShowQtWindow(string destination = null)
+    {
+        if (qtShell == null || closed) return false;
+        if (confirmationDecision != null)
+        {
+            TrayResidency.ShowAvaloniaWindow(this);
+            return true;
+        }
+        if (IsVisible) Hide();
+        qtWindowVisible = true;
+        qtWindowPage = destination;
+        qtWindowActivation++;
+        PublishQtShellState();
+        return true;
+    }
+
+    private void HideQtWindow()
+    {
+        qtWindowVisible = false;
+        qtDevicesForeground = false;
+        wallpaperRefresh?.Cancel();
+        PublishQtShellState();
+    }
+
+    private void ShowAvaloniaPage(Page destination)
+    {
+        HideQtWindow();
+        TrayResidency.ShowAvaloniaWindow(this);
+        Navigate(destination);
     }
 
     private async Task ObserveQtShell(QtShellBridge bridge)
     {
         try { await bridge.Completion; }
-        finally { DetachQtShell(bridge); }
+        finally
+        {
+            if (qtShell == bridge)
+            {
+                var shouldShow = qtWindowVisible && !closed;
+                DetachQtShell(bridge);
+                if (shouldShow) TrayResidency.ShowAvaloniaWindow(this);
+            }
+        }
     }
 
     private void DetachQtShell(QtShellBridge bridge)
     {
         if (qtShell != bridge) return;
         qtShell = null;
+        CloseQtTailscaleController();
         bridge.Dispose();
     }
 
@@ -92,8 +139,18 @@ public sealed partial class AuroraWindow
                 File.Exists(path) ? new Uri(path).AbsoluteUri : "");
         }).ToArray() : Array.Empty<QtShellDevice>();
         qtShell.Publish(new QtShellState(access, qtAccountName, accountSubtitle.Text, devices, qtDeviceEpoch,
-            ready && !refreshing && !manualRefresh && !qtRefreshing, qtRefreshing, qtFeedback, qtFeedbackFailed,
-            connecting, RefreshNotice.ReduceMotion()) { Host = ReadQtHostState() });
+            ready && !refreshing && !manualRefresh && !qtRefreshing && !QtTailscaleBlocksDevices, qtRefreshing, qtFeedback, qtFeedbackFailed,
+            connecting || QtTailscaleBlocksDevices, RefreshNotice.ReduceMotion())
+        {
+            Host = ReadQtHostState(),
+            // Carry the latest preference acknowledgement across device snapshots.
+            GeneralSettings = qtGeneralSettings.Snapshot,
+            TailscaleAccount = GetQtTailscaleAccount(),
+            ManagedWindow = true,
+            WindowVisible = qtWindowVisible,
+            WindowActivation = qtWindowActivation,
+            WindowPage = qtWindowPage
+        });
     }
 
     private void ReportQtShellFeedback(string message, bool failed)
@@ -107,12 +164,19 @@ public sealed partial class AuroraWindow
     private async Task HandleQtShellRequest(QtShellRequest request)
     {
         if (qtShell == null || closed) return;
+        if (qtGeneralSettings.TryHandle(request, out var preferencesChanged))
+        {
+            if (preferencesChanged)
+                settings?.RefreshGeneralPreferences();
+            PublishQtShellState();
+            return;
+        }
         switch (request.Action)
         {
-            case "refresh" when QtDevicesReady && !refreshing && !manualRefresh && !qtRefreshing:
+            case "refresh" when QtDevicesReady && !refreshing && !manualRefresh && !qtRefreshing && !QtTailscaleBlocksDevices:
                 await RefreshDevicesAndReport(Page.Devices);
                 break;
-            case "connect" when QtDevicesReady && !connecting:
+            case "connect" when QtDevicesReady && !connecting && !QtTailscaleBlocksDevices:
                 var device = request.DeviceEpoch == qtDeviceEpoch && !string.IsNullOrEmpty(request.DeviceId)
                     ? displayed.FirstOrDefault(item => item.Id == request.DeviceId && item.Online && item.CanConnect)
                     : null;
@@ -121,17 +185,28 @@ public sealed partial class AuroraWindow
                 else
                     ReportQtShellFeedback("设备状态已更新，请刷新后重试。", failed: true);
                 break;
+            case "window-close":
+                FinishQtTailscaleConfirmation(approved: false);
+                if (TrayResidency.CloseToTray) HideQtWindow();
+                else Close();
+                break;
+            case "devices-foreground":
+                qtDevicesForeground = qtWindowVisible;
+                _ = RefreshWallpapers();
+                break;
+            case "devices-background":
+                qtDevicesForeground = false;
+                wallpaperRefresh?.Cancel();
+                break;
             case "account":
-                TrayResidency.ShowMainWindow(this);
-                OpenAccount();
+            case string action when action.StartsWith("tailscale.", StringComparison.Ordinal):
+                await HandleQtTailscaleRequest(request);
                 break;
             case "settings":
-                TrayResidency.ShowMainWindow(this);
-                OpenApplicationSettings();
+                ShowAvaloniaPage(Page.Settings);
                 break;
             case "host" when Upstream.SupportsHost:
-                TrayResidency.ShowMainWindow(this);
-                Navigate(Page.Host);
+                ShowAvaloniaPage(Page.Host);
                 break;
             default:
                 await HandleQtHostRequest(request.Action);

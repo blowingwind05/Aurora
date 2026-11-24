@@ -17,7 +17,7 @@ using Avalonia.Threading;
 
 namespace Aurora;
 
-internal sealed class TailscalePage : UserControl, IDisposable
+internal sealed partial class TailscalePage : UserControl, IDisposable
 {
     private sealed record ModeChoice(TailscaleMode Mode, string Label)
     {
@@ -141,8 +141,9 @@ internal sealed class TailscalePage : UserControl, IDisposable
     public event Action<TailscaleStatus> StatusChanged;
 
     public TailscalePage(Func<Task<bool>> confirmLogout, Func<string, string, Task<bool>> confirmSwitch = null,
-        Func<bool> hasActiveSession = null, Action<string> showSwitchSuccess = null)
+        Func<bool> hasActiveSession = null, Action<string> showSwitchSuccess = null, bool externalPresentation = false)
     {
+        this.externalPresentation = externalPresentation;
         this.confirmLogout = confirmLogout ?? throw new ArgumentNullException(nameof(confirmLogout));
         this.confirmSwitch = confirmSwitch;
         this.hasActiveSession = hasActiveSession;
@@ -249,14 +250,7 @@ internal sealed class TailscalePage : UserControl, IDisposable
             if (CanChoose && retry != null) await retry();
         };
         logout.Click += async (_, _) => await RequestLogout();
-        action.Click += async (_, _) =>
-        {
-            if (!CanChoose || !hasStatus) return;
-            if (mode == TailscaleMode.System && current.State == TailscaleState.NotInstalled)
-                await RequestModeSwitch(Embedded);
-            else
-                await Run(Activate);
-        };
+        action.Click += async (_, _) => await RequestPrimaryAction();
         timer.Tick += async (_, _) => await Run(() => Read(), background: true);
         TailscaleRuntime.ContextChanging += RuntimeChanging;
         TailscaleRuntime.ContextChanged += RuntimeChanged;
@@ -575,7 +569,7 @@ internal sealed class TailscalePage : UserControl, IDisposable
             modeSelector.ItemsSource = hasSystem ? BothModes : EmbeddedOnly;
             modeSelector.IsVisible = TailscaleRuntime.SupportsEmbedded && (mode == TailscaleMode.Embedded || hasSystem);
             modeSelector.SelectedItem = modeSelector.IsVisible ? selected : null;
-            fixedMode.Text = mode == TailscaleMode.System && !hasSystem ? "暂不可用" : selected.Label;
+            fixedMode.Text = DescribeMode(mode, hasSystem);
             fixedMode.IsVisible = !modeSelector.IsVisible;
             UpdateProfileIdentity();
             var runtimeProgress = switchMessage != null && !switchingProfile;
@@ -607,6 +601,7 @@ internal sealed class TailscalePage : UserControl, IDisposable
         action.IsEnabled = enabled && hasStatus;
         // The confirmation dialog restores focus to this button on cancellation.
         logout.IsEnabled = hasStatus && (enabled || confirmingLogout && foregroundOperations == 0);
+        QtPresentationChanged?.Invoke();
     }
 
     private void SetProfiles(TailscaleProfile[] next)
@@ -805,6 +800,13 @@ internal sealed class TailscalePage : UserControl, IDisposable
         return new StackPanel { Spacing = 5, Margin = new Thickness(0, 8, 0, 0), Children = { toggle, help } };
     }
 
+    private Task RequestPrimaryAction()
+    {
+        if (!CanChoose || !hasStatus || action.Content is not string { Length: > 0 }) return Task.CompletedTask;
+        return mode == TailscaleMode.System && current.State == TailscaleState.NotInstalled
+            ? RequestModeSwitch(Embedded) : Run(Activate);
+    }
+
     private async Task Activate()
     {
         var state = current.State;
@@ -936,15 +938,17 @@ internal sealed class TailscalePage : UserControl, IDisposable
         if (notify) StatusChanged?.Invoke(current);
     }
 
-    private void Render()
-    {
-        (status.Text, details.Text, action.Content) = !hasStatus
-            ? ("正在检查", "正在读取当前运行方式的连接状态。", "")
-            : current.State switch
+    internal static string DescribeMode(TailscaleMode mode, bool hasSystem) =>
+        mode == TailscaleMode.Embedded ? Embedded.Label : hasSystem ? SystemClient.Label : "暂不可用";
+
+    internal static (string Status, string Detail, string Action) DescribeStatus(
+        TailscaleState? state, TailscaleMode mode, bool supportsEmbedded, bool loginAfterSwitch = false) =>
+        state switch
         {
-            TailscaleState.NotInstalled when mode == TailscaleMode.Embedded && TailscaleRuntime.SupportsEmbedded =>
+            null => ("正在检查", "正在读取当前运行方式的连接状态。", ""),
+            TailscaleState.NotInstalled when mode == TailscaleMode.Embedded && supportsEmbedded =>
                 ("未启动", "启动内置 Tailscale 后即可登录。", "启动内置 Tailscale"),
-            TailscaleState.NotInstalled when TailscaleRuntime.SupportsEmbedded =>
+            TailscaleState.NotInstalled when supportsEmbedded =>
                 ("暂不可用", "可以使用内置 Tailscale 连接设备。", "使用内置 Tailscale"),
             TailscaleState.NotInstalled => ("暂不可用", "当前无法建立连接，可刷新状态后重试。", ""),
             TailscaleState.NeedsLogin when loginAfterSwitch =>
@@ -959,6 +963,10 @@ internal sealed class TailscalePage : UserControl, IDisposable
             _ when mode == TailscaleMode.Embedded => ("状态未知", "暂时无法读取内置 Tailscale，请刷新状态后重试。", ""),
             _ => ("状态未知", "暂时无法读取 Tailscale。请确认系统客户端和后台服务已启动，再刷新状态。", "")
         };
+    private void Render()
+    {
+        (status.Text, details.Text, action.Content) =
+            DescribeStatus(hasStatus ? current.State : null, mode, TailscaleRuntime.SupportsEmbedded, loginAfterSwitch);
         var connected = hasStatus && current.State == TailscaleState.Connected;
         var ink = !hasStatus ? StatusGray : current.State switch
         {
@@ -985,7 +993,7 @@ internal sealed class TailscalePage : UserControl, IDisposable
         UpdateRuntimePanel();
     }
 
-    private bool CanRenderAvatar => !closed && active && hasStatus && !focusLoginAfterLogout && IsEffectivelyVisible &&
+    private bool CanRenderAvatar => !externalPresentation && !closed && active && hasStatus && !focusLoginAfterLogout && IsEffectivelyVisible &&
         current.State == TailscaleState.Connected && avatarWindow is { IsVisible: true, WindowState: not WindowState.Minimized };
 
     private void UpdateAvatar()
@@ -1049,6 +1057,13 @@ internal sealed class TailscalePage : UserControl, IDisposable
     {
         if (!active || closed || !hasStatus || (!focusPrimary && !focusLoginAfterLogout)) return;
         if (focusLoginAfterLogout && current.State is not (TailscaleState.NeedsLogin or TailscaleState.Stopped or TailscaleState.NotInstalled)) return;
+        if (externalPresentation && CanChoose && action.IsVisible)
+        {
+            focusPrimary = focusLoginAfterLogout = false;
+            qtFocusVersion++;
+            QtPresentationChanged?.Invoke();
+            return;
+        }
         var target = current.State == TailscaleState.Connected ? (profileTrigger.IsVisible ? profileTrigger : logout) : action;
         if (target.IsVisible && target.IsEnabled && target.Focus())
             focusPrimary = focusLoginAfterLogout = false;
@@ -1107,12 +1122,14 @@ internal sealed class TailscalePage : UserControl, IDisposable
         SetRetry(null);
         if (message != null) RouteFeedback(runtime);
         feedback.ShowPersistent(message);
+        QtPresentationChanged?.Invoke();
     }
 
     private void SetRetry(Func<Task> change)
     {
         retry = active ? change : null;
         retrySwitch.IsVisible = retry != null;
+        QtPresentationChanged?.Invoke();
     }
 
     private bool Open(string url)

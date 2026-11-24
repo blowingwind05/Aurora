@@ -42,7 +42,8 @@ Live {
                 case 1:
                     if (shell.deviceAccess !== "ready")
                         return
-                    check(shell.width === 1000 && shell.deviceModel.count === 2, "wide device list")
+                    check(!shell.narrow && shell.deviceModel.count === 2,
+                          "wide device list (" + shell.width + "; " + shell.deviceModel.count + ")")
                     check(account.text === "联调账户" && account.subtitle === "GitHub", "signed-in account")
                     const row = shell.deviceModel.get(0)
                     check(row.lanAddress === "192.0.2.36" && row.tailscaleAddress === "100.100.0.36", "device addresses")

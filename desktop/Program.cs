@@ -35,20 +35,30 @@ public sealed class AuroraApp : Application
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
             var window = new AuroraWindow();
-            desktop.MainWindow = window;
-            window.StartQtShell(desktop.Args);
             Program.Instance?.Listen(() => Dispatcher.UIThread.Post(() => TrayResidency.ShowMainWindow(window)));
             desktop.Exit += (_, _) => EmbeddedTailnet.Stop();
             _ = EmbeddedTailnet.ResumeIfConfigured();
             void ShowSettings()
             {
-                if (window.PlatformImpl == null) return;
-                TrayResidency.ShowMainWindow(window);
+                if (window.PlatformImpl == null || window.TryShowQtWindow("settings")) return;
+                TrayResidency.ShowAvaloniaWindow(window);
                 window.OpenApplicationSettings();
             }
 
             TrayResidency.Initialize(this, window, window.Close, ShowSettings);
             StartupRegistration.InitializeDefault();
+            if (window.StartQtShell(desktop.Args))
+            {
+                // Avalonia's default lifetime shows MainWindow automatically. With Qt
+                // active, initialize the host without presenting its Avalonia window.
+                desktop.ShutdownMode = ShutdownMode.OnExplicitShutdown;
+                window.Closed += (_, _) => desktop.Shutdown();
+                Dispatcher.UIThread.Post(() => _ = window.InitializeHostAsync());
+            }
+            else
+            {
+                desktop.MainWindow = window;
+            }
             if (OperatingSystem.IsMacOS())
             {
                 var settings = new NativeMenuItem("设置") { Gesture = new KeyGesture(Key.OemComma, KeyModifiers.Meta) };

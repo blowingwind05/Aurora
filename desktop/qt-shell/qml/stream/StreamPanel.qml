@@ -8,12 +8,16 @@ FocusScope {
     id: panel
     objectName: "streamPanel"
     property var session
+    property bool nativePopup: false
+    property int heightLimit: parent.height - y - gutter
     readonly property bool controls: session.panelKind === "controls"
     readonly property int gutter: 8
     readonly property int preferredWidth: controls ? 288 : session.panelKind === "connection" ? 292 : 248
 
-    y: session.barHeight + (controls || session.tight ? 2 : 3)
+    y: nativePopup ? 0 : session.barHeight + (controls || session.tight ? 2 : 3)
     x: {
+        if (nativePopup)
+            return 0
         var anchor = session.panelAnchor
         if (controls && parent.width < 530)
             return parent.width - width - gutter
@@ -25,8 +29,8 @@ FocusScope {
         return Math.max(gutter, Math.min(parent.width - width - gutter,
                                         controls ? origin + anchor.width - width : origin - (session.panelKind === "displays" ? 11 : 0)))
     }
-    width: Math.max(0, Math.min(preferredWidth, parent.width - 2 * gutter))
-    height: Math.max(0, Math.min(430, parent.height - y - gutter, scroller.contentHeight + 12))
+    width: nativePopup ? preferredWidth : Math.max(0, Math.min(preferredWidth, parent.width - 2 * gutter))
+    height: Math.max(0, Math.min(430, heightLimit, scroller.contentHeight + 12))
 
     function focusInitial() {
         if (!visible || !body.item)
@@ -123,6 +127,9 @@ FocusScope {
         id: controlCenter
         StreamControlCenter {
             session: panel.session
+            showSettingPages: !panel.nativePopup
+            offerNativeSettings: panel.nativePopup
+            onNativeSettingsRequested: panel.session.nativeSettingsRequested()
             onPageChangedByUser: panel.focusInitial()
         }
     }

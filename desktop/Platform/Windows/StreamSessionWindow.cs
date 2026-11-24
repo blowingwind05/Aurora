@@ -18,7 +18,7 @@ using Avalonia.VisualTree;
 
 namespace Aurora;
 
-internal sealed class StreamSessionWindow : Window
+internal sealed partial class StreamSessionWindow : Window
 {
     private const int AttachmentFailed = 74;
     private const string DisconnectIcon = "M10 17l5-5-5-5 M15 12H3 M12 3h6a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-6";
@@ -102,7 +102,7 @@ internal sealed class StreamSessionWindow : Window
 
     private string SessionName => "Aurora.Embedded." + id;
 
-    internal StreamSessionWindow(string deviceName, Func<StreamSessionWindow, Task> retry)
+    internal StreamSessionWindow(string deviceName, Func<StreamSessionWindow, Task> retry, QtShellLaunch qtShell = null)
     {
         Title = deviceName + " · Aurora";
         Width = 1000;
@@ -217,6 +217,7 @@ internal sealed class StreamSessionWindow : Window
             controlCenter.SaveBitrate();
         };
         connectionFlyout.Opening += (_, _) => controlMenu.Hide();
+        WireQtSessionPopup(qtShell, floatingControls);
         ShowPrivacyState();
 
         var minimize = CaptionButton("最小化", AuroraVisual.Minus, () => WindowState = WindowState.Minimized);
@@ -292,6 +293,7 @@ internal sealed class StreamSessionWindow : Window
         PropertyChanged += (_, args) =>
         {
             if (args.Property != WindowStateProperty) return;
+            CloseQtSessionPopup();
             frame.CornerRadius = new CornerRadius(WindowState == WindowState.Normal ? 13 : 0);
             frame.BorderThickness = new Thickness(WindowState == WindowState.Normal ? 1 : 0);
             UpdateWindowActions();
@@ -311,6 +313,7 @@ internal sealed class StreamSessionWindow : Window
             if (stop.IsCancellationRequested) return;
             SetStatus(connected ? "正在断开" : "正在取消", "#526176");
             stageMessage.Text = status.Text + "…";
+            CloseQtSessionPopup();
             stop.Cancel();
         };
     }
@@ -427,6 +430,8 @@ internal sealed class StreamSessionWindow : Window
 
     internal void ShowConnecting(CancellationTokenSource cancellation)
     {
+        CloseQtSessionPopup();
+        qtConnectionSample = null;
         stop = cancellation;
         connected = allowClose = false;
         sizing.SetAspect(0);
@@ -459,6 +464,7 @@ internal sealed class StreamSessionWindow : Window
 
     internal void ShowFailure(string message)
     {
+        CloseQtSessionPopup();
         connected = false;
         controlMenu.Hide();
         sizing.SetAspect(0);
@@ -566,6 +572,8 @@ internal sealed class StreamSessionWindow : Window
                     {
                         displayed = sample;
                         connectionDetails.Update(sample);
+                        qtConnectionSample = sample;
+                        publishQtSessionPopup?.Invoke();
                         UpdateStreamAspect(sample);
                         SetStatus(sample.Poor ? "网络较差" : "已连接", sample.Poor ? "#946317" : "#087CF5");
                     }
@@ -584,6 +592,8 @@ internal sealed class StreamSessionWindow : Window
                     surface.IsVisible = false;
                     stage.IsVisible = true;
                 }
+                CloseQtSessionPopup();
+                qtConnectionSample = null;
                 connectionFlyout.Hide();
                 connectionDetails.Update(null);
                 privacyRequest = null;

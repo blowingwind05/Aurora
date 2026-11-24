@@ -63,6 +63,12 @@ internal sealed class TrayResidency
 
     internal static void ShowMainWindow(Window window)
     {
+        if (window is AuroraWindow aurora && aurora.TryShowQtWindow()) return;
+        ShowAvaloniaWindow(window);
+    }
+
+    internal static void ShowAvaloniaWindow(Window window)
+    {
         if (window.PlatformImpl == null) return;
         if (window.WindowState == WindowState.Minimized) window.WindowState = WindowState.Normal;
         if (!window.IsVisible) window.Show();
