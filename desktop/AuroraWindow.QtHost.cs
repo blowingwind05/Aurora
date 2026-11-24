@@ -56,7 +56,10 @@ public sealed partial class AuroraWindow
             SettingsAvailable: installed,
             Hint: hint,
             Feedback: qtHostFeedback,
-            FeedbackFailed: qtHostFeedbackFailed);
+            FeedbackFailed: qtHostFeedbackFailed)
+        {
+            Sunshine = installed ? sunshinePage?.QtState ?? SunshinePage.QtIdleState(managed) : null
+        };
     }
 
     private void ReportQtHostFeedback(string message, bool failed)
@@ -81,7 +84,6 @@ public sealed partial class AuroraWindow
             "hostCopyTailnet" => state.TailscaleAddress.Length > 0,
             "hostOpenPermissions" => state.PermissionsAvailable,
             "hostContinuePermissions" => state.PermissionsAvailable && state.RefreshAvailable,
-            "hostOpenSettings" => state.SettingsAvailable,
             _ => false
         };
         if (!available) return;
@@ -94,6 +96,8 @@ public sealed partial class AuroraWindow
             {
                 case "hostRefresh":
                     await RefreshDevicesAndReportCore(Page.Host);
+                    if (sunshinePage?.QtAttached == true)
+                        await sunshinePage.RefreshQtSettings();
                     break;
                 case "hostEnable":
                 case "hostDisable":
@@ -122,9 +126,6 @@ public sealed partial class AuroraWindow
                         ReportQtHostFeedback(ready ? "检测完成，Sunshine 正在运行。" :
                             "Sunshine 尚未就绪。请检查后重新检测。", failed: !ready);
                     }
-                    break;
-                case "hostOpenSettings":
-                    ShowAvaloniaPage(Page.Host);
                     break;
             }
         }

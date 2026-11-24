@@ -34,8 +34,8 @@ try
     Publish(permissions with { Busy = true, Refreshing = true });
     await Expect("test-permission-pending");
     Publish(permissions with { Feedback = "检测完成，Sunshine 正在运行。" });
-    await Expect("hostOpenSettings");
-    Publish(running with { Feedback = "已打开 Sunshine 设置。" });
+    await Expect("test-permissions-returned");
+    Publish(running with { Feedback = "已完成权限检测。" });
     await Expect("hostRefresh");
     Publish(running with { Busy = true, Refreshing = true });
     await Expect("test-refreshing");
@@ -55,7 +55,7 @@ try
     Publish(running with { Feedback = "检测完成，Sunshine 正在运行。" });
     await Expect("test-finished");
     await bridge.Completion.WaitAsync(timeout.Token);
-    Console.WriteLine("PASS: Qt local host navigation, snapshot-driven switch, both address actions, permissions, refresh, settings handoff, Escape/cancel/confirm, and retry.");
+    Console.WriteLine("PASS: Qt local host navigation, snapshot-driven switch, both address actions, permissions, refresh, Escape/cancel/confirm, and retry.");
 
     void Publish(QtShellHostState host) => bridge.Publish(shell with
     {

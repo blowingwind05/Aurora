@@ -10,6 +10,7 @@
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
   </PropertyGroup>
   <ItemGroup>
+    <InternalsVisibleTo Include="Aurora.QtSunshine.Replay" />
     <AvaloniaResource Include="Assets/**" Exclude="Assets/Aurora.icns" />
     <EmbeddedResource Include="Read-SunshineCertificate.ps1" LogicalName="Aurora.ReadSunshineCertificate.ps1" />
     <EmbeddedResource Include="SunshineOptions.json" LogicalName="Aurora.SunshineOptions.json" />

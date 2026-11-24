@@ -15,7 +15,7 @@
 
 ## 启动真实主窗口联调
 
-Windows Qt 便携包带有 Qt 运行时和 QML 入口，可直接双击 `Aurora.exe` 启动。Qt 子程序的窗口图标和可执行文件图标均使用 `desktop/Assets/Aurora.ico`。打包 QML 时同时复制 `desktop/Assets/panel-top-tight.svg`，供「这台电脑」卡片使用。以下命令用于从源码独立构建并试用 Qt 界面。
+Windows Qt 便携包带有 Qt 运行时和 QML 入口，可直接双击 `Aurora.exe` 启动。Qt 子程序的窗口图标和可执行文件图标均使用 `desktop/Assets/Aurora.ico`。打包 QML 时复制 `docs/visual-design/assets/icons/` 及其许可文件，并带上 `desktop/Assets/panel-top-tight.svg`。以下命令用于从源码独立构建并试用 Qt 界面。
 
 需要 .NET 9、CMake、C++17 工具链和 Qt Quick、Quick Controls 2 的开发与运行组件。当前验收环境为 Windows x64、MSVC 和 Qt 5.15.2。准备 Qt 运行时后，从已应用补丁的副本根目录运行。Windows 使用 x64 开发者 PowerShell。给 `CMAKE_PREFIX_PATH` 填写 Qt 安装前缀，Windows 的 `PATH` 中加入该 Qt 的 `bin`。下面的构建路径应位于副本或独立临时目录。
 
@@ -31,7 +31,7 @@ dotnet desktop/bin/Release/net9.0/win-x64/Aurora.dll --qt-shell $qtShell $live
 
 在 macOS 上用匹配 .NET 目标架构的 Qt 和 CMake 默认生成器构建，将 RID 换成 `osx-arm64` 或 `osx-x64`，将子程序路径换成无 `.exe` 后缀的路径。QML 仍从源码目录加载，以复用现有资源路径。
 
-`--qt-shell` 在 Aurora 首次启动时以 Qt 窗口作为主窗口，Avalonia 宿主在后台运行。当前若已有 Aurora 实例，请从原窗口退出后再启动带参数的副本。「账户」「设置」和「本机被控」进入 Qt 页。当前账户授权和 Sunshine 高级配置调用既有页面，打开这些页面时先隐藏 Qt 窗口。点击「我的设备」回到 Qt。Qt 窗口沿用主程序的关闭偏好，退出 Aurora 时结束 Qt 子进程。设备筛选、刷新文案、身份验证、选路及串流由现有 C# 流程负责。
+`--qt-shell` 在 Aurora 首次启动时以 Qt 窗口作为主窗口，Avalonia 宿主在后台运行。当前若已有 Aurora 实例，请从原窗口退出后再启动带参数的副本。「账户」「设置」和「本机被控」进入 Qt 页。Sunshine 常用设置及全部配置项在 Qt 内显示。账号授权和系统权限按需打开对应的系统界面。Qt 窗口沿用主程序的关闭偏好，退出 Aurora 时结束 Qt 子进程。设备筛选、刷新文案、身份验证、选路及串流由现有 C# 流程负责。
 
 子进程通过重定向的 stdin/stdout 交换 UTF-8 JSON 行。C# 写入完整状态快照，Qt 回写 设备操作与导航请求。连接消息带当前快照的 `deviceEpoch` 和 `deviceId`，以便 C# 拒绝账户切换前的设备操作。标准错误用于 Qt 诊断。
 
@@ -44,7 +44,7 @@ $env:QT_QPA_PLATFORM = 'offscreen'
 $env:QT_QUICK_BACKEND = 'software'
 $env:QT_FORCE_STDERR_LOGGING = '1'
 dotnet build tests/qt-shell/Replay.csproj --disable-build-servers
-dotnet tests/qt-shell/bin/Debug/net9.0/Replay.dll $qtShell tests/qt-shell/Replay.qml
+pwsh -NoProfile -NonInteractive -File tests/qt-sunshine-shell/Run-IsolatedReplay.ps1 -Assembly tests/qt-shell/bin/Debug/net9.0/Replay.dll -Log devices-replay.txt $qtShell tests/qt-shell/Replay.qml
 Remove-Item Env:QT_QPA_PLATFORM, Env:QT_QUICK_BACKEND, Env:QT_FORCE_STDERR_LOGGING
 ```
 
@@ -65,7 +65,7 @@ Windows 的 Qt 若提示缺少离屏字体目录，可在回放前给 `QT_QPA_FO
 | `hostRetry` | 按已保存的被控偏好重试启动。 |
 | `hostCopyLan` / `hostCopyTailnet` | 由宿主复制当前有效地址并回传结果。 |
 | `hostOpenPermissions` / `hostContinuePermissions` | 打开已有的 macOS 隐私设置入口，继续时重新检测或重试启动。屏幕录制和辅助功能的授权由系统与 Aurora Host 处理。 |
-| `hostOpenSettings` | 打开 Avalonia 的「本机被控」，沿用常用设置、重启确认、全部配置项及独立 Sunshine 管理入口。 |
+| `sunshineLoad` / `sunshineSave` | 读取 Sunshine 配置并在 Qt 内编辑、自动保存及回读。 |
 
 使用同一 Qt 子程序运行模拟宿主。回放需要 QtTest 的 QML 模块。它在 Windows Qt 5.15.2 上使用 Qt 鼠标和键盘事件，并检查通过标准输入输出传递的快照和请求。
 
@@ -75,7 +75,29 @@ $env:QT_QPA_PLATFORM = 'offscreen'
 $env:QT_QUICK_BACKEND = 'software'
 $env:QML_DISABLE_DISK_CACHE = '1'
 dotnet build tests/qt-host-shell/HostReplay.csproj --disable-build-servers
-dotnet tests/qt-host-shell/bin/Debug/net9.0/HostReplay.dll $qtShell tests/qt-host-shell/HostReplay.qml
+pwsh -NoProfile -NonInteractive -File tests/qt-sunshine-shell/Run-IsolatedReplay.ps1 -Assembly tests/qt-host-shell/bin/Debug/net9.0/HostReplay.dll -Log host-replay.txt $qtShell tests/qt-host-shell/HostReplay.qml
 ```
 
-回放检查 1000 和 320 px 布局、未登录时的本机地址、长 IPv6 地址换行、复制请求、重新检测、权限和设置入口、默认聚焦「取消」、Esc、显式取消、确认停止后的状态和启动失败后的重试。地址和服务反馈由回放进程提供，权限操作以收到预期请求为验收条件。
+回放检查宽窗和 320 px 布局、未登录时的本机地址、长 IPv6 地址换行、复制请求、重新检测、权限入口、默认聚焦「取消」、Esc、显式取消、确认停止后的状态和启动失败后的重试。地址和服务反馈由回放进程提供，权限操作以收到预期请求为验收条件。
+
+
+## Sunshine 常用设置和全部配置项
+
+Qt 在同一个「本机被控」工作区显示常用设置、远控显示和全部配置项。高级页使用现有 Sunshine 配置目录的 96 个字段，并标记由 Aurora 管理的只读项。文本停止输入约 650 ms 后自动提交，开关和下拉立即提交。C# 使用 Sunshine 的原保存和回读流程，失败的草稿保留在对应字段。离开、关闭窗口或关闭被控前先尝试保存，有失败项时在 Qt 确认是否放弃。重启 Sunshine 前会再确认。
+
+快照通过 `host.sunshine` 发布设置、会话标识和保存回执。`sunshineLoad` 读取配置和诊断，`sunshineSave` 按会话标识和请求 ID 返回保存结果。`sunshineRestart`、`sunshineCertificate`、`sunshineLogin`、`sunshineForget`、`sunshineOriginal`、`sunshineReauthorize` 和 `sunshinePair` 调用已有 C# 服务链。密码和 PIN 只在请求中出现。Windows 管理员授权、macOS 隐私设置和用户主动打开的 Sunshine 原版设置仍交给系统。
+
+### Windows 隔离回放
+
+在临时副本中构建 Qt 子程序，设置 `$qtShell` 为该可执行文件的绝对路径，并将对应 Qt 的 `bin` 加入 `PATH`。回放脚本强制 Qt 离屏软件渲染，并在当前测试进程树禁用 Windows 错误弹窗。托管入口捕获异常、写 stderr 并返回非零。日志路径应指向本次验收的临时目录。
+
+```powershell
+$env:DOTNET_GENERATE_ASPNET_CERTIFICATE = 'false'
+$env:AVALONIA_TELEMETRY_OPTOUT = '1'
+dotnet build tests/qt-sunshine-shell/Replay.csproj -c Release -p:RuntimeIdentifiers= --disable-build-servers
+$replay = 'tests/qt-sunshine-shell/bin/Release/net9.0/Aurora.QtSunshine.Replay.dll'
+$runner = 'tests/qt-sunshine-shell/Run-IsolatedReplay.ps1'
+pwsh -NoProfile -NonInteractive -File $runner -Assembly $replay -Log sunshine-replay.txt $qtShell tests/qt-sunshine-shell/SunshineReplay.qml
+```
+
+省略 `$qtShell` 和 QML 路径可单独检查 C# 的读取、写入、回读及显示状态。将参数换成 `--verify-failure` 可验证捕获异常和退出码 1。回放中的 HTTP 响应由内存处理器提供，Qt 与 C# 使用真实管道。证书授权、系统隐私权限和实际 Sunshine 服务启停属于实机验收范围。

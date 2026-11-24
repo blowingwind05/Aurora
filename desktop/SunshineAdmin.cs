@@ -44,12 +44,13 @@ internal sealed class SunshineAdmin : IDisposable
     private AuthenticationHeaderValue authorization;
     public string SettingsUrl => http.BaseAddress.AbsoluteUri;
     public string CredentialScope { get; private init; }
-    internal bool IsManaged { get; private init; }
+    internal bool IsManaged { get; }
 
-    internal SunshineAdmin(HttpMessageHandler handler, Uri endpoint)
+    internal SunshineAdmin(HttpMessageHandler handler, Uri endpoint, bool managed = false)
     {
         if (!endpoint.IsLoopback || endpoint.Scheme != Uri.UriSchemeHttps)
             throw new ArgumentException("Sunshine 管理只允许本机 HTTPS。", nameof(endpoint));
+        IsManaged = managed;
         http = new HttpClient(handler)
         {
             BaseAddress = endpoint,
@@ -125,10 +126,9 @@ internal sealed class SunshineAdmin : IDisposable
             ServerCertificateCustomValidationCallback = (request, presented, _, _) =>
                 MatchesLocalCertificate(endpoint, request.RequestUri, expected, presented)
         };
-        return new SunshineAdmin(handler, endpoint)
+        return new SunshineAdmin(handler, endpoint, bundled)
         {
             CredentialScope = $"{endpoint.Port}/{Convert.ToHexString(expected)}",
-            IsManaged = bundled,
             TrustScope = scope,
             SupportsCertificateImport = supportsImport,
             VerifiedCertificateHash = expected
@@ -214,9 +214,10 @@ internal sealed class SunshineAdmin : IDisposable
             throw new InvalidOperationException("请输入密码，密码不能含控制字符。");
     }
 
-    public async Task<SunshinePreferences> ReadPreferences()
+    public async Task<SunshinePreferences> ReadPreferences() => ParsePreferences(await ReadOptions());
+
+    internal static SunshinePreferences ParsePreferences(JsonElement root)
     {
-        var root = await ReadOptions();
         var enabled = !root.TryGetProperty("stream_audio", out var audio) ||
             audio.ToString().ToLowerInvariant() is "on" or "yes" or "true" or "enable" or "enabled" ||
             audio.ToString().Contains('1');
@@ -382,7 +383,7 @@ internal sealed class SunshineAdmin : IDisposable
         catch (HttpRequestException error) when (error.HttpRequestError == HttpRequestError.ResponseEnded) { }
     }
 
-    private static void ValidateName(string name, bool allowEmpty)
+    internal static void ValidateName(string name, bool allowEmpty)
     {
         if ((!allowEmpty && string.IsNullOrWhiteSpace(name)) || name.Any(char.IsControl) ||
             name.Contains('#') || Encoding.UTF8.GetByteCount(name) > 128)

@@ -209,7 +209,7 @@ internal sealed class SunshineOptionsPage : UserControl
         scroll.Offset = default;
     }
 
-    private static string CategoryFor(SunshineOption option) => option.Group switch
+    internal static string CategoryFor(SunshineOption option) => option.Group switch
     {
         "输入" => "输入",
         "网络" => "网络",

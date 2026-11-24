@@ -72,55 +72,16 @@ public sealed partial class SunshinePage : UserControl, IDisposable
         }
         AuroraVisual.SetTextAction(DetailedSettings, "全部配置项", AuroraVisual.ChevronRight);
         Loaded += async (_, _) => await ReloadIfUnavailable();
-        ImportCert.Click += async (_, _) => await Run(async () =>
+        ImportCert.Click += async (_, _) => await ImportCertificate();
+        ForgetLogin.Click += async (_, _) => await ForgetCredentials();
+        OriginalPage.Click += (_, _) => OpenOriginalSettings();
+        AccountAction.Click += async (_, _) =>
         {
-            if (!OperatingSystem.IsWindows() || bundled) return;
-            try { await Open(await SunshineTrust.ReadElevated()); }
-            catch (Win32Exception error) when (error.NativeErrorCode == 1223)
-            {
-                Feedback.Text = "已取消管理员授权。没有导入证书，也不会发送账号密码。";
-            }
-        });
-        ForgetLogin.Click += async (_, _) => await Run(() =>
-        {
-            credentials.Forget();
-            ForgetLogin.IsVisible = false;
-            RememberLogin.IsChecked = false;
-            if (SettingsPanel.IsVisible) ConnectionNote.Text = "已连接本机 Sunshine · 登录只在本次运行期间有效";
-            Feedback.Text = "已从 Windows 凭据管理器删除。退出 Aurora 后需要重新登录。";
-            return Task.CompletedTask;
-        });
-        OriginalPage.Click += (_, _) =>
-        {
-            try
-            {
-                var url = admin?.SettingsUrl ?? (bundled ? BundledSunshine.AdminEndpoint.AbsoluteUri : Upstream.SettingsUrl);
-                using var process = Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
-            }
-            catch (Exception error) { Feedback.Text = error.Message; }
-        };
-        AccountAction.Click += async (_, _) => await Run(async () =>
-        {
-            var username = Username.Text?.Trim() ?? "";
             var password = Password.Text ?? "";
             var confirmation = Confirmation.Text ?? "";
-            var remember = RememberLogin.IsChecked == true;
             Password.Text = Confirmation.Text = "";
-            if (access == SunshineAccess.Setup) await admin.CreateAccount(username, password, confirmation);
-            else await admin.Login(username, password);
-            access = SunshineAccess.SignedIn;
-            if (!closed && remember)
-            {
-                try { credentials.Save(username, password); ForgetLogin.IsVisible = true; }
-                catch (Exception error) { Feedback.Text = "已登录，但无法记住登录：" + error.Message; }
-            }
-            else if (!closed && ForgetLogin.IsVisible)
-            {
-                try { credentials.Forget(); ForgetLogin.IsVisible = false; }
-                catch (Exception error) { Feedback.Text = "已登录，但无法清除先前保存的凭据：" + error.Message; }
-            }
-            await ShowSettings();
-        });
+            await SubmitCredentials(Username.Text?.Trim() ?? "", password, confirmation, RememberLogin.IsChecked == true);
+        };
         DetailedSettings.Click += async (_, _) =>
         {
             if (!await FinishSettingsAsync()) return;
@@ -135,14 +96,12 @@ public sealed partial class SunshinePage : UserControl, IDisposable
             });
         };
         PairingReauthorize.Click += async (_, _) => await Run(() => UpdateAutomaticPairing(reauthorize: true), showProgress: false);
-        ApproveMoonlight.Click += async (_, _) => await Run(async () =>
+        ApproveMoonlight.Click += async (_, _) =>
         {
             var pin = MoonlightPin.Text;
             MoonlightPin.Clear();
-            await admin.Pair(MoonlightRequest.SelectedItem as SunshinePairing, pin, "Moonlight");
-            await RefreshMoonlightRequests();
-            Feedback.Text = "Moonlight 已配对。";
-        });
+            await ApprovePairing(MoonlightRequest.SelectedItem as SunshinePairing, pin);
+        };
         Restart.Click += async (_, _) =>
         {
             if (!await FinishSettingsAsync()) return;
@@ -160,32 +119,87 @@ public sealed partial class SunshinePage : UserControl, IDisposable
             if (!await FinishSettingsAsync()) return;
             await Run(RestartHost);
         };
-        async Task RestartHost()
+        UpdateButtons();
+    }
+
+    private Task ImportCertificate() => Run(async () =>
+    {
+        if (!OperatingSystem.IsWindows() || bundled) return;
+        try { await Open(await SunshineTrust.ReadElevated()); }
+        catch (Win32Exception error) when (error.NativeErrorCode == 1223)
         {
-            RestartConfirmation.IsVisible = false;
-            if (!bundled)
-            {
-                await admin.Restart();
-                Feedback.Text = "已发送重启请求。请等待服务恢复后再连接。";
-                return;
-            }
+            Feedback.Text = "已取消管理员授权。没有导入证书，也不会发送账号密码。";
+        }
+    });
 
-            StopAutomaticPairing();
+    private Task ForgetCredentials() => Run(() =>
+    {
+        credentials.Forget();
+        ForgetLogin.IsVisible = false;
+        RememberLogin.IsChecked = false;
+        if (SettingsPanel.IsVisible) ConnectionNote.Text = "已连接本机 Sunshine · 登录只在本次运行期间有效";
+        Feedback.Text = "已从 Windows 凭据管理器删除。退出 Aurora 后需要重新登录。";
+        return Task.CompletedTask;
+    });
 
-            try
-            {
-                await BundledSunshine.RestartAsync();
-                await Open();
-            }
-            catch
-            {
-                ResetAdmin();
-                throw;
-            }
-            Feedback.Text = "内置 Sunshine 已重启。";
+    private void OpenOriginalSettings()
+    {
+        try
+        {
+            var url = admin?.SettingsUrl ?? (bundled ? BundledSunshine.AdminEndpoint.AbsoluteUri : Upstream.SettingsUrl);
+            using var process = Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+        }
+        catch (Exception error) { Feedback.Text = error.Message; }
+    }
+
+    private Task SubmitCredentials(string username, string password, string confirmation, bool remember) => Run(async () =>
+    {
+        remember &= credentials != null;
+        if (access == SunshineAccess.Setup) await admin.CreateAccount(username, password, confirmation);
+        else await admin.Login(username, password);
+        access = SunshineAccess.SignedIn;
+        if (!closed && remember)
+        {
+            try { credentials.Save(username, password); ForgetLogin.IsVisible = true; }
+            catch (Exception error) { Feedback.Text = "已登录，但无法记住登录：" + error.Message; }
+        }
+        else if (!closed && ForgetLogin.IsVisible)
+        {
+            try { credentials.Forget(); ForgetLogin.IsVisible = false; }
+            catch (Exception error) { Feedback.Text = "已登录，但无法清除先前保存的凭据：" + error.Message; }
+        }
+        await ShowSettings();
+    });
+
+    private Task ApprovePairing(SunshinePairing request, string pin) => Run(async () =>
+    {
+        await admin.Pair(request, pin, "Moonlight");
+        await RefreshMoonlightRequests();
+        Feedback.Text = "Moonlight 已配对。";
+    });
+
+    private async Task RestartHost()
+    {
+        RestartConfirmation.IsVisible = false;
+        if (!bundled)
+        {
+            await admin.Restart();
+            Feedback.Text = "已发送重启请求。请等待服务恢复后再连接。";
+            return;
         }
 
-        UpdateButtons();
+        StopAutomaticPairing();
+        try
+        {
+            await BundledSunshine.RestartAsync();
+            await Open();
+        }
+        catch
+        {
+            ResetAdmin();
+            throw;
+        }
+        Feedback.Text = "内置 Sunshine 已重启。";
     }
 
     public Task ReloadIfUnavailable() => DetailTitle == null && !HasPendingSettings &&
@@ -271,6 +285,9 @@ public sealed partial class SunshinePage : UserControl, IDisposable
     private void ResetAdmin()
     {
         StopAutomaticPairing();
+        qtConfig = null;
+        qtSaveResult = null;
+        qtSession = Guid.NewGuid().ToString("N");
         admin?.Dispose();
         admin = null;
         credentials = null;
@@ -357,18 +374,8 @@ public sealed partial class SunshinePage : UserControl, IDisposable
 
     private async Task ShowSettings()
     {
-        var preferences = await admin.ReadPreferences();
-        var displays = await admin.ReadPrivacySettings();
+        await ReadOverviewFromSunshine();
         if (closed) return;
-        loadingSettings = true;
-        try
-        {
-            HostName.Text = preferences.Name;
-            StreamAudio.IsChecked = preferences.StreamAudio;
-            LoadDisplaySettings(displays);
-            savedOverview = ReadOverview();
-        }
-        finally { loadingSettings = false; }
         AccountPanel.IsVisible = false;
         SettingsPanel.IsVisible = true;
         ConnectionNote.IsVisible = !bundled;
@@ -379,10 +386,38 @@ public sealed partial class SunshinePage : UserControl, IDisposable
         await RefreshMoonlightRequests();
     }
 
+    private async Task ReadOverviewFromSunshine()
+    {
+        SunshinePreferences preferences;
+        SunshinePrivacySettings displays;
+        if (qtAttached)
+        {
+            (qtConfig, preferences, displays) = await SunshineQtConfig.ReadAsync(admin);
+        }
+        else
+        {
+            preferences = await admin.ReadPreferences();
+            displays = await admin.ReadPrivacySettings();
+            if (qtAttached && !closed)
+                (qtConfig, preferences, displays) = await SunshineQtConfig.ReadAsync(admin);
+        }
+        if (closed) return;
+        loadingSettings = true;
+        try
+        {
+            HostName.Text = preferences.Name;
+            StreamAudio.IsChecked = preferences.StreamAudio;
+            LoadDisplaySettings(displays);
+            savedOverview = ReadOverview();
+        }
+        finally { loadingSettings = false; }
+    }
+
     private async Task RefreshMoonlightRequests()
     {
         var settingsAdmin = admin;
-        if (closed || !bundled || !Overview.IsEffectivelyVisible || !SettingsPanel.IsVisible || settingsAdmin == null) return;
+        if (closed || !bundled || (!qtAttached && !Overview.IsEffectivelyVisible) ||
+            !SettingsPanel.IsVisible || settingsAdmin == null) return;
         SunshinePairing[] requests;
         try { requests = await settingsAdmin.Pending(); }
         catch (Exception error) when (error is InvalidOperationException or System.Net.Http.HttpRequestException or System.Text.Json.JsonException)
@@ -398,6 +433,7 @@ public sealed partial class SunshinePage : UserControl, IDisposable
         MoonlightPairing.IsVisible = external.Length != 0;
         if (MoonlightRequest.SelectedItem is not SunshinePairing current || (selected != null && current.Id != selected))
             MoonlightPin.Clear();
+        QtChanged?.Invoke();
     }
 
     private void LoadDisplaySettings(SunshinePrivacySettings displays)
@@ -588,6 +624,7 @@ public sealed partial class SunshinePage : UserControl, IDisposable
         const string pendingMessage = "正在联系本机 Sunshine…";
         if (showProgress) Feedback.Text = pendingMessage;
         UpdateButtons();
+        QtChanged?.Invoke();
         try
         {
             await operation();
@@ -613,7 +650,11 @@ public sealed partial class SunshinePage : UserControl, IDisposable
         finally
         {
             busy = false;
-            if (!closed) UpdateButtons();
+            if (!closed)
+            {
+                UpdateButtons();
+                QtChanged?.Invoke();
+            }
         }
     }
 }

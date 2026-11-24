@@ -61,6 +61,11 @@ public:
         sendRequest({{"action", action}, {"accountTarget", target}, {"accountRevision", revision}});
     }
 
+    Q_INVOKABLE void sendSunshine(const QString &action, const QVariantMap &data)
+    {
+        sendRequest({{"action", action}, {"sunshine", QJsonObject::fromVariantMap(data)}});
+    }
+
 signals:
     void stateChanged();
 

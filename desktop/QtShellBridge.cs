@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
@@ -17,7 +18,23 @@ internal sealed record QtShellDevice(string DeviceId, string DisplayName, bool O
 internal sealed record QtShellHostState(bool Available, string Status, bool Managed, bool Allowed,
     bool ToggleAvailable, bool Busy, bool RefreshAvailable, bool Refreshing, bool RetryAvailable,
     string LanAddress, string TailscaleAddress, bool PermissionsAvailable, bool SettingsAvailable,
-    string Hint, string Feedback, bool FeedbackFailed);
+    string Hint, string Feedback, bool FeedbackFailed)
+{
+    public QtSunshineState Sunshine { get; init; }
+}
+
+internal sealed record QtSunshineOption(string Key, string Label, string Default, string Kind,
+    string Group, string Category, string[] Choices, bool Managed);
+internal sealed record QtSunshineDisplay(string Id, string Name);
+internal sealed record QtSunshinePrivacy(bool ShowSource, bool ShowLocalDisplays, bool ShowLegacyScreensaver,
+    QtSunshineDisplay[] Displays, bool RestartNeeded);
+internal sealed record QtSunshineConfig(QtSunshineOption[] Options, Dictionary<string, string> Values,
+    QtSunshinePrivacy Privacy);
+internal sealed record QtSunshineSaveResult(int Id, string[] Saved, Dictionary<string, string> Errors);
+internal sealed record QtSunshinePairing(string Id, string Name);
+internal sealed record QtSunshineState(string Status, string Session, bool Busy, bool Independent,
+    bool RememberAvailable, bool ForgetAvailable, bool ReauthorizeAvailable, string Note, string Feedback, string PairingFeedback,
+    QtSunshinePairing[] PairingRequests, QtSunshineConfig Config, QtSunshineSaveResult Result);
 
 internal sealed record QtShellGeneralPreferences(int AcknowledgedRequestId, bool CloseToTray, bool TrayAvailable,
     bool StartupEnabled, bool StartupAvailable, string SleepMode, string CloseFeedback, string StartupFeedback,
@@ -69,12 +86,26 @@ internal sealed record QtShellRequest(string Action, string DeviceId, int Device
     public string AccountTarget { get; init; }
     public int AccountRevision { get; init; }
     public bool? FullScreen { get; init; }
+    public QtSunshineRequest Sunshine { get; init; }
 }
 
 internal sealed record QtShellLaunch(string Executable, string EntryPoint);
 internal sealed record WindowsQtConnectionMetrics(string Latency);
 internal sealed record WindowsQtSessionState(string PanelKind, int PixelX, int PixelY, int HeightLimit,
     bool FullScreen, bool Poor, WindowsQtConnectionMetrics ConnectionMetrics);
+
+internal sealed class QtSunshineRequest
+{
+    public string Session { get; init; }
+    public int Id { get; init; }
+    public Dictionary<string, string> Changes { get; init; }
+    public string Username { get; init; }
+    public string Password { get; init; }
+    public string Confirmation { get; init; }
+    public bool Remember { get; init; }
+    public string PairingId { get; init; }
+    public string Pin { get; init; }
+}
 
 internal sealed class QtShellBridge : IDisposable
 {

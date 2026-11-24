@@ -1255,7 +1255,7 @@ public sealed partial class AuroraWindow : Window
         refreshTip.Content = refreshLabel;
     }
 
-    private void OpenHostSettings()
+    private void OpenHostSettings(bool syncNetwork = true)
     {
         if (sunshinePage != null) return;
         sunshinePage = new SunshinePage();
@@ -1265,7 +1265,8 @@ public sealed partial class AuroraWindow : Window
             UpdatePageHeader();
         };
         HostSettings.Content = sunshinePage;
-        _ = sunshinePage.SetNetwork(network);
+        sunshinePage.QtChanged += PublishQtShellState;
+        if (syncNetwork) _ = sunshinePage.SetNetwork(network);
     }
 
     private void SetFeedback(string message, Page source = Page.Devices, bool transient = false)

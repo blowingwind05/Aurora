@@ -247,8 +247,16 @@ public sealed partial class AuroraWindow
             case "settings":
                 ShowAvaloniaPage(Page.Settings);
                 break;
-            case "host" when Upstream.SupportsHost:
-                ShowAvaloniaPage(Page.Host);
+            case "sunshineLoad" when host?.Installed == true && !changingManagedHost.HasValue && !stoppingHost:
+                OpenHostSettings(syncNetwork: false);
+                await sunshinePage.AttachQt(network);
+                break;
+            case "sunshineSave" or "sunshineRestart" or "sunshineCertificate" or "sunshineLogin" or
+                "sunshineForget" or "sunshineOriginal" or "sunshineReauthorize" or "sunshinePair"
+                when host?.Installed == true && !changingManagedHost.HasValue && !stoppingHost &&
+                    sunshinePage?.QtAttached == true:
+                await sunshinePage.HandleQtRequest(request.Action, request.Sunshine);
+                if (request.Action == "sunshineRestart") _ = RefreshDevices();
                 break;
             default:
                 await HandleQtHostRequest(request.Action);

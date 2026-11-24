@@ -37,6 +37,27 @@ Window {
     signal navigationRequested(string destination)
     signal moreRequested(string action)
     signal hostActionRequested(string action)
+    signal sunshineRequested(string action, var data)
+    signal managedCloseRequested()
+    property bool managedClose: false
+
+    function navigateFromSidebar(destination) {
+        if (currentPage === "host" && destination !== "host" && hostPage.hasUnfinishedSettings)
+            hostPage.finishSettings(function() { window.navigationRequested(destination) })
+        else
+            navigationRequested(destination)
+    }
+
+    onClosing: function(event) {
+        if (hostPage.hasUnfinishedSettings) {
+            event.accepted = false
+            hostPage.finishSettings(function() { window.close() })
+        } else if (managedClose) {
+            event.accepted = false
+            managedCloseRequested()
+        }
+    }
+
     signal refreshRequested()
     signal connectRequested(string deviceId)
     signal deviceToolRequested(string deviceId, string action)
@@ -218,7 +239,7 @@ Window {
         accountName: window.accountName
         accountSubtitle: window.accountSubtitle
         accountAvatar: window.accountAvatar
-        onNavigationRequested: function(destination) { window.navigationRequested(destination) }
+        onNavigationRequested: function(destination) { window.navigateFromSidebar(destination) }
         onMoreRequested: function(action) { window.moreRequested(action) }
     }
 
@@ -264,6 +285,7 @@ Window {
         }
 
         HostPage {
+            id: hostPage
             objectName: "hostPage"
             anchors.fill: parent
             visible: window.currentPage === "host"
@@ -272,6 +294,7 @@ Window {
             reduceMotion: window.reduceMotion
             hostState: window.hostState
             onActionRequested: function(action) { window.hostActionRequested(action) }
+            onSunshineRequested: function(action, data) { window.sunshineRequested(action, data) }
         }
 
         Loader {

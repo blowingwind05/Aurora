@@ -10,6 +10,19 @@ Item {
     property bool narrow: false
     property bool reduceMotion: false
     signal actionRequested(string action)
+    signal sunshineRequested(string action, var data)
+    property bool advanced: false
+    readonly property bool hasUnfinishedSettings: sunshineEditor.dirty || sunshineEditor.inFlight !== null
+
+    function finishSettings(callback) { sunshineEditor.finish(callback, true) }
+
+    SunshineEditor {
+        id: sunshineEditor
+        state: page.hostState.sunshine || ({})
+        onStateChanged: loadIfNeeded(page.visible)
+        onRequest: function(action, data) { page.sunshineRequested(action, data) }
+        onConfirmDiscard: discardDialog.open()
+    }
 
     readonly property int inset: compact ? 8 : narrow ? 13 : 21
     readonly property int panelInset: compact ? 8 : 14
@@ -40,8 +53,12 @@ Item {
             stopDialog.close()
     }
     onVisibleChanged: {
-        if (!visible && stopDialog.visible)
-            stopDialog.close()
+        sunshineEditor.loadIfNeeded(visible)
+        if (!visible) {
+            advanced = false
+            if (stopDialog.visible)
+                stopDialog.close()
+        }
     }
 
     component HostText: Text {
@@ -55,32 +72,6 @@ Item {
         color: "white"
         radius: 11
         border.color: AuroraTheme.panelLine
-    }
-
-    component PanelLink: AuroraButton {
-        id: link
-        quiet: true
-        hoverFill: "transparent"
-        implicitWidth: labelRow.implicitWidth
-        contentItem: Row {
-            id: labelRow
-            spacing: 5
-
-            Text {
-                anchors.verticalCenter: parent.verticalCenter
-                text: link.text
-                font: link.font
-                color: link.foreground
-            }
-            AuroraGlyph {
-                anchors.verticalCenter: parent.verticalCenter
-                visible: link.icon.source.toString().length > 0
-                width: 16
-                height: 16
-                icon.source: link.icon.source
-                icon.color: link.foreground
-            }
-        }
     }
 
     component Address: Item {
@@ -143,7 +134,7 @@ Item {
         HostText {
             objectName: "hostPageTitle"
             anchors.verticalCenter: parent.verticalCenter
-            text: qsTr("本机被控")
+            text: page.advanced ? qsTr("全部配置项") : qsTr("本机被控")
             font.pixelSize: page.compact ? 21 : 26
             font.weight: Font.Bold
             Accessible.role: Accessible.Heading
@@ -151,6 +142,7 @@ Item {
         AuroraButton {
             id: refresh
             objectName: "refreshHost"
+            visible: !page.advanced
             anchors.right: parent.right
             width: 34
             height: 34
@@ -193,8 +185,32 @@ Item {
         }
     }
 
+    SunshineLink {
+        objectName: "sunshineBack"
+        visible: page.advanced
+        anchors.right: heading.right
+        anchors.verticalCenter: heading.verticalCenter
+        text: qsTr("本机被控")
+        icon.source: AuroraTheme.icon("arrow-left")
+        leadingIcon: true
+        onClicked: sunshineEditor.finish(function() { page.advanced = false }, true)
+    }
+
+    SunshineAdvanced {
+        anchors.top: heading.bottom
+        anchors.topMargin: 6
+        anchors.left: heading.left
+        anchors.right: heading.right
+        anchors.bottom: parent.bottom
+        anchors.bottomMargin: 8
+        visible: page.advanced
+        inset: page.panelInset
+        editor: sunshineEditor
+    }
+
     Flickable {
         id: scroll
+        visible: !page.advanced
         anchors.top: heading.bottom
         anchors.topMargin: 15
         anchors.left: parent.left
@@ -217,22 +233,20 @@ Item {
                 width: parent.width
                 height: summary.implicitHeight
 
-                ColumnLayout {
+                Column {
                     id: summary
-                    width: parent.width
-                    spacing: 0
+                    x: page.panelInset
+                    width: parent.width - 2 * x
 
                     RowLayout {
-                        Layout.fillWidth: true
-                        Layout.leftMargin: page.panelInset
-                        Layout.rightMargin: page.panelInset
-                        Layout.preferredHeight: 54
+                        width: parent.width
+                        height: 54
                         spacing: 10
 
                         AuroraGlyph {
                             objectName: "hostComputerIcon"
-                            Layout.preferredWidth: 28
-                            Layout.preferredHeight: 28
+                            implicitWidth: 28
+                            implicitHeight: 28
                             icon.source: AuroraTheme.desktopAsset("panel-top-tight.svg")
                         }
                         HostText {
@@ -265,10 +279,8 @@ Item {
                     Button {
                         id: allowSwitch
                         objectName: "allowHost"
-                        Layout.fillWidth: true
-                        Layout.leftMargin: page.panelInset
-                        Layout.rightMargin: page.panelInset
-                        Layout.preferredHeight: 45
+                        width: parent.width
+                        height: 45
                         visible: page.hostState.managed === true
                         enabled: page.canToggle
                         text: qsTr("允许本机被控")
@@ -328,9 +340,8 @@ Item {
 
                     GridLayout {
                         objectName: "hostAddresses"
-                        Layout.fillWidth: true
-                        Layout.leftMargin: page.panelInset
-                        Layout.rightMargin: page.panelInset
+                        width: parent.width
+                        height: implicitHeight
                         columns: width < 420 ? 1 : 2
                         columnSpacing: 2 * page.panelInset
                         rowSpacing: 0
@@ -364,17 +375,16 @@ Item {
                         }
                     }
                     HostText {
-                        Layout.fillWidth: true
-                        Layout.margins: page.panelInset
+                        width: parent.width
+                        topPadding: page.panelInset
+                        bottomPadding: page.panelInset
                         visible: text.length > 0
                         text: page.hostState.hint || ""
                         color: AuroraTheme.muted
                         wrapMode: Text.Wrap
                     }
                     AuroraButton {
-                        Layout.alignment: Qt.AlignRight
-                        Layout.rightMargin: page.panelInset
-                        Layout.bottomMargin: 10
+                        anchors.right: parent.right
                         objectName: "hostRetry"
                         visible: page.hostState.retryAvailable === true
                         enabled: page.hostState.refreshAvailable === true && !page.busy
@@ -414,7 +424,7 @@ Item {
                         color: AuroraTheme.muted
                         wrapMode: Text.Wrap
                     }
-                    PanelLink {
+                    SunshineLink {
                         objectName: "hostOpenPermissions"
                         enabled: !page.busy
                         text: qsTr("打开 macOS 隐私设置")
@@ -430,33 +440,14 @@ Item {
                 }
             }
 
-            Panel {
-                objectName: "hostSettingsEntry"
+            SunshineSettings {
                 width: parent.width
-                height: 46
-                visible: page.hostState.settingsAvailable === true
-
-                RowLayout {
-                    anchors.fill: parent
-                    anchors.leftMargin: page.panelInset
-                    anchors.rightMargin: page.panelInset
-                    spacing: 10
-
-                    HostText {
-                        Layout.fillWidth: true
-                        text: qsTr("常用设置")
-                        font.pixelSize: 15
-                        font.weight: Font.Bold
-                        Accessible.role: Accessible.Heading
-                    }
-                    PanelLink {
-                        objectName: "hostOpenSettings"
-                        enabled: !page.busy
-                        text: qsTr("打开 Sunshine 设置")
-                        icon.source: AuroraTheme.icon("chevron-right")
-                        onClicked: page.actionRequested("hostOpenSettings")
-                    }
-                }
+                visible: !!sunshineEditor.state.status
+                active: page.visible && !page.advanced
+                inset: page.panelInset
+                editor: sunshineEditor
+                onAdvancedRequested: page.advanced = true
+                onRestartRequested: sunshineEditor.finish(function() { restartDialog.open() }, false)
             }
 
             HostText {
@@ -468,6 +459,25 @@ Item {
                 wrapMode: Text.Wrap
             }
         }
+    }
+
+    SunshineConfirm {
+        id: restartDialog
+        objectName: "sunshineRestartDialog"
+        heading: qsTr("要重启 Sunshine 吗？")
+        message: qsTr("重启 Sunshine 会断开正在进行的远控会话。")
+        action: qsTr("确认重启")
+        onAccepted: sunshineEditor.command("sunshineRestart")
+    }
+
+    SunshineConfirm {
+        id: discardDialog
+        objectName: "sunshineDiscardDialog"
+        heading: qsTr("要放弃未保存的设置吗？")
+        message: qsTr("有 Sunshine 设置未能保存。取消后可继续编辑或重试。")
+        action: qsTr("放弃改动")
+        onAccepted: sunshineEditor.discard()
+        onCanceled: sunshineEditor.continuation = null
     }
 
     Popup {
@@ -542,7 +552,7 @@ Item {
                     onClicked: {
                         stopDialog.close()
                         if (page.canToggle && page.allowed)
-                            page.actionRequested("hostDisable")
+                            sunshineEditor.finish(function() { page.actionRequested("hostDisable") }, true)
                     }
                 }
             }

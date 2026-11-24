@@ -127,8 +127,8 @@ Live {
                 step("test-permission-pending")
                 tryCompare(page, "busy", false)
                 verify(permissions.visible)
-                mouseClick(item("hostOpenSettings"))
-                tryCompare(item("hostFeedback"), "text", "已打开 Sunshine 设置。")
+                step("test-permissions-returned")
+                tryCompare(item("hostFeedback"), "text", "已完成权限检测。")
                 verify(!permissions.visible && !tailnet.visible)
                 mouseClick(refresh)
                 tryCompare(refresh, "enabled", false)
@@ -163,7 +163,7 @@ Live {
                 verify(!dialog.visible && !toggle.enabled && page.allowed && lan.visible)
                 step("test-stopping")
                 tryCompare(item("hostStatus"), "text", "未启用")
-                verify(!page.allowed && !lan.visible && !item("hostSettingsEntry").visible)
+                verify(!page.allowed && !lan.visible && !item("sunshineCommon").visible)
 
                 stage = "失败后重试"
                 mouseClick(toggle)

@@ -105,12 +105,8 @@ AuroraMainWindow {
             auroraBridge.send(devicesForeground ? "devices-foreground" : "devices-background", "", 0)
     }
 
-    onClosing: function(event) {
-        if (!snapshot.managedWindow)
-            return
-        event.accepted = false
-        auroraBridge.send("window-close", "", 0)
-    }
+    managedClose: snapshot.managedWindow === true
+    onManagedCloseRequested: auroraBridge.send("window-close", "", 0)
 
     Component {
         id: generalPage
@@ -166,7 +162,7 @@ AuroraMainWindow {
             return
         lastWindowActivation = activation
         if (snapshot.windowPage)
-            navigationRequested(snapshot.windowPage)
+            navigateFromSidebar(snapshot.windowPage)
         if (visibility === Window.Minimized)
             showNormal()
         requestActivate()
@@ -206,6 +202,7 @@ AuroraMainWindow {
     }
 
     onHostActionRequested: function(action) { auroraBridge.send(action, "", 0) }
+    onSunshineRequested: function(action, data) { auroraBridge.sendSunshine(action, data) }
     onRefreshRequested: auroraBridge.send("refresh", "", 0)
     onConnectRequested: function(deviceId) { auroraBridge.send("connect", deviceId, snapshot.deviceEpoch) }
     onNavigationRequested: function(destination) {
