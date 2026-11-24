@@ -13,4 +13,4 @@ target_compile_definitions(AuroraTailnetTests PRIVATE
 add_dependencies(AuroraTailnetTests AuroraTailnetFixture)
 
 add_test(NAME AuroraTailnetStatus COMMAND AuroraTailnetTests)
-set_tests_properties(AuroraTailnetStatus PROPERTIES TIMEOUT 35)
+set_tests_properties(AuroraTailnetStatus PROPERTIES TIMEOUT 50)

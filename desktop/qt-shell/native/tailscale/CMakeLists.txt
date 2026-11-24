@@ -8,7 +8,10 @@ endif()
 find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS Core Network)
 find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Core Network)
 
-add_library(AuroraNativeTailscale STATIC EmbeddedStatusClient.cpp EmbeddedStatusClient.h Status.cpp Status.h)
+add_library(AuroraNativeTailscale STATIC
+    EmbeddedStatusClient.cpp EmbeddedStatusClient.h
+    ProviderSelection.cpp ProviderSelection.h
+    Status.cpp Status.h)
 set_target_properties(AuroraNativeTailscale PROPERTIES AUTOMOC ON)
 target_compile_features(AuroraNativeTailscale PUBLIC cxx_std_17)
 target_include_directories(AuroraNativeTailscale PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")

@@ -8,6 +8,7 @@ find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Quick QuickControls2 Netw
 add_executable(AuroraQtShell bridge/main.cpp bridge/AuroraMore.cpp bridge/AuroraMore.h)
 target_sources(AuroraQtShell PRIVATE
     bridge/aurora-brand.qrc
+    native/DesktopTray.cpp native/DesktopTray.h native/TrayMenuPlacement.h
     native/NativeDesktop.cpp native/NativeDesktop.h
     native/NativeInstance.cpp native/NativeInstance.h
     native/preferences/DesktopPreferences.cpp native/preferences/DesktopPreferences.h)
@@ -30,11 +31,18 @@ if(MSVC)
 endif()
 add_subdirectory(native/platform)
 add_subdirectory(native/discovery)
+add_subdirectory(native/presence)
+add_subdirectory(native/session)
 add_subdirectory(native/sunshine)
 add_subdirectory(native/sunshine/admin)
+add_subdirectory(native/sunshine/host)
 add_subdirectory(native/stream)
 add_subdirectory(native/tailscale)
+if(WIN32)
+    add_subdirectory(native/tailscale/system)
+    target_link_libraries(AuroraQtShell PRIVATE AuroraSystemTailscale)
+endif()
 target_link_libraries(AuroraQtShell PRIVATE Qt${QT_VERSION_MAJOR}::Quick Qt${QT_VERSION_MAJOR}::QuickControls2
     Qt${QT_VERSION_MAJOR}::Network Qt${QT_VERSION_MAJOR}::Widgets
-    aurora_native_platform aurora_native_discovery Aurora::SunshineConfig Aurora::SunshineAdmin
-    aurora_native_stream AuroraNativeTailscale)
+    aurora_native_platform aurora_native_discovery aurora_native_presence aurora_native_session
+    Aurora::SunshineConfig Aurora::SunshineAdmin Aurora::SunshineHost aurora_native_stream AuroraNativeTailscale)

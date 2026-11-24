@@ -5,4 +5,9 @@
         <file alias="AuroraMenuBarTemplate.png">../../Assets/AuroraMenuBarTemplate.png</file>
         <file alias="AuroraMenuBarTemplate@2x.png">../../Assets/AuroraMenuBarTemplate@2x.png</file>
     </qresource>
+    <qresource prefix="/aurora/tray">
+        <file alias="open.png">../../Assets/icons/ic_fluent_open_16_regular.png</file>
+        <file alias="settings.png">../../Assets/icons/ic_fluent_settings_16_regular.png</file>
+        <file alias="dismiss.png">../../Assets/icons/ic_fluent_dismiss_16_regular.png</file>
+    </qresource>
 </RCC>

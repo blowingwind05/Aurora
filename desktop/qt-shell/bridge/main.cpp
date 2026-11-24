@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "AuroraMore.h"
+#include "../native/DesktopTray.h"
 #include "../native/NativeDesktop.h"
 #include "../native/NativeInstance.h"
 
@@ -219,8 +220,10 @@ int main(int argc, char *argv[])
     const bool native = namedLauncher || checkNative || (argc > 1 && std::strcmp(argv[1], "--native") == 0);
 #ifdef Q_OS_WIN
     const bool windowsSession = argc > 1 && std::strcmp(argv[1], "--windows-session") == 0;
+    const bool useDesktopTray = !native && !checkUi && !windowsSession;
 #else
     const bool windowsSession = false;
+    constexpr bool useDesktopTray = false;
 #endif
 #if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
     QCoreApplication::setAttribute(Qt::AA_EnableHighDpiScaling);
@@ -228,7 +231,7 @@ int main(int argc, char *argv[])
 #endif
     QGuiApplication::setHighDpiScaleFactorRoundingPolicy(Qt::HighDpiScaleFactorRoundingPolicy::PassThrough);
     std::unique_ptr<QGuiApplication> application;
-    if (native)
+    if (native || useDesktopTray)
         application = std::make_unique<QApplication>(argc, argv);
     else
         application = std::make_unique<QGuiApplication>(argc, argv);
@@ -270,6 +273,31 @@ int main(int argc, char *argv[])
     constexpr bool prepareMacTitleBar = false;
 #endif
     AuroraBridge bridge(windowsSession, checkUi, prepareMacTitleBar, native);
+    std::unique_ptr<DesktopTray> hostedTray;
+    if (useDesktopTray) {
+        QObject::connect(&bridge, &AuroraBridge::stateChanged, &app, [&bridge, &hostedTray] {
+            const auto state = bridge.state();
+            if (!state.value(QStringLiteral("trayRequested")).toBool()) {
+                hostedTray.reset();
+                return;
+            }
+            if (!hostedTray) {
+                auto tray = std::make_unique<DesktopTray>();
+                if (!tray->initialize())
+                    return;
+                QObject::connect(tray.get(), &DesktopTray::openRequested, &bridge,
+                                 [&bridge] { bridge.send(QStringLiteral("tray-open")); });
+                QObject::connect(tray.get(), &DesktopTray::settingsRequested, &bridge,
+                                 [&bridge] { bridge.send(QStringLiteral("tray-settings")); });
+                QObject::connect(tray.get(), &DesktopTray::quitRequested, &bridge,
+                                 [&bridge] { bridge.send(QStringLiteral("tray-exit")); });
+                hostedTray = std::move(tray);
+                bridge.send(QStringLiteral("tray-ready"));
+            }
+            hostedTray->setVisible(state.value(QStringLiteral("trayActive")).toBool() &&
+                                   state.value(QStringLiteral("trayVisible")).toBool());
+        });
+    }
     std::unique_ptr<NativeDesktop> nativeDesktop;
     std::unique_ptr<NativeInstance> instance;
     if (native) {

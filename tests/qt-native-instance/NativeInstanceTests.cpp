@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "NativeInstance.h"
+#include "TrayMenuPlacement.h"
 
 #include <QCoreApplication>
 #include <QEventLoop>
@@ -14,6 +15,12 @@ int main(int argc, char **argv)
         NativeInstance child(app.arguments().at(1));
         return child.start() == NativeInstance::Result::Activated ? 0 : 1;
     }
+
+    const QSize menu(210, 115);
+    if (trayMenuPosition({0, 0, 1920, 1032}, {1840, 1042, 24, 24}, menu) != QPoint(1654, 917) ||
+        trayMenuPosition({0, 48, 1920, 1032}, {1840, 12, 24, 24}, menu) != QPoint(1654, 48) ||
+        trayMenuPosition({-1920, 0, 1920, 1032}, {-34, 1042, 24, 24}, menu) != QPoint(-220, 917))
+        return 6;
 
     QTemporaryDir profile;
     if (!profile.isValid())

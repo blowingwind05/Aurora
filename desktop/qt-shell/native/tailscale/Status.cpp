@@ -238,6 +238,38 @@ Status readStatus(const QJsonObject &data)
     return status;
 }
 
+struct Envelope
+{
+    StatusError error;
+    QJsonObject result;
+};
+
+Envelope decodeEnvelope(const QJsonObject &reply, const QString &requestId)
+{
+    const auto id = reply.value(QLatin1String("id"));
+    const auto ok = reply.value(QLatin1String("ok"));
+    if (requestId.isEmpty() || !id.isString() || id.toString() != requestId || !ok.isBool())
+        return {StatusError::InvalidResponse, {}};
+
+    const auto result = reply.value(QLatin1String("result"));
+    const auto error = reply.value(QLatin1String("error"));
+    if (!ok.toBool())
+        return {result.isNull() && error.isString() ? StatusError::HelperRejected : StatusError::InvalidResponse, {}};
+    if (!result.isObject() || !error.isNull())
+        return {StatusError::InvalidResponse, {}};
+    return {StatusError::None, result.toObject()};
+}
+
+Envelope decodeActionEnvelope(const QByteArray &line, const QString &requestId)
+{
+    if (line.size() > maxActionReplyBytes)
+        return {StatusError::ResponseTooLarge, {}};
+    const auto reply = QJsonDocument::fromJson(line).object();
+    if (reply.size() != 4)
+        return {StatusError::InvalidResponse, {}};
+    return decodeEnvelope(reply, requestId);
+}
+
 } // namespace
 
 StatusResult decodeStatusReply(const QByteArray &line, const QString &requestId)
@@ -245,23 +277,31 @@ StatusResult decodeStatusReply(const QByteArray &line, const QString &requestId)
     if (line.size() > maxStatusReplyBytes)
         return {StatusError::ResponseTooLarge, std::nullopt};
 
-    const auto reply = exactIntegerObject(line);
-    const auto id = reply.value(QLatin1String("id"));
-    const auto ok = reply.value(QLatin1String("ok"));
-    if (requestId.isEmpty() || !id.isString() || id.toString() != requestId || !ok.isBool())
+    const auto reply = decodeEnvelope(exactIntegerObject(line), requestId);
+    if (reply.error != StatusError::None)
+        return {reply.error, std::nullopt};
+    if (label(reply.result, "BackendState").isEmpty())
         return {StatusError::InvalidResponse, std::nullopt};
+    return {StatusError::None, readStatus(reply.result)};
+}
 
-    const auto result = reply.value(QLatin1String("result"));
-    const auto error = reply.value(QLatin1String("error"));
-    if (!ok.toBool()) {
-        if (result.isNull() && error.isString())
-            return {StatusError::HelperRejected, std::nullopt};
+LoginResult decodeLoginReply(const QByteArray &line, const QString &requestId)
+{
+    const auto reply = decodeActionEnvelope(line, requestId);
+    if (reply.error != StatusError::None)
+        return {reply.error, std::nullopt};
+    const auto pending = reply.result.value(QLatin1String("pending"));
+    if (reply.result.size() != 1 || !pending.isBool())
         return {StatusError::InvalidResponse, std::nullopt};
-    }
-    const auto data = result.toObject();
-    if (!error.isNull() || label(data, "BackendState").isEmpty())
-        return {StatusError::InvalidResponse, std::nullopt};
-    return {StatusError::None, readStatus(data)};
+    return {StatusError::None, pending.toBool()};
+}
+
+StatusError decodeLogoutReply(const QByteArray &line, const QString &requestId)
+{
+    const auto reply = decodeActionEnvelope(line, requestId);
+    if (reply.error != StatusError::None)
+        return reply.error;
+    return reply.result.isEmpty() ? StatusError::None : StatusError::InvalidResponse;
 }
 
 } // namespace aurora::tailscale

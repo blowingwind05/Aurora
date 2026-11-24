@@ -18,6 +18,8 @@ internal sealed class TrayResidency
     private readonly Action openSettings;
     private readonly string exitOnClosePath;
     private TrayIcon tray;
+    private bool closeToTray;
+    private bool externalTrayReady;
     private bool requestingExit;
 
     private TrayResidency(Application app, Window window, Action requestExit, Action openSettings, string dataDirectory)
@@ -27,7 +29,7 @@ internal sealed class TrayResidency
         this.requestExit = requestExit;
         this.openSettings = openSettings;
         exitOnClosePath = Path.Combine(dataDirectory, "Aurora", "exit-on-close");
-        if (!File.Exists(exitOnClosePath)) ShowTray();
+        if (!File.Exists(exitOnClosePath)) closeToTray = ShowTray();
         window.Closed += (_, _) =>
         {
             RemoveTray();
@@ -36,7 +38,10 @@ internal sealed class TrayResidency
     }
 
     internal static bool IsAvailable => current != null;
-    internal static bool CloseToTray => current?.tray != null;
+    internal static bool CloseToTray => current?.closeToTray == true;
+    internal static bool ExternalTrayReady => current?.externalTrayReady == true;
+    internal static bool CanHideOnClose => current is { closeToTray: true } residency &&
+        (residency.tray != null || residency.externalTrayReady);
 
     internal static void Initialize(Application app, Window window, Action requestExit, Action openSettings = null)
     {
@@ -50,10 +55,39 @@ internal sealed class TrayResidency
 
     internal static bool TrySetCloseToTray(bool enabled) => current?.TrySetEnabled(enabled) ?? !enabled;
 
+    internal static bool TryUseExternalTray(Window window)
+    {
+        var residency = current;
+        if (!OperatingSystem.IsWindows() || residency == null || residency.window != window) return false;
+        residency.RemoveTray();
+        residency.externalTrayReady = true;
+        return true;
+    }
+
+    internal static void RestoreLocalTray(Window window)
+    {
+        var residency = current;
+        if (residency == null || residency.window != window || !residency.externalTrayReady) return;
+        residency.externalTrayReady = false;
+        if (!residency.closeToTray) return;
+
+        try { residency.ShowTray(); }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidOperationException)
+        {
+            Debug.WriteLine(error);
+        }
+    }
+
+    internal static void ExitFromExternalTray(Window window)
+    {
+        if (current is { externalTrayReady: true } residency && residency.window == window)
+            residency.Exit();
+    }
+
     internal static bool TryHideOnClose(Window window, WindowClosingEventArgs args)
     {
         var residency = current;
-        if (residency?.tray == null || residency.window != window || residency.requestingExit ||
+        if (!CanHideOnClose || residency.window != window || residency.requestingExit ||
             args.CloseReason != WindowCloseReason.WindowClosing) return false;
 
         args.Cancel = true;
@@ -77,8 +111,8 @@ internal sealed class TrayResidency
 
     private bool TrySetEnabled(bool enabled)
     {
-        if (enabled == (tray != null)) return true;
-        if (enabled && !ShowTray()) return false;
+        if (enabled == closeToTray) return !enabled || externalTrayReady || ShowTray();
+        if (enabled && !externalTrayReady && !ShowTray()) return false;
 
         try
         {
@@ -89,6 +123,7 @@ internal sealed class TrayResidency
                 using var preference = File.Open(exitOnClosePath, FileMode.OpenOrCreate, FileAccess.Write);
                 RemoveTray();
             }
+            closeToTray = enabled;
             return true;
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException)
@@ -101,6 +136,7 @@ internal sealed class TrayResidency
 
     private bool ShowTray()
     {
+        if (tray != null) return true;
         var mac = OperatingSystem.IsMacOS();
         var asset = mac ? "AuroraMenuBarTemplate@2x.png" : "Aurora.ico";
         using var glyph = AssetLoader.Open(new Uri("avares://Aurora/Assets/" + asset));
@@ -153,7 +189,8 @@ internal sealed class TrayResidency
     private void RemoveTray()
     {
         if (tray == null) return;
-        TrayIcon.GetIcons(app)?.Remove(tray);
+        // Removing the item from Avalonia's collection synchronously disposes its platform icon.
+        if (TrayIcon.GetIcons(app)?.Remove(tray) != true) tray.Dispose();
         tray = null;
     }
 

@@ -26,6 +26,8 @@ public sealed partial class AuroraWindow
     private string qtFeedback = "";
     private bool qtFeedbackFailed;
 
+    private static bool QtTrayRequested => OperatingSystem.IsWindows() && TrayResidency.IsAvailable;
+
     private (int, long?, string, int?) QtAccountContext =>
         (accountVersion, network?.Owner, network?.LocalId, network?.Generation);
     private bool QtDevicesReady => hasScanned && qtCatalogContext == QtAccountContext &&
@@ -34,6 +36,7 @@ public sealed partial class AuroraWindow
 
     internal bool StartQtShell(string[] args)
     {
+        if (qtShell != null) return true;
         var index = Array.IndexOf(args ?? Array.Empty<string>(), "--qt-shell");
         QtShellLaunch launch;
         if (index < 0)
@@ -51,10 +54,15 @@ public sealed partial class AuroraWindow
             launch = new QtShellLaunch(args[index + 1], args[index + 2]);
         }
 
+        QtShellBridge bridge = null;
         try
         {
-            qtShell = QtShellBridge.Start(launch.Executable, launch.EntryPoint, request =>
-                Dispatcher.UIThread.Post(() => _ = HandleQtShellRequest(request)));
+            bridge = QtShellBridge.Start(launch.Executable, launch.EntryPoint, request =>
+                Dispatcher.UIThread.Post(() =>
+                {
+                    if (qtShell == bridge) _ = HandleQtShellRequest(request);
+                }));
+            qtShell = bridge;
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or
             Win32Exception or ArgumentException)
@@ -66,7 +74,6 @@ public sealed partial class AuroraWindow
         if (index < 0 && Environment.GetEnvironmentVariable("AURORA_QT_SESSION") == null)
             Environment.SetEnvironmentVariable("AURORA_QT_SESSION", "1");
 
-        var bridge = qtShell;
         Closed += (_, _) => DetachQtShell(bridge);
         _ = ObserveQtShell(bridge);
         ReadQtTailscaleCapabilities();
@@ -106,9 +113,9 @@ public sealed partial class AuroraWindow
         {
             if (qtShell == bridge)
             {
-                var shouldShow = qtWindowVisible && !closed;
                 DetachQtShell(bridge);
-                if (shouldShow) TrayResidency.ShowAvaloniaWindow(this);
+                if (!closed && (qtWindowVisible || !TrayResidency.CanHideOnClose))
+                    TrayResidency.ShowAvaloniaWindow(this);
             }
         }
     }
@@ -121,6 +128,8 @@ public sealed partial class AuroraWindow
         qtAccountAvatar = null;
         CloseQtTailscaleController();
         bridge.Dispose();
+        // The live-window detach runs after Completion has reaped the Qt tray host.
+        if (!closed) TrayResidency.RestoreLocalTray(this);
     }
 
     private void SyncQtShellCatalog()
@@ -150,6 +159,7 @@ public sealed partial class AuroraWindow
                 (device.LanAddress ?? device.Lan?.Endpoint.Address)?.ToString() ?? "", tailAddress?.ToString() ?? "",
                 File.Exists(path) ? new Uri(path).AbsoluteUri : "");
         }).ToArray() : Array.Empty<QtShellDevice>();
+        var trayRequested = QtTrayRequested;
         qtShell.Publish(new QtShellState(access, qtAccountName, accountSubtitle.Text, devices, qtDeviceEpoch,
             ready && !refreshing && !manualRefresh && !qtRefreshing && !QtTailscaleBlocksDevices, qtRefreshing, qtFeedback, qtFeedbackFailed,
             connecting || QtTailscaleBlocksDevices, RefreshNotice.ReduceMotion())
@@ -164,7 +174,10 @@ public sealed partial class AuroraWindow
             ManagedWindow = true,
             WindowVisible = qtWindowVisible,
             WindowActivation = qtWindowActivation,
-            WindowPage = qtWindowPage
+            WindowPage = qtWindowPage,
+            TrayRequested = trayRequested ? true : null,
+            TrayVisible = trayRequested ? TrayResidency.CloseToTray : null,
+            TrayActive = trayRequested ? TrayResidency.ExternalTrayReady : null
         });
     }
 
@@ -195,7 +208,14 @@ public sealed partial class AuroraWindow
         if (qtGeneralSettings.TryHandle(request, out var preferencesChanged))
         {
             if (preferencesChanged)
+            {
                 settings?.RefreshGeneralPreferences();
+                if (TrayResidency.ExternalTrayReady && !qtWindowVisible && !TrayResidency.CanHideOnClose)
+                {
+                    TryShowQtWindow();
+                    return;
+                }
+            }
             PublishQtShellState();
             return;
         }
@@ -215,8 +235,21 @@ public sealed partial class AuroraWindow
                 break;
             case "window-close":
                 FinishQtTailscaleConfirmation(approved: false);
-                if (TrayResidency.CloseToTray) HideQtWindow();
+                if (TrayResidency.CanHideOnClose) HideQtWindow();
                 else Close();
+                break;
+            case "tray-ready":
+                if (QtTrayRequested && !qtShell.Completion.IsCompleted && TrayResidency.TryUseExternalTray(this))
+                    PublishQtShellState();
+                break;
+            case "tray-open":
+                if (TrayResidency.ExternalTrayReady) TryShowQtWindow();
+                break;
+            case "tray-settings":
+                if (TrayResidency.ExternalTrayReady) TryShowQtWindow("settings");
+                break;
+            case "tray-exit":
+                if (TrayResidency.ExternalTrayReady) TrayResidency.ExitFromExternalTray(this);
                 break;
             case "avatar-visible":
             case "avatar-hidden":

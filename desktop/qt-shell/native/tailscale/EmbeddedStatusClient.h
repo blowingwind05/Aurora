@@ -25,19 +25,27 @@ public:
     // False while another request or a failed helper's shutdown is in progress.
     // An accepted request completes asynchronously with the supplied context generation.
     bool requestStatus(quint64 generation);
+    bool requestLogin(quint64 generation);
+    bool requestLogout(quint64 generation);
 
 signals:
     void statusFinished(quint64 generation, const aurora::tailscale::StatusResult &result);
+    void loginFinished(quint64 generation, const aurora::tailscale::LoginResult &result);
+    void logoutFinished(quint64 generation, aurora::tailscale::StatusError error);
 
 private:
+    enum class Operation { Status, Login, Logout };
+
+    bool startRequest(Operation operation, quint64 generation);
     void begin();
     void sendRequest();
     void receive();
-    void finish(StatusResult result, bool stopHelper = false);
+    void finish(StatusError error, std::optional<Status> status = {}, std::optional<bool> loginPending = {});
     void stop();
 
     struct Request
     {
+        Operation operation;
         quint64 generation;
         QString id;
         bool sent = false;

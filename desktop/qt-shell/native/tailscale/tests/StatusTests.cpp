@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "EmbeddedStatusClient.h"
+#include "ProviderSelection.h"
 
 #include <QCoreApplication>
 #include <QDir>
@@ -231,6 +232,182 @@ private slots:
         QCOMPARE(retry.status->state, scenario == "rejected" ? BackendState::NeedsLogin : BackendState::Starting);
     }
 
+
+    void actionReplyShapes()
+    {
+        const auto pending = decodeLoginReply(reply("{\"pending\":true}"), "fixture");
+        QCOMPARE(pending.error, StatusError::None);
+        QVERIFY(pending.pending && *pending.pending);
+        const auto ready = decodeLoginReply(reply("{\"pending\":false}"), "fixture");
+        QCOMPARE(ready.error, StatusError::None);
+        QVERIFY(ready.pending && !*ready.pending);
+
+        QCOMPARE(decodeLogoutReply(reply("{}"), "fixture"), StatusError::None);
+        for (const auto *body : {"{}", "[]", "null", "{\"pending\":1}", "{\"pending\":\"true\"}",
+                "{\"pending\":null}", "{\"pending\":true,\"AuthURL\":\"https://login.tailscale.com/a/ignored\"}"}) {
+            const auto invalid = decodeLoginReply(reply(body), "fixture");
+            QCOMPARE(invalid.error, StatusError::InvalidResponse);
+            QVERIFY(!invalid.pending);
+        }
+        for (const auto *body : {"[]", "null", "true", "{\"pending\":false}", "{\"ok\":true}"})
+            QCOMPARE(decodeLogoutReply(reply(body), "fixture"), StatusError::InvalidResponse);
+
+        const QByteArray rejected("{\"id\":\"fixture\",\"ok\":false,\"error\":\"fixture refusal\",\"result\":null}");
+        QCOMPARE(decodeLoginReply(rejected, "fixture").error, StatusError::HelperRejected);
+        QCOMPARE(decodeLogoutReply(rejected, "fixture"), StatusError::HelperRejected);
+
+        for (const auto *frame : {
+                 "{\"id\":\"fixture\",\"ok\":true,\"result\":{}}",
+                 "{\"id\":\"fixture\",\"ok\":true,\"error\":null,\"result\":{},\"extra\":true}",
+                 "{\"id\":1,\"ok\":true,\"error\":null,\"result\":{}}",
+                 "{\"id\":\"fixture\",\"ok\":false,\"error\":null,\"result\":null}",
+                 "{\"id\":\"fixture\",\"ok\":false,\"error\":\"fixture refusal\",\"result\":{}}"}) {
+            QCOMPARE(decodeLoginReply(frame, "fixture").error, StatusError::InvalidResponse);
+            QCOMPARE(decodeLogoutReply(frame, "fixture"), StatusError::InvalidResponse);
+        }
+
+        auto atLimit = reply("{\"pending\":true}");
+        atLimit.append(QByteArray(maxActionReplyBytes - atLimit.size(), ' '));
+        QCOMPARE(decodeLoginReply(atLimit, "fixture").error, StatusError::None);
+        QCOMPARE(decodeLoginReply(atLimit + ' ', "fixture").error, StatusError::ResponseTooLarge);
+        QCOMPARE(decodeLogoutReply(atLimit + ' ', "fixture"), StatusError::ResponseTooLarge);
+    }
+
+    void actionsShareTheStatusProcess()
+    {
+        QTemporaryDir temp;
+        QVERIFY(temp.isValid());
+        const auto state = temp.filePath("session");
+        EmbeddedStatusClient client(fixtureExecutable(), state);
+        QSignalSpy statuses(&client, &EmbeddedStatusClient::statusFinished);
+        QSignalSpy logins(&client, &EmbeddedStatusClient::loginFinished);
+        QSignalSpy logouts(&client, &EmbeddedStatusClient::logoutFinished);
+
+        QVERIFY(client.requestStatus(201));
+        QVERIFY(!client.requestLogin(202));
+        QVERIFY(!client.requestLogout(202));
+        QTRY_COMPARE_WITH_TIMEOUT(statuses.size(), 1, 3000);
+        QCOMPARE(statuses.first().first().toULongLong(), quint64(201));
+        QVERIFY(result(statuses).status && result(statuses).status->loginUrl.isEmpty());
+        QCOMPARE(result(statuses).status->state, BackendState::NeedsLogin);
+
+        QVERIFY(client.requestLogin(203));
+        QVERIFY(!client.requestStatus(204));
+        QVERIFY(!client.requestLogout(204));
+        QVERIFY(logins.isEmpty());
+        QTRY_COMPARE_WITH_TIMEOUT(logins.size(), 1, 3000);
+        QCOMPARE(logins.first().first().toULongLong(), quint64(203));
+        const auto queued = logins.first().at(1).value<LoginResult>();
+        QCOMPARE(queued.error, StatusError::None);
+        QVERIFY(queued.pending && *queued.pending);
+        QCOMPARE(statuses.size(), 1);
+        QVERIFY(logouts.isEmpty());
+
+        QVERIFY(client.requestStatus(205));
+        QTRY_COMPARE_WITH_TIMEOUT(statuses.size(), 2, 3000);
+        const auto authorizing = result(statuses, 1);
+        QVERIFY(authorizing.status);
+        QCOMPARE(authorizing.status->loginUrl, QUrl("https://login.tailscale.com/a/offline-fixture"));
+
+        QVERIFY(client.requestStatus(206));
+        QTRY_COMPARE_WITH_TIMEOUT(statuses.size(), 3, 3000);
+        const auto running = result(statuses, 2);
+        QVERIFY(running.status && running.status->loginUrl.isEmpty());
+        QCOMPARE(running.status->state, BackendState::Connected);
+
+        QVERIFY(client.requestLogin(207));
+        QTRY_COMPARE_WITH_TIMEOUT(logins.size(), 2, 3000);
+        QCOMPARE(logins.last().first().toULongLong(), quint64(207));
+        const auto alreadyRunning = logins.last().at(1).value<LoginResult>();
+        QCOMPARE(alreadyRunning.error, StatusError::None);
+        QVERIFY(alreadyRunning.pending && !*alreadyRunning.pending);
+
+        QVERIFY(client.requestLogout(208));
+        QVERIFY(!client.requestLogin(209));
+        QVERIFY(!client.requestStatus(209));
+        QTRY_COMPARE_WITH_TIMEOUT(logouts.size(), 1, 3000);
+        QCOMPARE(logouts.first().first().toULongLong(), quint64(208));
+        QCOMPARE(logouts.first().at(1).value<StatusError>(), StatusError::None);
+        QCOMPARE(statuses.size(), 3);
+
+        QVERIFY(client.requestStatus(210));
+        QTRY_COMPARE_WITH_TIMEOUT(statuses.size(), 4, 3000);
+        QCOMPARE(statuses.last().first().toULongLong(), quint64(210));
+        const auto stopped = result(statuses, 3);
+        QVERIFY(stopped.status && stopped.status->loginUrl.isEmpty());
+        QCOMPARE(stopped.status->state, BackendState::Stopped);
+        QVERIFY(!QFile::exists(state));
+    }
+
+    void failedActionRequests_data()
+    {
+        QTest::addColumn<QString>("scenario");
+        QTest::addColumn<int>("expected");
+        QTest::newRow("login-id-mismatch") << QStringLiteral("login-wrong-id") << int(StatusError::InvalidResponse);
+        QTest::newRow("login-invalid-pending") << QStringLiteral("login-bad-shape") << int(StatusError::InvalidResponse);
+        QTest::newRow("logout-nonempty-result") << QStringLiteral("logout-bad-shape") << int(StatusError::InvalidResponse);
+        QTest::newRow("login-helper-rejects") << QStringLiteral("login-rejected") << int(StatusError::HelperRejected);
+        QTest::newRow("logout-pipe-exit") << QStringLiteral("logout-exit") << int(StatusError::Transport);
+        QTest::newRow("login-reply-over-limit") << QStringLiteral("login-oversize") << int(StatusError::ResponseTooLarge);
+        QTest::newRow("logout-timeout-with-partial-frame") << QStringLiteral("logout-silent") << int(StatusError::Timeout);
+    }
+
+    void failedActionRequests()
+    {
+        QFETCH(QString, scenario);
+        QFETCH(int, expected);
+        QTemporaryDir temp;
+        QVERIFY(temp.isValid());
+        EmbeddedStatusClient client(fixtureExecutable(), temp.filePath(scenario));
+        QSignalSpy statuses(&client, &EmbeddedStatusClient::statusFinished);
+        QSignalSpy logins(&client, &EmbeddedStatusClient::loginFinished);
+        QSignalSpy logouts(&client, &EmbeddedStatusClient::logoutFinished);
+        const bool login = scenario.startsWith("login-");
+        QElapsedTimer clock;
+        clock.start();
+        QVERIFY(login ? client.requestLogin(251) : client.requestLogout(251));
+        const auto &completions = login ? logins : logouts;
+        QTRY_COMPARE_WITH_TIMEOUT(completions.size(), 1, 15500);
+        QCOMPARE(completions.first().first().toULongLong(), quint64(251));
+        const auto payload = completions.first().at(1);
+        if (login) {
+            const auto result = payload.value<LoginResult>();
+            QCOMPARE(int(result.error), expected);
+            QVERIFY(!result.pending);
+        } else {
+            QCOMPARE(int(payload.value<StatusError>()), expected);
+        }
+        if (scenario == "logout-silent")
+            QVERIFY(clock.elapsed() >= 11900);
+
+        QVERIFY(statuses.isEmpty());
+        bool accepted = false;
+        QTRY_VERIFY_WITH_TIMEOUT(accepted || (accepted = client.requestStatus(252)), 3000);
+        QTRY_COMPARE_WITH_TIMEOUT(statuses.size(), 1, 3000);
+        QCOMPARE(statuses.first().first().toULongLong(), quint64(252));
+        const auto status = result(statuses);
+        QCOMPARE(status.error, StatusError::None);
+        QVERIFY(status.status);
+        QCOMPARE(status.status->state, expected == int(StatusError::HelperRejected) ?
+            BackendState::NeedsLogin : BackendState::Starting);
+        QCOMPARE(logins.size(), login ? 1 : 0);
+        QCOMPARE(logouts.size(), login ? 0 : 1);
+    }
+
+    void windowsProviderFallback()
+    {
+        QCOMPARE(selectWindowsProvider({}, true, true), ProviderMode::System);
+        QCOMPARE(selectWindowsProvider({}, false, true), ProviderMode::Embedded);
+        QCOMPARE(selectWindowsProvider({}, true, false), ProviderMode::System);
+        QCOMPARE(selectWindowsProvider({}, false, false), ProviderMode::System);
+        QCOMPARE(selectWindowsProvider(" \tEmbedded\r\n", true, true), ProviderMode::Embedded);
+        QCOMPARE(selectWindowsProvider("System", true, true), ProviderMode::System);
+        QCOMPARE(selectWindowsProvider("System", false, true), ProviderMode::Embedded);
+        QCOMPARE(selectWindowsProvider("Embedded", true, false), ProviderMode::System);
+        QCOMPARE(selectWindowsProvider("embedded", true, true), ProviderMode::System);
+        QCOMPARE(selectWindowsProvider(QChar(0xfeff) + QStringLiteral("Embedded\n"), true, true), ProviderMode::Embedded);
+    }
+
     void packageAndStatePaths()
     {
         QTemporaryDir temp;
@@ -248,12 +425,26 @@ private slots:
         QVERIFY(absent.requestStatus(1));
         QTRY_COMPARE_WITH_TIMEOUT(missing.size(), 1, 1000);
         QCOMPARE(result(missing).error, StatusError::Unavailable);
+        QSignalSpy absentLogin(&absent, &EmbeddedStatusClient::loginFinished);
+        QVERIFY(absent.requestLogin(3));
+        QTRY_COMPARE_WITH_TIMEOUT(absentLogin.size(), 1, 1000);
+        QCOMPARE(absentLogin.first().first().toULongLong(), quint64(3));
+        const auto login = absentLogin.first().at(1).value<LoginResult>();
+        QCOMPARE(login.error, StatusError::Unavailable);
+        QVERIFY(!login.pending);
+        QCOMPARE(missing.size(), 1);
 
         EmbeddedStatusClient invalid(fixtureExecutable(), "relative-state");
         QSignalSpy refused(&invalid, &EmbeddedStatusClient::statusFinished);
         QVERIFY(invalid.requestStatus(2));
         QTRY_COMPARE_WITH_TIMEOUT(refused.size(), 1, 1000);
         QCOMPARE(result(refused).error, StatusError::InvalidStateDirectory);
+        QSignalSpy refusedLogout(&invalid, &EmbeddedStatusClient::logoutFinished);
+        QVERIFY(invalid.requestLogout(4));
+        QTRY_COMPARE_WITH_TIMEOUT(refusedLogout.size(), 1, 1000);
+        QCOMPARE(refusedLogout.first().first().toULongLong(), quint64(4));
+        QCOMPARE(refusedLogout.first().at(1).value<StatusError>(), StatusError::InvalidStateDirectory);
+        QCOMPARE(refused.size(), 1);
     }
 };
 

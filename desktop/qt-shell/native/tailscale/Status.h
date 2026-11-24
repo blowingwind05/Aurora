@@ -59,11 +59,22 @@ struct StatusResult
     std::optional<Status> status;
 };
 
-constexpr int maxStatusReplyBytes = 4 * 1024 * 1024;
+struct LoginResult
+{
+    StatusError error = StatusError::InvalidResponse;
+    std::optional<bool> pending;
+};
 
-// A single JSON line without the terminating LF.
+constexpr int maxStatusReplyBytes = 4 * 1024 * 1024;
+constexpr int maxActionReplyBytes = 4 * 1024;
+
+// Each decoder takes one JSON line without the terminating LF.
 StatusResult decodeStatusReply(const QByteArray &line, const QString &requestId);
+LoginResult decodeLoginReply(const QByteArray &line, const QString &requestId);
+StatusError decodeLogoutReply(const QByteArray &line, const QString &requestId);
 
 } // namespace aurora::tailscale
 
+Q_DECLARE_METATYPE(aurora::tailscale::StatusError)
 Q_DECLARE_METATYPE(aurora::tailscale::StatusResult)
+Q_DECLARE_METATYPE(aurora::tailscale::LoginResult)

@@ -14,13 +14,15 @@
 
 namespace aurora::tailscale {
 namespace {
-constexpr int statusTimeoutMs = 12000;
+constexpr int requestTimeoutMs = 12000;
 }
 
 EmbeddedStatusClient::EmbeddedStatusClient(QString executable, QString stateDirectory, QObject *parent)
     : QObject(parent), executable(std::move(executable)), stateDirectory(QDir::cleanPath(stateDirectory))
 {
+    qRegisterMetaType<StatusError>();
     qRegisterMetaType<StatusResult>();
+    qRegisterMetaType<LoginResult>();
     process.setStandardErrorFile(QProcess::nullDevice());
 #ifdef Q_OS_WIN
     process.setCreateProcessArgumentsModifier([](QProcess::CreateProcessArguments *arguments) {
@@ -29,18 +31,18 @@ EmbeddedStatusClient::EmbeddedStatusClient(QString executable, QString stateDire
 #endif
     deadline.setSingleShot(true);
     deadline.setTimerType(Qt::PreciseTimer);
-    connect(&deadline, &QTimer::timeout, this, [this] { finish({StatusError::Timeout, {}}, true); });
+    connect(&deadline, &QTimer::timeout, this, [this] { finish(StatusError::Timeout); });
     connect(&process, &QProcess::started, this, &EmbeddedStatusClient::sendRequest);
     connect(&process, &QProcess::readyReadStandardOutput, this, &EmbeddedStatusClient::receive);
     connect(&process, &QProcess::errorOccurred, this, [this](QProcess::ProcessError error) {
         if (error == QProcess::FailedToStart)
-            finish({StatusError::StartFailed, {}});
+            finish(StatusError::StartFailed);
         else if (error == QProcess::ReadError || error == QProcess::WriteError)
-            finish({StatusError::Transport, {}}, true);
+            finish(StatusError::Transport);
     });
     connect(&process, qOverload<int, QProcess::ExitStatus>(&QProcess::finished), this, [this] {
         stopping = false;
-        finish({StatusError::Transport, {}});
+        finish(StatusError::Transport);
     });
 }
 
@@ -76,11 +78,26 @@ bool EmbeddedStatusClient::isAvailable() const
 
 bool EmbeddedStatusClient::requestStatus(quint64 generation)
 {
+    return startRequest(Operation::Status, generation);
+}
+
+bool EmbeddedStatusClient::requestLogin(quint64 generation)
+{
+    return startRequest(Operation::Login, generation);
+}
+
+bool EmbeddedStatusClient::requestLogout(quint64 generation)
+{
+    return startRequest(Operation::Logout, generation);
+}
+
+bool EmbeddedStatusClient::startRequest(Operation operation, quint64 generation)
+{
     if (request || stopping)
         return false;
-    request = Request{generation, QString::number(++serial)};
+    request = Request{operation, generation, QString::number(++serial)};
     elapsed.start();
-    deadline.start(statusTimeoutMs);
+    deadline.start(requestTimeoutMs);
     QTimer::singleShot(0, this, &EmbeddedStatusClient::begin);
     return true;
 }
@@ -90,9 +107,9 @@ void EmbeddedStatusClient::begin()
     if (!request)
         return;
     if (!isAvailable())
-        return finish({StatusError::Unavailable, {}}, true);
+        return finish(StatusError::Unavailable);
     if (!QDir::isAbsolutePath(stateDirectory) || QDir(stateDirectory).isRoot())
-        return finish({StatusError::InvalidStateDirectory, {}});
+        return finish(StatusError::InvalidStateDirectory);
     if (process.state() == QProcess::Running)
         sendRequest();
     else
@@ -103,17 +120,23 @@ void EmbeddedStatusClient::sendRequest()
 {
     if (!request)
         return;
-    if (elapsed.hasExpired(statusTimeoutMs))
-        return finish({StatusError::Timeout, {}}, true);
+    if (elapsed.hasExpired(requestTimeoutMs))
+        return finish(StatusError::Timeout);
+    QString method;
+    switch (request->operation) {
+    case Operation::Status: method = QStringLiteral("status"); break;
+    case Operation::Login: method = QStringLiteral("login"); break;
+    case Operation::Logout: method = QStringLiteral("logout"); break;
+    }
     const QJsonObject frame{
         {QStringLiteral("id"), request->id},
-        {QStringLiteral("method"), QStringLiteral("status")},
+        {QStringLiteral("method"), method},
         {QStringLiteral("params"), QJsonObject{}}
     };
     const auto bytes = QJsonDocument(frame).toJson(QJsonDocument::Compact) + '\n';
     request->sent = true;
     if (process.write(bytes) != bytes.size())
-        finish({StatusError::Transport, {}}, true);
+        finish(StatusError::Transport);
 }
 
 void EmbeddedStatusClient::receive()
@@ -121,37 +144,64 @@ void EmbeddedStatusClient::receive()
     if (!request)
         return stop();
     if (!request->sent)
-        return finish({StatusError::InvalidResponse, {}}, true);
-    if (elapsed.hasExpired(statusTimeoutMs))
-        return finish({StatusError::Timeout, {}}, true);
+        return finish(StatusError::InvalidResponse);
+    if (elapsed.hasExpired(requestTimeoutMs))
+        return finish(StatusError::Timeout);
 
-    output += process.read(maxStatusReplyBytes + 1 - output.size());
+    const int limit = request->operation == Operation::Status ? maxStatusReplyBytes : maxActionReplyBytes;
+    output += process.read(limit + 1 - output.size());
     const auto newline = output.indexOf('\n');
     if (newline < 0) {
-        if (output.size() > maxStatusReplyBytes)
-            finish({StatusError::ResponseTooLarge, {}}, true);
+        if (output.size() > limit)
+            finish(StatusError::ResponseTooLarge);
         return;
     }
     if (newline + 1 != output.size() || process.bytesAvailable() != 0)
-        return finish({StatusError::InvalidResponse, {}}, true);
+        return finish(StatusError::InvalidResponse);
 
-    const auto result = decodeStatusReply(output.left(newline), request->id);
-    if (elapsed.hasExpired(statusTimeoutMs))
-        return finish({StatusError::Timeout, {}}, true);
-    finish(result, result.error == StatusError::InvalidResponse);
+    const auto line = output.left(newline);
+    switch (request->operation) {
+    case Operation::Status: {
+        auto result = decodeStatusReply(line, request->id);
+        return finish(result.error, std::move(result.status));
+    }
+    case Operation::Login: {
+        const auto result = decodeLoginReply(line, request->id);
+        return finish(result.error, {}, result.pending);
+    }
+    case Operation::Logout:
+        return finish(decodeLogoutReply(line, request->id));
+    }
 }
 
-void EmbeddedStatusClient::finish(StatusResult result, bool stopHelper)
+void EmbeddedStatusClient::finish(StatusError error, std::optional<Status> status, std::optional<bool> loginPending)
 {
     if (!request)
         return;
-    const auto generation = request->generation;
-    request.reset();
+    if (elapsed.hasExpired(requestTimeoutMs)) {
+        error = StatusError::Timeout;
+        status.reset();
+        loginPending.reset();
+    }
+
+    const auto completed = std::exchange(request, std::nullopt);
     deadline.stop();
     output.clear();
-    if (stopHelper)
+    if (error == StatusError::Unavailable || error == StatusError::Transport || error == StatusError::Timeout ||
+            error == StatusError::ResponseTooLarge || error == StatusError::InvalidResponse)
         stop();
-    emit statusFinished(generation, result);
+
+    switch (completed->operation) {
+    case Operation::Status:
+        emit statusFinished(completed->generation, {error, std::move(status)});
+        break;
+    case Operation::Login:
+        emit loginFinished(completed->generation, {error, loginPending});
+        break;
+    case Operation::Logout:
+        emit logoutFinished(completed->generation, error);
+        break;
+    }
 }
 
 void EmbeddedStatusClient::stop()

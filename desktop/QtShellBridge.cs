@@ -6,6 +6,7 @@ using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Threading;
 using System.Threading.Channels;
 using System.Threading.Tasks;
@@ -53,6 +54,13 @@ internal sealed record QtShellState(string DeviceAccess, string AccountName, str
     public bool WindowVisible { get; init; } = true;
     public int WindowActivation { get; init; }
     public string WindowPage { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? TrayRequested { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? TrayVisible { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? TrayActive { get; init; }
 }
 
 internal sealed record QtShellTailscaleAccount(string Mode, string ModeLabel, bool SupportsEmbedded,
