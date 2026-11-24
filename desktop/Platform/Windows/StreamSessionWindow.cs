@@ -528,10 +528,15 @@ internal sealed class StreamSessionWindow : Window
             var invitation = FormattableString.Invariant($"{hwnd.ToInt64()}:{Environment.ProcessId}:{id}");
             cancellation.ThrowIfCancellationRequested();
             using var process = Upstream.LaunchMoonlight(runtime, route, pair: false, invitation, readConnectionDetails: true);
+            var qtStageReady = 0;
+            var showingQtStage = false;
             StreamConnectionSample latest = null, displayed = null;
             process.OutputDataReceived += (_, data) =>
             {
-                if (StreamConnectionSample.Read(data.Data) is { } sample) Volatile.Write(ref latest, sample);
+                if (data.Data == "aurora-connection-stage/1,qt")
+                    Volatile.Write(ref qtStageReady, 1);
+                else if (StreamConnectionSample.Read(data.Data) is { } sample)
+                    Volatile.Write(ref latest, sample);
             };
             process.BeginOutputReadLine();
             process.BeginErrorReadLine();
@@ -550,6 +555,12 @@ internal sealed class StreamSessionWindow : Window
                 {
                     cancellation.ThrowIfCancellationRequested();
                     if (!connected && ready.WaitOne(0)) ShowVideo();
+                    if (!connected && !showingQtStage && Volatile.Read(ref qtStageReady) != 0)
+                    {
+                        showingQtStage = true;
+                        surface.IsVisible = true;
+                        stage.IsVisible = false;
+                    }
                     var sample = Volatile.Read(ref latest);
                     if (connected && sample != displayed && sample != null)
                     {
@@ -568,6 +579,11 @@ internal sealed class StreamSessionWindow : Window
             }
             finally
             {
+                if (showingQtStage && !connected)
+                {
+                    surface.IsVisible = false;
+                    stage.IsVisible = true;
+                }
                 connectionFlyout.Hide();
                 connectionDetails.Update(null);
                 privacyRequest = null;

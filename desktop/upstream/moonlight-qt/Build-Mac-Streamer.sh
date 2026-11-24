@@ -38,6 +38,7 @@ for patch in "$here"/*.patch; do
   patches+=("$patch")
 done
 cp "$here/AuroraStreamEntry.h" "$source/app/"
+cp -R "$here/qt-session" "$source/app/"
 cp "$here/../../Assets/Aurora.icns" "$source/app/moonlight.icns"
 
 echo '编译极光串流组件…'
@@ -49,7 +50,7 @@ mkdir "$build"
   make -j"$(sysctl -n hw.logicalcpu)" release
 )
 stage="$build/app/Moonlight.app/Contents"
-"$qt_bin/macdeployqt" "$build/app/Moonlight.app" "-qmldir=$source/app/gui" -appstore-compliant
+"$qt_bin/macdeployqt" "$build/app/Moonlight.app" "-qmldir=$source/app" -appstore-compliant
 /usr/bin/lipo "$stage/MacOS/Moonlight" -verify_arch "$native_arch"
 expected_arch="$(uname -m)"
 if [[ "$expected_arch" == "$native_arch" ]]; then
@@ -73,6 +74,7 @@ notices="$destination/Resources/ThirdParty/Moonlight"
 mkdir -p "$notices"
 cp "$source/LICENSE" "$notices/LICENSE"
 cp "${patches[@]}" "$here/AuroraStreamEntry.h" "$notices/"
+cp -R "$here/qt-session" "$notices/"
 printf '%s\n' 'https://github.com/moonlight-stream/moonlight-qt' "$revision" > "$notices/SOURCE.txt"
 git -C "$source" submodule status --recursive >> "$notices/SOURCE.txt"
 (

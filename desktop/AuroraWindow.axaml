@@ -180,13 +180,13 @@
         </Border>
       </Grid>
       <Border Grid.RowSpan="2" HorizontalAlignment="Center" VerticalAlignment="Center" IsHitTestVisible="False"
-              IsVisible="{Binding #UpdateNotice.IsVisible}" Background="#202631" CornerRadius="12" Padding="16,9">
+              IsVisible="{Binding #UpdateNotice.IsVisible}" Background="#202631" CornerRadius="10" Padding="16,9">
         <local:RefreshNotice x:Name="UpdateNotice">
           <TextBlock Foreground="White" />
         </local:RefreshNotice>
       </Border>
       <Grid x:Name="ConfirmationOverlay" Grid.RowSpan="2" IsVisible="False" Background="#66232D3E">
-        <Border Background="White" BorderBrush="#DBE2ED" BorderThickness="1" CornerRadius="14"
+        <Border Background="White" BorderBrush="#DBE2ED" BorderThickness="1" CornerRadius="13"
                 Padding="18" Margin="16" MaxWidth="360" HorizontalAlignment="Center" VerticalAlignment="Center">
           <StackPanel Spacing="12" KeyboardNavigation.TabNavigation="Cycle">
             <TextBlock x:Name="ConfirmationTitle" Classes="sectionTitle" TextWrapping="Wrap" />

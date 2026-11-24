@@ -1,0 +1,84 @@
+diff --git a/app/app.pro b/app/app.pro
+--- a/app/app.pro
++++ b/app/app.pro
+@@ -1,4 +1,9 @@
+ QT += core quick network quickcontrols2 svg
++
++win32:contains(DEFINES, AURORA_STREAM_RUNTIME) {
++    HEADERS += qt-session/AuroraConnectionView.h qt-session/AuroraEmbeddedConnectionView.h
++    RESOURCES += qt-session/connection-stage.qrc
++}
+ CONFIG += c++11
+ 
+ unix:!macx {
+diff --git a/app/main.cpp b/app/main.cpp
+--- a/app/main.cpp
++++ b/app/main.cpp
+@@ -52,6 +52,9 @@
+ #include "streaming/auroraembedded.h"
+ 
+ #if defined(Q_OS_WIN32) && defined(AURORA_STREAM_RUNTIME)
++#include "qt-session/AuroraEmbeddedConnectionView.h"
++#include <cstdio>
++
+ static void startAuroraEmbeddedStream(QGuiApplication& app, CliStartStream::Launcher* launcher,
+                                       StreamingPreferences* preferences)
+ {
+@@ -93,6 +96,20 @@
+ 
+     QTimer::singleShot(0, launcher, [launcher, manager, stopTimer]() {
+         stopTimer->start(80);
++        auto& embedded = AuroraEmbeddedSession::current();
++        if (qEnvironmentVariableIntValue("AURORA_QT_SESSION") == 1) {
++            if (auto host = embedded.hostWindow()) {
++                auto stage = new AuroraEmbeddedConnectionView(host, launcher);
++                if (auto view = stage->show()) {
++                    embedded.setConnectionView(view);
++                    std::fputs("aurora-connection-stage/1,qt\n", stdout);
++                    std::fflush(stdout);
++                } else {
++                    delete stage;
++                    qWarning("Aurora could not attach the Qt connection view. Using the host connection view.");
++                }
++            }
++        }
+         launcher->execute(manager);
+     });
+ }
+diff --git a/app/streaming/auroraembedded.h b/app/streaming/auroraembedded.h
+--- a/app/streaming/auroraembedded.h
++++ b/app/streaming/auroraembedded.h
+@@ -7,6 +7,8 @@
+ #include <SDL_syswm.h>
+ #include <QByteArray>
+ #include <QString>
++#include <QPointer>
++#include <QWindow>
+ 
+ class AuroraEmbeddedSession
+ {
+@@ -46,6 +48,8 @@
+ 
+     bool enabled() const { return m_Parent != nullptr; }
+     bool attachmentFailed() const { return m_AttachmentFailed; }
++    HWND hostWindow() const { return hasHost() ? m_Parent : nullptr; }
++    void setConnectionView(QWindow* view) { m_ConnectionView = view; }
+ 
+     bool stopRequested() const
+     {
+@@ -120,6 +124,7 @@
+     void show(SDL_Window* window)
+     {
+         ShowWindow(m_Window, SW_SHOWNOACTIVATE);
++        if (m_ConnectionView) m_ConnectionView->hide();
+ 
+         // A foreign SDL window may already be marked shown. Queue the initial
+         // decoder setup explicitly even when Windows doesn't send a show event.
+@@ -183,6 +188,7 @@
+     QString m_Name;
+     HWND m_Parent = nullptr;
+     HWND m_Window = nullptr;
++    QPointer<QWindow> m_ConnectionView;
+     DWORD m_ParentPid = 0;
+     WNDPROC m_SdlProc = nullptr;
+     HANDLE m_Ready = nullptr;
