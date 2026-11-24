@@ -15,6 +15,14 @@ $qt = (Get-Command $Qmake -CommandType Application).Source
 $qtBin = Split-Path $qt -Parent
 $deployQt = Join-Path $qtBin 'windeployqt.exe'
 if (-not (Test-Path -LiteralPath $deployQt)) { throw 'The selected Qt must provide windeployqt.' }
+if (-not (Get-Command cmake -CommandType Application -ErrorAction SilentlyContinue)) {
+    throw 'CMake is required to build AuroraQtShell.'
+}
+$qtVersion = & $qt -query QT_VERSION
+if ($LASTEXITCODE -ne 0 -or $qtVersion -notmatch '^[56]\.') { throw 'Select a Qt 5 or Qt 6 qmake.' }
+$qtMajor = $qtVersion.Split('.')[0]
+$qtPrefix = & $qt -query QT_INSTALL_PREFIX
+if ($LASTEXITCODE -ne 0 -or -not $qtPrefix) { throw 'The selected qmake did not return its installation prefix.' }
 if (-not $env:VCToolsRedistDir) { throw 'The MSVC x64 app-local runtime is required.' }
 $crt = Get-ChildItem -LiteralPath (Join-Path $env:VCToolsRedistDir 'x64') -Directory -Filter 'Microsoft.VC*.CRT' |
     Select-Object -First 1
@@ -61,11 +69,13 @@ try {
     Copy-Item -Path (Join-Path $source 'libs/windows/lib/x64/*.dll') -Destination $deploy
     Copy-Item -LiteralPath (Join-Path $build 'AntiHooking/release/AntiHooking.dll'),
         (Join-Path $source 'app/SDL_GameControllerDB/gamecontrollerdb.txt') -Destination $deploy
-    $qtVersion = & $qt -query QT_VERSION
-    if ($qtVersion -like '5.*') {
+    & (Join-Path $PSScriptRoot 'Build-Windows-QtShell.ps1') -BuildDirectory (Join-Path $work 'qt-shell') `
+        -DeployDirectory $deploy -QtPrefix $qtPrefix -QtMajor $qtMajor
+    if ($qtMajor -eq '5') {
         Copy-Item -LiteralPath (Join-Path $source 'app/qt_qt5.conf') -Destination (Join-Path $deploy 'qt.conf')
     }
-    & $deployQt --release --qmldir (Join-Path $source 'app') --dir $deploy --no-opengl-sw --no-sql --no-compiler-runtime $executable
+    & $deployQt --release --qmldir (Join-Path $source 'app') --qmldir (Join-Path $deploy 'QtPreview/desktop/qt-shell') `
+        --dir $deploy --no-opengl-sw --no-sql --no-compiler-runtime $executable (Join-Path $deploy 'AuroraQtShell.exe')
     if ($LASTEXITCODE -ne 0) { throw 'Deploying Qt failed.' }
     Get-ChildItem -LiteralPath $crt.FullName -File -Filter '*.dll' | Copy-Item -Destination $deploy
     $launch = [Diagnostics.ProcessStartInfo]::new($executable)

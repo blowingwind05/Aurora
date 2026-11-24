@@ -5,7 +5,7 @@
 ## 开发环境
 
 - 桌面端使用 .NET 9 SDK、Avalonia 和 PowerShell 7。用 Git 获取仓库，从仓库根目录执行下列命令。
-- Windows 原生组件面向 x64。Moonlight 使用 Visual Studio x64 开发环境、带 `qmake` 和 `windeployqt` 的 Qt 工具链。构建脚本使用 Moonlight 源码附带的 `jom`。Sunshine 使用 MSYS2 UCRT64、GCC 14 或更新版本和原生 x64 Node.js。制作安装器时准备 Inno Setup 6。
+- Windows 原生组件面向 x64，使用 Visual Studio x64 开发环境、CMake 和带 `qmake`、`windeployqt` 的 Qt 工具链。Moonlight 使用源码附带的 `jom`。Sunshine 使用 MSYS2 UCRT64、GCC 14 或更新版本和原生 x64 Node.js。制作安装器时准备 Inno Setup 6。
 - macOS 原生构建使用与目标架构相同的 Mac、Xcode 工具、CMake 和带 `qmake`、`macdeployqt` 的 Qt 6。Sunshine 的 Homebrew 和 Python 依赖见[宿主构建说明](desktop/upstream/sunshine/README.md#macos)。
 - 内置 Tailscale 节点的构建脚本使用 Go 1.27.4。Windows 目标还需要 GNU `windres` 和配套的预处理器。 [节点构建说明](desktop/upstream/tsnet/README.md)
 
@@ -29,7 +29,7 @@ pwsh -File ./desktop/upstream/sunshine/Build-Windows-Sunshine.ps1 -Msys2Root C:\
 pwsh -File ./desktop/upstream/tsnet/Build-Tailnet.ps1 -Runtime win-x64 -OutputDirectory ./desktop/obj/tailnet-win -RunTests
 ```
 
-把前两个脚本生成的 `Streamer` 和 Sunshine 部署目录填入下列变量。每个目录包含对应的可执行文件、运行库和许可文件。打包脚本打印 `Aurora.exe` 的输出路径。`-Setup` 同时生成 `AuroraSetup.exe`，找不到 Inno Setup 时可传入 `-InnoSetupCompiler`。
+把前两个脚本生成的 `Streamer` 和 Sunshine 部署目录填入下列变量。`Streamer` 包含 Qt 主窗口和它与串流组件共用的 Qt 运行库。打包脚本打印 `Aurora.exe` 的输出路径。`-Setup` 同时生成 `AuroraSetup.exe`，找不到 Inno Setup 时可传入 `-InnoSetupCompiler`。
 
 ```powershell
 $streamer = 'C:\build\aurora\Streamer'

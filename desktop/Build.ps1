@@ -37,14 +37,18 @@ if ($Setup) {
 $variant = if ($SunshineDirectory -or $TailscaleDirectory) { 'dist/Avalonia-0.8-source-integrated' }
     elseif ($StreamerDirectory) { 'dist/Avalonia-0.8-integrated' } else { 'dist/Avalonia-0.8' }
 $output = Join-Path (Split-Path -Parent $PSScriptRoot) $variant
-if (($SunshineDirectory -or $TailscaleDirectory) -and (Test-Path -LiteralPath $output)) {
+if (($StreamerDirectory -or $SunshineDirectory -or $TailscaleDirectory) -and (Test-Path -LiteralPath $output)) {
     $output += '-' + [Guid]::NewGuid().ToString('N').Substring(0, 8)
 }
 if ($StreamerDirectory) {
     if ($MoonlightDirectory) { throw 'Specify only one streaming component.' }
     $StreamerDirectory = (Resolve-Path -LiteralPath $StreamerDirectory).Path
-    if (-not (Test-Path -LiteralPath (Join-Path $StreamerDirectory 'AuroraStream.exe') -PathType Leaf)) {
-        throw 'StreamerDirectory must contain the integrated AuroraStream.exe and its runtime files.'
+    $requiredStreamerFiles = @('AuroraStream.exe', 'AuroraQtShell.exe', 'QtPreview/desktop/qt-shell/qml/qmldir',
+        'QtPreview/desktop/qt-shell/bridge/Live.qml', 'QtPreview/desktop/qt-shell/bridge/WindowsSessionPopup.qml')
+    foreach ($file in $requiredStreamerFiles) {
+        if (-not (Test-Path -LiteralPath (Join-Path $StreamerDirectory $file) -PathType Leaf)) {
+            throw "StreamerDirectory is missing $file. Rebuild it with Build-Windows-Streamer.ps1."
+        }
     }
 }
 if ($MoonlightDirectory) {
@@ -107,9 +111,14 @@ if ($StreamerDirectory -or $MoonlightDirectory) {
     $source = if ($StreamerDirectory) { $StreamerDirectory } else { $MoonlightDirectory }
     $bundled = Join-Path $output $target
     $null = New-Item -ItemType Directory -Force -Path $bundled
+    $excluded = @('portable.dat', 'Moonlight Game Streaming Project')
+    if ($StreamerDirectory) { $excluded += 'QtPreview' }
     Get-ChildItem -LiteralPath $source -Force |
-        Where-Object Name -notin @('portable.dat', 'Moonlight Game Streaming Project') |
+        Where-Object Name -notin $excluded |
         Copy-Item -Destination $bundled -Recurse -Force
+    if ($StreamerDirectory) {
+        Copy-Item -LiteralPath (Join-Path $StreamerDirectory 'QtPreview') -Destination $output -Recurse
+    }
 }
 foreach ($component in $components) {
     $target = Join-Path $output ('Components/' + $component.Name)
