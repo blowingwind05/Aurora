@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "LifecycleController.h"
+#include "SettingsSession.h"
 
 #include <QElapsedTimer>
 #include <QMetaObject>
 #include <QPointer>
 #include <QThread>
 #include <QTimer>
+#include <QUuid>
 
 #include <algorithm>
 #include <utility>
@@ -23,6 +25,12 @@ public:
     bool readConfig(BundledAdmin::Completion completion) override
     {
         return admin_->readConfig(std::move(completion));
+    }
+
+    bool saveConfig(BundledAdmin::PreparePayload prepare, BundledAdmin::VerifyReadback verify,
+                    BundledAdmin::Completion completion) override
+    {
+        return admin_->saveConfig(std::move(prepare), std::move(verify), std::move(completion));
     }
 
 private:
@@ -43,7 +51,29 @@ bool canRetry(BundledAdmin::Error error)
     return error == Error::Network || error == Error::Tls || error == Error::Timeout;
 }
 
+bool lostAuthentication(BundledAdmin::Error error)
+{
+    return error == BundledAdmin::Error::Unauthorized || error == BundledAdmin::Error::Tls;
+}
+
 } // namespace
+
+struct LifecycleController::PendingSettings
+{
+    quint64 operation = 0;
+    QString session;
+    std::optional<SettingsEdit> edit;
+    SettingsReadCompletion read;
+    SettingsSaveCompletion save;
+
+    void cancel()
+    {
+        if (edit)
+            save(rejectedSettingsEdit(*edit, SettingsStatus::Cancelled, cancelledSettingsMessage()));
+        else
+            read({session, SettingsStatus::Cancelled, cancelledSettingsMessage(), std::nullopt});
+    }
+};
 
 class LifecycleWorker final : public QObject
 {
@@ -89,22 +119,71 @@ public:
         }
     }
 
+    void readSettings(quint64 request, quint64 operation, const QString &session)
+    {
+        if (!settingsCurrent(request, session)) {
+            emit settingsReadFinished(operation, {session, SettingsStatus::Stale, staleSettingsMessage(), std::nullopt});
+            return;
+        }
+        settings_->read([this, request, operation, session](SettingsReadResult result, BundledAdmin::Error error) {
+            QMetaObject::invokeMethod(this, [this, request, operation, session, result = std::move(result), error] {
+                if (!settingsCurrent(request, session))
+                    return;
+                emit settingsReadFinished(operation, result);
+                if (lostAuthentication(error)) {
+                    publish(Phase::Stopping);
+                    fail(result.error);
+                }
+            }, Qt::QueuedConnection);
+        });
+    }
+
+    void saveSettings(quint64 request, quint64 operation, const SettingsEdit &edit)
+    {
+        const auto session = edit.version.session;
+        if (!settingsCurrent(request, session)) {
+            emit settingsSaveFinished(operation, rejectedSettingsEdit(edit, SettingsStatus::Stale, staleSettingsMessage()));
+            return;
+        }
+        settings_->save(edit, [this, request, operation, session](SettingsSaveResult result, BundledAdmin::Error error) {
+            QMetaObject::invokeMethod(this, [this, request, operation, session, result = std::move(result), error] {
+                if (!settingsCurrent(request, session))
+                    return;
+                emit settingsSaveFinished(operation, result);
+                if (lostAuthentication(error)) {
+                    publish(Phase::Stopping);
+                    fail(result.error);
+                }
+            }, Qt::QueuedConnection);
+        });
+    }
+
 signals:
-    void progressed(quint64 request, int phase, const QString &error, bool cleanupPending);
+    void progressed(quint64 request, int phase, const QString &error, bool cleanupPending, const QString &settingsSession);
+    void settingsReadFinished(quint64 operation, const Aurora::Sunshine::SettingsReadResult &result);
+    void settingsSaveFinished(quint64 operation, const Aurora::Sunshine::SettingsSaveResult &result);
 
 private:
     bool current() const { return latest_->load() == request_; }
+
+    bool settingsCurrent(quint64 request, const QString &session)
+    {
+        return current() && request == request_ && phase_ == Phase::Ready && settings_ &&
+            settings_->id() == session && host_->running();
+    }
 
     void publish(Phase phase, const QString &error = {}, bool cleanupPending = false)
     {
         phase_ = phase;
         if (current())
-            emit progressed(request_, int(phase), error, cleanupPending);
+            emit progressed(request_, int(phase), error, cleanupPending,
+                phase == Phase::Ready && settings_ ? settings_->id() : QString{});
     }
 
     void cancelRead()
     {
         ++readId_;
+        settings_.reset();
         admin_.reset();
     }
 
@@ -253,7 +332,7 @@ private:
     {
         if (!current() || request != request_ || id != readId_)
             return;
-        cancelRead();
+        ++readId_;
         if (!host_->running()) {
             handleExit();
             return;
@@ -263,10 +342,13 @@ private:
             return;
         }
         if (result) {
+            settings_ = std::make_unique<SettingsSession>(QUuid::createUuid().toString(QUuid::WithoutBraces),
+                *admin_, [this] { return current() && phase_ == Phase::Ready && host_->running(); });
             publish(Phase::Ready);
             return;
         }
 
+        cancelRead();
         if (!canRetry(result.error)) {
             fail(result.message.isEmpty() ? QStringLiteral("内置 Sunshine 未通过管理接口验证。") : result.message);
             return;
@@ -290,6 +372,7 @@ private:
     QString lastReadError_;
     std::unique_ptr<BundledHost> host_;
     std::unique_ptr<ReadinessAdmin> admin_;
+    std::unique_ptr<SettingsSession> settings_;
 };
 
 LifecycleController::LifecycleController(HostLayout layout, QObject *parent)
@@ -305,10 +388,26 @@ LifecycleController::LifecycleController(HostLayout layout, LifecycleDependencie
     auto *workerThread = new QThread;
     workerThread->setObjectName(QStringLiteral("Bundled Sunshine lifecycle"));
     worker_->moveToThread(workerThread);
+    qRegisterMetaType<SettingsReadResult>();
+    qRegisterMetaType<SettingsSaveResult>();
     connect(worker_, &LifecycleWorker::progressed, this,
-        [this](quint64 request, int phase, const QString &error, bool cleanupPending) {
+        [this](quint64 request, int phase, const QString &error, bool cleanupPending, const QString &settingsSession) {
             if (request == state_.request)
-                setState({request, Phase(phase), error, cleanupPending});
+                setState({request, Phase(phase), error, cleanupPending, settingsSession});
+        }, Qt::QueuedConnection);
+    connect(worker_, &LifecycleWorker::settingsReadFinished, this,
+        [this](quint64 operation, const SettingsReadResult &result) {
+            if (pendingSettings_ && pendingSettings_->operation == operation) {
+                auto pending = std::move(pendingSettings_);
+                pending->read(result);
+            }
+        }, Qt::QueuedConnection);
+    connect(worker_, &LifecycleWorker::settingsSaveFinished, this,
+        [this](quint64 operation, const SettingsSaveResult &result) {
+            if (pendingSettings_ && pendingSettings_->operation == operation) {
+                auto pending = std::move(pendingSettings_);
+                pending->save(result);
+            }
         }, Qt::QueuedConnection);
     connect(workerThread, &QThread::finished, worker_, &QObject::deleteLater);
     connect(workerThread, &QThread::finished, workerThread, &QObject::deleteLater);
@@ -361,11 +460,42 @@ bool LifecycleController::shutdown()
     return true;
 }
 
+bool LifecycleController::readSettings(SettingsReadCompletion completion)
+{
+    if (!acceptsRequests() || state_.phase != Phase::Ready || pendingSettings_ || !completion)
+        return false;
+
+    const auto operation = ++nextSettingsOperation_;
+    const auto session = state_.settingsSession;
+    pendingSettings_ = std::make_unique<PendingSettings>(
+        PendingSettings{operation, session, std::nullopt, std::move(completion), {}});
+    auto *worker = worker_;
+    QMetaObject::invokeMethod(worker, [worker, request = state_.request, operation, session] {
+        worker->readSettings(request, operation, session);
+    }, Qt::QueuedConnection);
+    return true;
+}
+
+bool LifecycleController::saveSettings(SettingsEdit edit, SettingsSaveCompletion completion)
+{
+    if (!acceptsRequests() || state_.phase != Phase::Ready || pendingSettings_ || !completion)
+        return false;
+
+    const auto operation = ++nextSettingsOperation_;
+    pendingSettings_ = std::make_unique<PendingSettings>(
+        PendingSettings{operation, edit.version.session, edit, {}, std::move(completion)});
+    auto *worker = worker_;
+    QMetaObject::invokeMethod(worker, [worker, request = state_.request, operation, edit = std::move(edit)] {
+        worker->saveSettings(request, operation, edit);
+    }, Qt::QueuedConnection);
+    return true;
+}
+
 void LifecycleController::submit(Action action, Phase phase)
 {
     const auto request = state_.request + 1;
     enqueue(action, request);
-    setState({request, phase, {}, state_.cleanupPending});
+    setState({request, phase, {}, state_.cleanupPending, {}});
 }
 
 void LifecycleController::enqueue(Action action, quint64 request)
@@ -378,8 +508,14 @@ void LifecycleController::enqueue(Action action, quint64 request)
 void LifecycleController::setState(State state)
 {
     if (state_.request == state.request && state_.phase == state.phase &&
-        state_.error == state.error && state_.cleanupPending == state.cleanupPending)
+        state_.error == state.error && state_.cleanupPending == state.cleanupPending &&
+        state_.settingsSession == state.settingsSession)
         return;
+
+    if (pendingSettings_ && state.settingsSession != state_.settingsSession) {
+        auto cancelled = std::shared_ptr<PendingSettings>(std::move(pendingSettings_));
+        QMetaObject::invokeMethod(this, [cancelled] { cancelled->cancel(); }, Qt::QueuedConnection);
+    }
     state_ = std::move(state);
     emit stateChanged();
 }

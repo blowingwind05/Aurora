@@ -11,9 +11,14 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QJsonObject>
+#include <QSaveFile>
 #include <QKeySequence>
 #include <QMenuBar>
 #include <QTimer>
+#include <QWindow>
+
+#include <algorithm>
+#include <utility>
 
 namespace {
 using Aurora::Preferences::SleepMode;
@@ -108,12 +113,18 @@ void NativeDesktop::start()
             aurora::tailscale::ProviderMode::Embedded;
         connect(systemTailnet.get(), &aurora::tailscale::system::SystemTailscaleClient::statusFinished,
                 this, &NativeDesktop::receiveTailnetStatus);
+        connect(systemTailnet.get(), &aurora::tailscale::system::SystemTailscaleClient::profilesFinished,
+                this, &NativeDesktop::receiveSystemProfiles);
+        connect(systemTailnet.get(), &aurora::tailscale::system::SystemTailscaleClient::actionFinished,
+                this, &NativeDesktop::receiveSystemAction);
 #endif
+        initializeStreamSessions(applicationDirectory.path());
         connect(tailnet.get(), &EmbeddedStatusClient::loginFinished, this,
                 [this](quint64 generation, const aurora::tailscale::LoginResult &result) {
                     if (generation != tailnetGeneration)
                         return;
                     tailnetBusy = false;
+                    tailnetRefreshing = false;
                     if (result.error != StatusError::None) {
                         openLoginAfterStatus = false;
                         tailnetFeedback = tr("无法启动 Tailscale 登录，请刷新状态后重试。");
@@ -127,6 +138,7 @@ void NativeDesktop::start()
                     if (generation != tailnetGeneration)
                         return;
                     tailnetBusy = false;
+                    tailnetRefreshing = false;
                     if (error != StatusError::None)
                         tailnetFeedback = tr("无法退出 Tailscale，请刷新状态后重试。");
                     readTailnet();
@@ -136,10 +148,14 @@ void NativeDesktop::start()
                     if (!pendingAdvertisement)
                         return;
                     const auto next = *pendingAdvertisement;
+                    if (error == StatusError::None)
+                        embeddedHostBound = next.hosting;
                     if (error != StatusError::None || generation != tailnetGeneration ||
                         !tailnet->requestPublish(generation, next.account.has_value(), next.account,
-                            next.account && localPresence ? localPresence->announcementPacket(next.hosting) : QByteArray{}))
+                            next.account && localPresence ? localPresence->announcementPacket(next.hosting) : QByteArray{})) {
                         pendingAdvertisement.reset();
+                        resumeTailnetAfterRetirement();
+                    }
                 });
         connect(tailnet.get(), &EmbeddedStatusClient::publishFinished, this,
                 [this](quint64 generation, StatusError error) {
@@ -151,14 +167,16 @@ void NativeDesktop::start()
                         advertisedHost = completed;
                         publishHostState();
                     }
+                    resumeTailnetAfterRetirement();
                 });
         connect(&tailnetPoll, &QTimer::timeout, this, [this] {
+            if (connection && !connection->launched)
+                return;
             if (localPresence && localPresence->scanning())
                 return;
-            if (snapshot.value(QStringLiteral("windowVisible")).toBool() &&
-                (tailnetStatus.state == BackendState::Connected || tailnetStatus.state == BackendState::Starting ||
-                 tailnetStatus.state == BackendState::NeedsLogin ||
-                 tailnetStatus.state == BackendState::NeedsApproval))
+            const bool available = embeddedSelected ? tailnet && tailnet->isAvailable() : hasSystemRuntime;
+            if (snapshot.value(QStringLiteral("windowVisible")).toBool() && available &&
+                (tailnetStatus.state != BackendState::Stopped || !embeddedSelected))
                 readTailnet(false);
         });
         tailnetPoll.start(3000);
@@ -205,6 +223,12 @@ void NativeDesktop::publishHostState()
     using Phase = LifecycleController::Phase;
     const auto current = host ? host->state() : LifecycleController::State{};
     const bool ready = current.phase == Phase::Ready;
+    if (hostSettingsSession != current.settingsSession) {
+        hostSettingsSession = current.settingsSession;
+        hostSettings.reset();
+        hostSettingsReceipt = {};
+        hostSettingsFeedback.clear();
+    }
     const bool allowed = preferences.managedHostAllowed();
     const bool busy = current.phase == Phase::Starting || current.phase == Phase::Restarting || current.phase == Phase::Stopping;
     QString status;
@@ -221,7 +245,7 @@ void NativeDesktop::publishHostState()
         (advertisedHost.hosting && advertisedHost.account == tailnetStatus.account));
     const auto tailnetAddress = ready && tailnetReachable ? hostAddress(tailnetStatus.localAddress) : QString();
     const auto lanAddress = ready && localPresence ? hostAddress(localPresence->lan().address) : QString();
-    snapshot.insert(QStringLiteral("host"), QVariantMap{
+    QVariantMap hostState{
         {QStringLiteral("available"), bool(host)},
         {QStringLiteral("managed"), bool(host)},
         {QStringLiteral("allowed"), allowed},
@@ -236,7 +260,22 @@ void NativeDesktop::publishHostState()
         {QStringLiteral("permissionsAvailable"), bool(host) && allowed},
 #endif
         {QStringLiteral("hint"), hint},
-    });
+    };
+    if (ready && !hostSettingsSession.isEmpty()) {
+        const bool settingsBusy = host->settingsBusy();
+        const auto settingsStatus = hostSettings ? QStringLiteral("ready")
+            : settingsBusy ? QStringLiteral("loading")
+            : hostSettingsFeedback.isEmpty() ? QStringLiteral("idle") : QStringLiteral("unavailable");
+        hostState.insert(QStringLiteral("sunshine"), QVariantMap{
+            {QStringLiteral("session"), hostSettingsSession},
+            {QStringLiteral("status"), settingsStatus},
+            {QStringLiteral("busy"), settingsBusy},
+            {QStringLiteral("config"), hostSettings ? hostSettings->config.toVariantMap() : QVariantMap{}},
+            {QStringLiteral("result"), hostSettingsReceipt.toVariantMap()},
+            {QStringLiteral("feedback"), hostSettingsFeedback},
+        });
+    }
+    snapshot.insert(QStringLiteral("host"), hostState);
     sleepPrevention.setHostActive(ready);
     if (localPresence)
         localPresence->setHosting(ready);
@@ -275,6 +314,8 @@ bool NativeDesktop::handleHostAction(const QString &action)
                 action == QLatin1String("hostContinuePermissions")) && preferences.managedHostAllowed() &&
                (phase == Phase::Stopped || phase == Phase::Failed)) {
         host->start();
+    } else if (action == QLatin1String("hostRefresh") && phase == Phase::Ready) {
+        readHostSettings();
     }
 #ifdef Q_OS_MACOS
     else if (action == QLatin1String("hostOpenPermissions") && preferences.managedHostAllowed()) {
@@ -285,8 +326,77 @@ bool NativeDesktop::handleHostAction(const QString &action)
     return true;
 }
 
+void NativeDesktop::readHostSettings()
+{
+    if (!host || host->state().phase != LifecycleController::Phase::Ready)
+        return;
+    if (host->readSettings([this](Aurora::Sunshine::SettingsReadResult result) {
+            if (!host || result.session != host->state().settingsSession || result.session != hostSettingsSession)
+                return;
+            if (result.snapshot)
+                hostSettings = std::move(result.snapshot);
+            if (!result.error.isEmpty())
+                hostSettingsFeedback = result.error;
+            publishHostState();
+        })) {
+        hostSettingsFeedback.clear();
+        publishHostState();
+    }
+}
+
+bool NativeDesktop::handleSunshineAction(const QString &action, const QJsonObject &request)
+{
+    if (!action.startsWith(QLatin1String("sunshine")))
+        return false;
+    if (!host || host->state().phase != LifecycleController::Phase::Ready || hostSettingsSession.isEmpty())
+        return true;
+    const auto message = request.value(QStringLiteral("sunshine")).toObject();
+    if (message.value(QStringLiteral("session")).toString() != hostSettingsSession)
+        return true;
+    if (action == QLatin1String("sunshineLoad")) {
+        readHostSettings();
+    } else if (action == QLatin1String("sunshineRestart") && !host->settingsBusy()) {
+        host->restart();
+    } else if (action == QLatin1String("sunshineSave")) {
+        const auto id = message.value(QStringLiteral("id")).toInt();
+        const auto changes = message.value(QStringLiteral("changes")).toObject();
+        if (id <= 0 || changes.isEmpty() || changes.size() > 110)
+            return true;
+        if (!hostSettings || !host->saveSettings({hostSettings->version, id, changes},
+                [this](Aurora::Sunshine::SettingsSaveResult result) {
+                    if (!host || result.submitted.session != host->state().settingsSession ||
+                        result.submitted.session != hostSettingsSession)
+                        return;
+                    if (result.snapshot)
+                        hostSettings = std::move(result.snapshot);
+                    hostSettingsReceipt = result.receiptForQml();
+                    hostSettingsFeedback = result.error;
+                    publishHostState();
+                    if (result.refreshRequired)
+                        readHostSettings();
+                })) {
+            Aurora::Sunshine::SettingsSaveResult busy;
+            busy.id = id;
+            for (auto it = changes.constBegin(); it != changes.constEnd(); ++it)
+                busy.errors.insert(it.key(), tr("Sunshine 正在处理另一项操作。请稍后重试保存。"));
+            hostSettingsReceipt = busy.receiptForQml();
+        } else {
+            hostSettingsReceipt = {};
+            hostSettingsFeedback.clear();
+        }
+        publishHostState();
+    }
+    return true;
+}
+
 void NativeDesktop::requestExit()
 {
+    if (sessionSupervisor && sessionSupervisor->phase() != Aurora::Session::SessionSupervisor::Phase::Idle) {
+        exitAfterSession = true;
+        cancelConnection();
+        return;
+    }
+    cancelConnection();
     if (host)
         host->shutdown();
     else
@@ -295,7 +405,7 @@ void NativeDesktop::requestExit()
 
 void NativeDesktop::readTailnet(bool showRefresh)
 {
-    if (tailnetBusy || logoutAccount)
+    if (tailnetBusy || tailnetConfirmation)
         return;
 
     const auto next = tailnetGeneration + 1;
@@ -314,6 +424,10 @@ void NativeDesktop::readTailnet(bool showRefresh)
     if (accepted) {
         tailnetGeneration = next;
         tailnetBusy = true;
+        tailnetRefreshing = showRefresh;
+    } else if (tailnetVerification) {
+        tailnetVerification.reset();
+        tailnetFeedback = tr("无法重新检查 Tailscale 账号，请刷新后重试。");
     }
     publishTailnetStatus(tailnetStatus, accepted && showRefresh);
 }
@@ -323,9 +437,36 @@ void NativeDesktop::receiveTailnetStatus(quint64 generation, const aurora::tails
     if (generation != tailnetGeneration)
         return;
     tailnetBusy = false;
-    tailnetStatus = result.status.value_or(aurora::tailscale::Status{});
+    tailnetRefreshing = false;
+    const auto fresh = result.status.value_or(aurora::tailscale::Status{});
+    const auto verifying = std::exchange(tailnetVerification, std::nullopt);
+    if (verifying && verifying->change == TailnetChange::Provider) {
+        if (result.error == StatusError::None && result.status)
+            changeTailnetProvider(true);
+        else {
+            tailnetFeedback = tr("无法启动内置 Tailscale，请刷新状态后重试。");
+            publishTailnetStatus(tailnetStatus);
+        }
+        return;
+    }
+    const bool contextChanged = !(tailnetStatus.account == fresh.account) || tailnetStatus.state != fresh.state;
+    tailnetStatus = fresh;
+    if (contextChanged) {
+        ++accountRevision;
+#ifdef Q_OS_WIN
+        wantSystemProfiles = wantSystemProfiles || (!embeddedSelected && !profiles.isEmpty());
+        profiles.clear();
+        profilesGeneration = 0;
+#endif
+    }
+    if (verifying) {
+        if (result.error == StatusError::None && verifying->account == tailnetStatus.account &&
+            beginVerifiedTailnetChange(*verifying))
+            return;
+        tailnetFeedback = tr("Tailscale 账号状态已变化，或暂时无法完成操作。请刷新后重试。");
+    }
     if (localPresence) {
-        const bool visible = snapshot.value(QStringLiteral("windowVisible")).toBool();
+        const bool visible = snapshot.value(QStringLiteral("windowVisible")).toBool() && !connection;
         localPresence->update(tailnetStatus, embeddedSelected, visible);
         if (visible && embeddedSelected && tailnet && tailnetStatus.account)
             localPresence->scanEmbedded(*tailnet, tailnetStatus, generation);
@@ -335,23 +476,36 @@ void NativeDesktop::receiveTailnetStatus(quint64 generation, const aurora::tails
         if (snapshot.value(QStringLiteral("windowVisible")).toBool() && tailnetStatus.state == BackendState::NeedsLogin)
             openTailnetLogin();
     }
+    connectionAccountReady();
     publishTailnetStatus(tailnetStatus);
     publishHostState();
+#ifdef Q_OS_WIN
+    if (wantSystemProfiles)
+        readSystemProfiles();
+#endif
 }
 
 void NativeDesktop::syncEmbeddedHost()
 {
-    if (!tailnet || !localPresence || pendingAdvertisement || tailnetBusy)
+    if (!tailnet || !localPresence || pendingAdvertisement || tailnetBusy || (connection && !connection->launched))
         return;
     EmbeddedAdvertisement next;
     if (embeddedSelected && tailnetStatus.account) {
         next.account = tailnetStatus.account;
         next.hosting = host && host->state().phase == LifecycleController::Phase::Ready;
     }
-    if (next == advertisedHost)
+    if (next == advertisedHost && embeddedHostBound == next.hosting)
         return;
     if (tailnet->requestHost(tailnetGeneration, next.hosting))
         pendingAdvertisement = next;
+}
+
+void NativeDesktop::resumeTailnetAfterRetirement()
+{
+    if (refreshAfterRetirement && !pendingAdvertisement) {
+        refreshAfterRetirement = false;
+        readTailnet();
+    }
 }
 
 void NativeDesktop::openTailnetLogin()
@@ -365,65 +519,221 @@ void NativeDesktop::openTailnetLogin()
         tailnetFeedback = tr("无法打开 Tailscale 登录链接。");
 }
 
+void NativeDesktop::clearTailnetContext()
+{
+    cancelConnection(tr("账号已变化，连接已停止。"));
+    tailnetStatus = {};
+    ++accountRevision;
+    ++deviceEpoch;
+#ifdef Q_OS_WIN
+    profiles.clear();
+    profilesGeneration = 0;
+#endif
+    if (localPresence)
+        localPresence->update(tailnetStatus, embeddedSelected, false);
+}
+
+bool NativeDesktop::beginVerifiedTailnetChange(const TailnetIntent &intent)
+{
+    const auto next = tailnetGeneration + 1;
+    if (intent.change == TailnetChange::Logout) {
+        if (!tailnetStatus.account || tailnetStatus.state != BackendState::Connected)
+            return false;
+        bool sent = embeddedSelected && tailnet && tailnet->requestLogout(next);
+#ifdef Q_OS_WIN
+        if (!embeddedSelected && systemTailnet) {
+            sent = systemTailnet->requestLogout(next);
+            if (sent)
+                systemAction = next;
+        }
+#endif
+        if (!sent)
+            return false;
+        tailnetGeneration = next;
+    } else {
+#ifdef Q_OS_WIN
+        const auto selected = std::find_if(profiles.cbegin(), profiles.cend(), [&intent](const auto &profile) {
+            return profile.id == intent.target && !profile.isCurrent;
+        });
+        if (intent.change != TailnetChange::Profile || embeddedSelected || !systemTailnet ||
+            selected == profiles.cend() || !systemTailnet->requestProfileSwitch(selected->id, profilesGeneration))
+            return false;
+        systemAction = profilesGeneration;
+#else
+        return false;
+#endif
+    }
+    tailnetBusy = true;
+    tailnetRefreshing = true;
+    openLoginAfterStatus = false;
+    clearTailnetContext();
+    tailnetFeedback.clear();
+    publishTailnetStatus(tailnetStatus);
+    publishHostState();
+    return true;
+}
+
+void NativeDesktop::changeTailnetProvider(bool embedded)
+{
+    QSaveFile preference(QDir(directory).filePath(QStringLiteral("tailnet-provider")));
+    const QByteArray value = embedded ? QByteArrayLiteral("Embedded") : QByteArrayLiteral("System");
+    if (directory.isEmpty() || !QDir().mkpath(directory) || !preference.open(QIODevice::WriteOnly) ||
+        preference.write(value) != value.size() || !preference.commit()) {
+        tailnetFeedback = tr("无法保存 Tailscale 运行方式。");
+        publishTailnetStatus(tailnetStatus);
+        return;
+    }
+    embeddedSelected = embedded;
+    openLoginAfterStatus = false;
+    clearTailnetContext();
+#ifdef Q_OS_WIN
+    wantSystemProfiles = !embedded;
+#endif
+    tailnetFeedback.clear();
+    syncEmbeddedHost();
+    // Reconcile the previous embedded publication first. Its completion resumes the refresh.
+    if (!pendingAdvertisement)
+        readTailnet();
+    else {
+        refreshAfterRetirement = true;
+        publishTailnetStatus(tailnetStatus);
+    }
+}
+
+#ifdef Q_OS_WIN
+void NativeDesktop::readSystemProfiles()
+{
+    wantSystemProfiles = false;
+    if (!embeddedSelected && systemTailnet && !tailnetBusy && systemTailnet->requestProfiles(tailnetGeneration)) {
+        profilesRequest = tailnetGeneration;
+        tailnetBusy = true;
+        tailnetRefreshing = true;
+        publishTailnetStatus(tailnetStatus, true);
+    }
+}
+
+void NativeDesktop::receiveSystemProfiles(quint64 generation, const aurora::tailscale::system::ProfilesResult &result)
+{
+    if (embeddedSelected || !profilesRequest || *profilesRequest != generation)
+        return;
+    profilesRequest.reset();
+    profiles = result.error == StatusError::None ? result.profiles : QVector<aurora::tailscale::system::Profile>{};
+    profilesGeneration = generation;
+    ++accountRevision;
+    tailnetBusy = false;
+    tailnetRefreshing = false;
+    publishTailnetStatus(tailnetStatus);
+}
+
+void NativeDesktop::receiveSystemAction(quint64 generation, const aurora::tailscale::system::ActionResult &result)
+{
+    if (embeddedSelected || !systemAction || *systemAction != generation)
+        return;
+    systemAction.reset();
+    tailnetBusy = false;
+    tailnetRefreshing = false;
+    if (result.error != StatusError::None) {
+        tailnetFeedback = tr("无法完成系统 Tailscale 操作，请刷新后重试。");
+        openLoginAfterStatus = false;
+    }
+    wantSystemProfiles = true;
+    readTailnet();
+}
+#endif
+
 bool NativeDesktop::handleTailnetAction(const QString &action, const QJsonObject &request)
 {
     if (action == QLatin1String("refresh") || action == QLatin1String("account") ||
         action == QLatin1String("tailscale.enter") || action == QLatin1String("tailscale.refresh")) {
         if (action == QLatin1String("refresh") || action == QLatin1String("tailscale.refresh"))
             tailnetFeedback.clear();
+#ifdef Q_OS_WIN
+        if (!embeddedSelected && action != QLatin1String("refresh"))
+            wantSystemProfiles = true;
+#endif
         readTailnet();
         return true;
     }
     if (!action.startsWith(QLatin1String("tailscale.")))
         return false;
-    if (!tailnet || !embeddedSelected || !tailnet->isAvailable() || tailnetBusy ||
-        !snapshot.value(QStringLiteral("windowVisible")).toBool())
+    if (!snapshot.value(QStringLiteral("windowVisible")).toBool() || tailnetBusy)
         return true;
 
+    const auto target = request.value(QStringLiteral("accountTarget")).toString();
     if (action == QLatin1String("tailscale.confirm") || action == QLatin1String("tailscale.cancel")) {
-        if (!logoutAccount || request.value(QStringLiteral("accountTarget")).toString() != QString::number(logoutInvitation))
+        if (!tailnetConfirmation || target != QString::number(tailnetInvitation))
             return true;
-        const auto previous = logoutAccount;
-        logoutAccount.reset();
-        const auto next = tailnetGeneration + 1;
-        if (action == QLatin1String("tailscale.confirm") && previous == tailnetStatus.account &&
-            tailnet->requestLogout(next)) {
-            tailnetGeneration = next;
-            tailnetBusy = true;
-            tailnetStatus = {};
-            if (localPresence)
-                localPresence->update(tailnetStatus, embeddedSelected, false);
-            tailnetFeedback.clear();
-            publishHostState();
+        const auto intent = *std::exchange(tailnetConfirmation, std::nullopt);
+        if (action == QLatin1String("tailscale.cancel") || intent.revision != accountRevision) {
+            publishTailnetStatus(tailnetStatus);
+            return true;
         }
-        publishTailnetStatus(tailnetStatus);
+        if (intent.change == TailnetChange::Provider) {
+            if (intent.target == QLatin1String("system")) {
+                changeTailnetProvider(false);
+            } else if (tailnet && tailnet->requestStatus(tailnetGeneration + 1)) {
+                tailnetVerification = intent;
+                ++tailnetGeneration;
+                tailnetBusy = true;
+                tailnetRefreshing = true;
+                publishTailnetStatus(tailnetStatus, true);
+            } else {
+                tailnetFeedback = tr("无法启动内置 Tailscale，请刷新状态后重试。");
+                publishTailnetStatus(tailnetStatus);
+            }
+        } else {
+            tailnetVerification = intent;
+            readTailnet();
+        }
         return true;
     }
 
     const auto currentRevision = request.value(QStringLiteral("accountRevision")).toInt(-1);
-    if (logoutAccount || currentRevision < 0 || quint64(currentRevision) != tailnetGeneration)
+    if (tailnetConfirmation || currentRevision != accountRevision)
         return true;
     if (action == QLatin1String("tailscale.logout") && tailnetStatus.account) {
-        logoutAccount = tailnetStatus.account;
-        ++logoutInvitation;
-        publishTailnetStatus(tailnetStatus);
-    } else if (action == QLatin1String("tailscale.primary") &&
+        tailnetConfirmation = TailnetIntent{TailnetChange::Logout, {}, tailnetStatus.account, accountRevision};
+    }
+#ifdef Q_OS_WIN
+    else if (action == QLatin1String("tailscale.mode")) {
+        if ((target == QLatin1String("embedded") && !embeddedSelected && tailnet && tailnet->isAvailable()) ||
+            (target == QLatin1String("system") && embeddedSelected && hasSystemRuntime))
+            tailnetConfirmation = TailnetIntent{TailnetChange::Provider, target, tailnetStatus.account, accountRevision};
+    } else if (action == QLatin1String("tailscale.profile") && !embeddedSelected) {
+        const int index = target.toInt();
+        if (index >= 0 && index < profiles.size() && target == QString::number(index) && !profiles.at(index).isCurrent)
+            tailnetConfirmation = TailnetIntent{TailnetChange::Profile, profiles.at(index).id, tailnetStatus.account, accountRevision};
+    }
+#endif
+    else if (action == QLatin1String("tailscale.primary") &&
                (tailnetStatus.state == BackendState::NeedsLogin || tailnetStatus.state == BackendState::Stopped)) {
+        const bool login = tailnetStatus.state == BackendState::NeedsLogin;
         if (tailnetStatus.state == BackendState::NeedsLogin && !tailnetStatus.loginUrl.isEmpty()) {
             openTailnetLogin();
-            publishTailnetStatus(tailnetStatus);
         } else {
             const auto next = tailnetGeneration + 1;
-            if (tailnet->requestLogin(next)) {
+            bool sent = embeddedSelected && tailnet && tailnet->requestLogin(next);
+#ifdef Q_OS_WIN
+            if (!embeddedSelected && systemTailnet) {
+                sent = login ? systemTailnet->requestLogin(next) : systemTailnet->requestResume(next);
+                if (sent)
+                    systemAction = next;
+            }
+#endif
+            if (sent) {
                 tailnetGeneration = next;
                 tailnetBusy = true;
-                openLoginAfterStatus = tailnetStatus.state == BackendState::NeedsLogin;
+                tailnetRefreshing = true;
+                openLoginAfterStatus = login;
                 tailnetStatus.state = BackendState::Starting;
+                ++accountRevision;
                 tailnetFeedback.clear();
-                publishTailnetStatus(tailnetStatus);
             }
         }
     }
+    if (tailnetConfirmation)
+        ++tailnetInvitation;
+    publishTailnetStatus(tailnetStatus);
     return true;
 }
 
@@ -445,7 +755,7 @@ void NativeDesktop::publishTailnetStatus(const aurora::tailscale::Status &status
         label = tr("正在启动"); state = QStringLiteral("Starting");
         break;
     case BackendState::Stopped:
-        label = tr("已停止"); state = QStringLiteral("Stopped");
+        label = embeddedSelected ? tr("已停止") : tr("已暂停"); state = QStringLiteral("Stopped");
         break;
     case BackendState::Unknown:
         label = tr("状态未知"); state = QStringLiteral("Unknown");
@@ -456,19 +766,45 @@ void NativeDesktop::publishTailnetStatus(const aurora::tailscale::Status &status
     const bool refreshAvailable = embeddedSelected ? embeddedAvailable : hasSystemRuntime;
     const bool needsLogin = status.state == BackendState::NeedsLogin;
     const bool startAvailable = status.state == BackendState::Stopped;
-    const auto primaryAction = needsLogin && embeddedSelected ? tr("登录 Tailscale")
-        : startAvailable && embeddedSelected ? tr("启动内置 Tailscale") : QString();
-    const QVariant confirmation = logoutAccount ? QVariant(QVariantMap{
-        {QStringLiteral("id"), logoutInvitation},
-        {QStringLiteral("title"), tr("要退出登录吗？")},
-        {QStringLiteral("body"), tr("退出后本机会断开 Tailscale 网络，重新登录后才能连接设备。")},
-        {QStringLiteral("label"), tr("退出登录")},
-        {QStringLiteral("destructive"), true},
-    }) : QVariant{};
+    const auto primaryAction = needsLogin ? tr("登录 Tailscale")
+        : startAvailable ? (embeddedSelected ? tr("启动内置 Tailscale") : tr("恢复连接")) : QString();
+    QVariant confirmation;
+    if (tailnetConfirmation) {
+        const auto kind = tailnetConfirmation->change;
+        const bool logout = kind == TailnetChange::Logout;
+        const auto title = logout ? tr("要退出登录吗？")
+            : kind == TailnetChange::Provider
+                ? (tailnetConfirmation->target == QLatin1String("embedded")
+                    ? tr("切换到内置 Tailscale？") : tr("切换到系统 Tailscale？"))
+                : tr("切换系统 Tailscale 账号？");
+        confirmation = QVariantMap{
+            {QStringLiteral("id"), tailnetInvitation},
+            {QStringLiteral("title"), title},
+            {QStringLiteral("body"), logout ? tr("退出后本机会断开 Tailscale 网络，重新登录后才能连接设备。")
+                : tr("Aurora 将重新读取所选账号的设备。正在进行的连接可能中断。")},
+            {QStringLiteral("label"), logout ? tr("退出登录") : tr("切换")},
+            {QStringLiteral("destructive"), logout},
+        };
+    }
+    QVariantList profileRows;
+#ifdef Q_OS_WIN
+    if (!embeddedSelected) {
+        for (int index = 0; index < profiles.size(); ++index) {
+            const auto &profile = profiles.at(index);
+            profileRows.append(QVariantMap{
+                {QStringLiteral("key"), QString::number(index)},
+                {QStringLiteral("name"), profile.name},
+                {QStringLiteral("loginName"), profile.loginName},
+                {QStringLiteral("tailnet"), profile.tailnet},
+                {QStringLiteral("current"), profile.isCurrent},
+            });
+        }
+    }
+#endif
     const auto name = status.displayName.isEmpty() ? status.loginName : status.displayName;
     snapshot.insert(QStringLiteral("accountName"), name);
     snapshot.insert(QStringLiteral("accountSubtitle"), status.loginName);
-    snapshot.insert(QStringLiteral("refreshAvailable"), refreshAvailable && !tailnetBusy && !logoutAccount);
+    snapshot.insert(QStringLiteral("refreshAvailable"), refreshAvailable && !tailnetBusy && !tailnetConfirmation);
     snapshot.insert(QStringLiteral("refreshing"), refreshing);
     snapshot.insert(QStringLiteral("tailscaleAccount"), QVariantMap{
         {QStringLiteral("mode"), embeddedSelected ? QStringLiteral("embedded") : QStringLiteral("system")},
@@ -483,12 +819,13 @@ void NativeDesktop::publishTailnetStatus(const aurora::tailscale::Status &status
         {QStringLiteral("localAddress"), status.localAddress.toString()},
         {QStringLiteral("refreshAvailable"), refreshAvailable},
         {QStringLiteral("refreshing"), refreshing},
-        {QStringLiteral("busy"), tailnetBusy || logoutAccount.has_value()},
+        {QStringLiteral("busy"), tailnetRefreshing || tailnetConfirmation.has_value() || refreshAfterRetirement},
         {QStringLiteral("primaryAction"), primaryAction},
         {QStringLiteral("canOpenPrimaryAction"), refreshAvailable && !tailnetBusy && !primaryAction.isEmpty()},
         {QStringLiteral("feedback"), tailnetFeedback},
         {QStringLiteral("confirmation"), confirmation},
-        {QStringLiteral("revision"), QVariant::fromValue(tailnetGeneration)},
+        {QStringLiteral("revision"), accountRevision},
+        {QStringLiteral("profiles"), profileRows},
     });
     updateDeviceCatalog(status);
     emit stateChanged(snapshot);
@@ -554,12 +891,16 @@ void NativeDesktop::handleRequest(const QJsonObject &request)
         return;
     if (handleHostAction(action))
         return;
+    if (handleSunshineAction(action, request))
+        return;
+    if (handleConnectAction(action, request))
+        return;
     if (action != QLatin1String("window-close")) {
         refreshPreferences(request);
         return;
     }
     openLoginAfterStatus = false;
-    logoutAccount.reset();
+    tailnetConfirmation.reset();
     if (tray.isVisible()) {
         snapshot.insert(QStringLiteral("windowVisible"), false);
         publishTailnetStatus(tailnetStatus);

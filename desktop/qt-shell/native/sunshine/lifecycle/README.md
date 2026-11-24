@@ -43,6 +43,46 @@ the worker before queued cleanup can take over. Exit code `42` from a ready
 launch causes a fresh launch and authentication. A second automatic request
 within 30 seconds fails the lifecycle so the owner can retry explicitly.
 
+## Bundled settings projection
+
+The settings API is available on the same controller. `State::settingsSession` is
+the QML session string for the current authenticated launch, including launches
+initiated by exit code `42`. It clears when leaving `Ready`. The worker retains
+the original pinned `BundledAdmin` for that launch.
+
+- `bool readSettings(SettingsReadCompletion)` fetches a fresh view. If accepted, its
+  callback receives a `SettingsReadResult` on the controller thread. On success,
+  publish `snapshot->config` as `host.sunshine.config` and
+  `snapshot->version.session` as `host.sunshine.session`. The JSON shape is the
+  existing `{options, values, privacy}` projection. Keep the full
+  `SettingsVersion` in C++ alongside the published projection.
+- `bool saveSettings(SettingsEdit, SettingsSaveCompletion)` accepts the version of
+  the view the edit came from, the QML request `id`, and the `changes` JSON object.
+  At command admission, match `sunshineSave.session` to the published session and
+  capture the published version. The revision stays in C++. The existing QML
+  command envelope stays `{session, id, changes}`.
+- `SettingsSaveResult::receiptForQml()` returns `{id, saved, errors}`. If the callback
+  still belongs to the published session, publish the receipt and any returned
+  snapshot together, and adopt the snapshot's new version. Use
+  `SettingsSaveResult::submitted` to match callbacks to their original view.
+  Use `refreshRequired` to trigger a fresh read when POST may have reached the
+  host and readback did not confirm its state.
+- Both methods return `false` without a callback when the host has no ready
+  session, another settings operation is in flight, or the controller is closing.
+  `settingsBusy()` reports an accepted operation until completion or cancellation.
+  The caller owns publication of the settings page's busy flag. An accepted edit
+  with an old session or revision receives a `Stale` receipt. Stop and restart
+  cancel pending callbacks and revoke the old token.
+
+Saves use the managed catalog gate, merge accepted fields over a fresh GET,
+and POST one payload. An externally changed submitted field rejects the edit
+before POST. Unedited upstream fields are carried forward. A writer outside
+the controller can still race the endpoint between GET and POST. The receipt
+acknowledges preferences and catalog options only when their respective groups
+match authenticated readback. Unsupported or invalid fields have per-field errors.
+Bundled config transport currently projects `privacy: null`; the display privacy
+controls require the separate privacy endpoint.
+
 ## Offline verification
 
 From a checkout with the catalog, admin, host, and lifecycle slices applied:

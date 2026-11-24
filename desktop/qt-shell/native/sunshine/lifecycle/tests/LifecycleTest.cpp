@@ -7,6 +7,7 @@
 #include <QElapsedTimer>
 #include <QEventLoop>
 #include <QFileInfo>
+#include <QJsonArray>
 #include <QMutex>
 #include <QMutexLocker>
 #include <QNetworkProxy>
@@ -417,6 +418,11 @@ class RealAdmin final : public ReadinessAdmin
 public:
     explicit RealAdmin(std::unique_ptr<BundledAdmin> admin) : admin_(std::move(admin)) {}
     bool readConfig(BundledAdmin::Completion done) override { return admin_->readConfig(std::move(done)); }
+    bool saveConfig(BundledAdmin::PreparePayload prepare, BundledAdmin::VerifyReadback verify,
+                    BundledAdmin::Completion done) override
+    {
+        return admin_->saveConfig(std::move(prepare), std::move(verify), std::move(done));
+    }
 private:
     std::unique_ptr<BundledAdmin> admin_;
 };
@@ -459,6 +465,184 @@ void testPinnedReadiness(const QDir &fixtures, const QDir &identities, bool good
     shutdown(controller);
 }
 
+SettingsReadResult readSettings(LifecycleController &controller)
+{
+    std::optional<SettingsReadResult> result;
+    require(controller.readSettings([&](SettingsReadResult value) { result = std::move(value); }),
+            QStringLiteral("Settings read was not accepted."));
+    require(controller.settingsBusy() && !result &&
+            !controller.readSettings([](SettingsReadResult) {}),
+            QStringLiteral("Settings reads did not serialize asynchronously."));
+    await([&] { return result.has_value(); }, QStringLiteral("Settings read did not complete."));
+    require(!controller.settingsBusy(), QStringLiteral("Completed read kept the settings operation busy."));
+    return std::move(*result);
+}
+
+SettingsSaveResult saveSettings(LifecycleController &controller, SettingsVersion version, int id, QJsonObject changes)
+{
+    std::optional<SettingsSaveResult> result;
+    require(controller.saveSettings({std::move(version), id, std::move(changes)},
+        [&](SettingsSaveResult value) { result = std::move(value); }),
+        QStringLiteral("Settings save was not accepted."));
+    require(controller.settingsBusy() && !result &&
+            !controller.readSettings([](SettingsReadResult) {}),
+            QStringLiteral("Settings saves did not serialize asynchronously."));
+    await([&] { return result.has_value(); }, QStringLiteral("Settings save did not complete."));
+    require(!controller.settingsBusy(), QStringLiteral("Completed save kept the settings operation busy."));
+    return std::move(*result);
+}
+
+void testSettings(const QDir &fixtures, const QDir &identities)
+{
+    const auto cert = identities.filePath(QStringLiteral("pinned-cert.pem"));
+    LoopbackFixture server(cert, identities.filePath(QStringLiteral("pinned-key.pem")));
+    require(server.isListening(), QStringLiteral("Settings fixture could not listen."));
+    const auto layout = layoutFor(fixtures, QStringLiteral("Authenticated settings"));
+    require(QDir().mkpath(QFileInfo(layout.certificateFile()).absolutePath()) && QFile::copy(cert, layout.certificateFile()),
+            QStringLiteral("Could not stage the synthetic settings certificate."));
+
+    const auto name = QStringLiteral("sunshine_name");
+    const auto audio = QStringLiteral("stream_audio");
+    const auto port = QStringLiteral("port");
+    const auto threads = QStringLiteral("min_threads");
+    const auto extra = QStringLiteral("future_upstream");
+    const auto account = QStringLiteral("credentials_file");
+    const auto privacy = QStringLiteral("displaySource");
+    server.config = {
+        {name, QStringLiteral("Original")}, {audio, QStringLiteral("enabled")}, {port, QStringLiteral("48989")},
+        {threads, QStringLiteral("2")}, {account, QStringLiteral("account.json")},
+        {extra, QJsonObject{{QStringLiteral("keep"), 17}}}, {QStringLiteral("version"), QStringLiteral("fixture")}
+    };
+
+    const auto replay = std::make_shared<Replay>();
+    auto deps = fakeDependencies(replay);
+    deps.openAdmin = [replay, port = server.serverPort()](const QString &profile, const QByteArray &frame,
+        QString &error) -> std::unique_ptr<ReadinessAdmin> {
+        replay->onWorker();
+        ++replay->adminOpens;
+        auto admin = BundledAdminFixture::open(profile, frame, port, error);
+        if (!admin)
+            return {};
+        return std::make_unique<RealAdmin>(std::move(admin));
+    };
+    LifecycleController controller(layout, std::move(deps), {3500, 10, 30000});
+    require(!controller.readSettings([](SettingsReadResult) {}) && controller.start(),
+            QStringLiteral("Read was accepted before authentication, or launch was refused."));
+    await([&] { return controller.state().phase == Phase::Ready; }, QStringLiteral("Settings launch never became ready."), 4000);
+    const auto session = controller.state().settingsSession;
+    require(!session.isEmpty(), QStringLiteral("Ready host did not publish a settings session."));
+
+    const auto firstRead = readSettings(controller);
+    const auto read = readSettings(controller);
+    require(firstRead.status == SettingsStatus::Complete && firstRead.snapshot &&
+            read.status == SettingsStatus::Complete && read.snapshot && read.snapshot->version.session == session &&
+            read.snapshot->version.revision > firstRead.snapshot->version.revision &&
+            read.snapshot->config.value(QStringLiteral("privacy")).isNull() &&
+            read.snapshot->config.value(QStringLiteral("values")).toObject().value(name).toString() == QStringLiteral("Original"),
+            QStringLiteral("Settings view did not carry QML config and an authenticated revision."));
+
+    auto result = saveSettings(controller, firstRead.snapshot->version, 11, {{threads, QStringLiteral("4")}});
+    require(result.status == SettingsStatus::Stale && result.errors.contains(threads) && server.writes.isEmpty(),
+            QStringLiteral("An old view revision reached POST."));
+
+    const auto firstVersion = read.snapshot->version;
+    result = saveSettings(controller, firstVersion, 12, {
+        {name, QStringLiteral("  Updated  ")}, {audio, QStringLiteral("disabled")}, {threads, QStringLiteral("4")},
+        {port, QStringLiteral("12345")}, {account, QStringLiteral("sunshine_state.json")}
+    });
+    require(result.status == SettingsStatus::Partial && result.saved.size() == 3 && result.saved.contains(name) &&
+            result.saved.contains(audio) && result.saved.contains(threads) && result.errors.contains(port) &&
+            result.errors.contains(account) && result.snapshot && server.writes.size() == 1 &&
+            result.snapshot->config.value(QStringLiteral("values")).toObject().value(name).toString() == QStringLiteral("Updated"),
+            QStringLiteral("Verified mutable settings and locked-field errors were not reported."));
+    const auto receipt = result.receiptForQml();
+    require(receipt.value(QStringLiteral("id")).toInt() == 12 && receipt.value(QStringLiteral("saved")).toArray().size() == 3 &&
+            receipt.value(QStringLiteral("errors")).toObject().contains(port), QStringLiteral("The QML receipt shape differs."));
+    const auto posted = server.writes.last();
+    require(posted.value(port).toString() == QStringLiteral("48989") &&
+            posted.value(account).toString() == QStringLiteral("account.json") &&
+            posted.value(extra).toObject().value(QStringLiteral("keep")).toInt() == 17 &&
+            !posted.contains(QStringLiteral("status")) && !posted.contains(QStringLiteral("version")),
+            QStringLiteral("Managed values, unknown config, or response metadata were mishandled."));
+
+    auto version = result.snapshot->version;
+    result = saveSettings(controller, version, 13, {{name, 73}, {port, QStringLiteral("1")}, {privacy, QStringLiteral("")}});
+    require(result.status == SettingsStatus::Rejected && result.errors.contains(name) &&
+            result.errors.contains(port) && result.errors.contains(privacy) && server.writes.size() == 1,
+            QStringLiteral("Non-string or unavailable fields were accepted."));
+    require(result.snapshot.has_value(), QStringLiteral("Expected fresh view after rejecting a privacy-only payload."));
+
+    version = result.snapshot->version;
+    server.config.insert(threads, QStringLiteral("6"));
+    result = saveSettings(controller, version, 14, {{threads, QStringLiteral("7")}, {name, QStringLiteral("Conflict")}});
+    require(result.status == SettingsStatus::Stale && result.saved.isEmpty() && result.snapshot &&
+            result.errors.contains(threads) && result.errors.contains(name) && server.writes.size() == 1 &&
+            result.snapshot->config.value(QStringLiteral("values")).toObject().value(threads).toString() == QStringLiteral("6"),
+            QStringLiteral("A concurrent change to an edited field did not reject the stale edit."));
+
+    version = result.snapshot->version;
+    server.config.insert(extra, QJsonObject{{QStringLiteral("concurrent"), true}});
+    server.ignoreNameOnWrite = true;
+    result = saveSettings(controller, version, 15, {{name, QStringLiteral("Unconfirmed")}, {threads, QStringLiteral("8")}});
+    require(result.status == SettingsStatus::Partial && result.saved.size() == 1 && result.saved.contains(threads) &&
+            result.errors.contains(name) && result.snapshot && server.writes.size() == 2 &&
+            server.writes.last().value(extra).toObject().value(QStringLiteral("concurrent")).toBool(),
+            QStringLiteral("Readback mismatch or preservation of an unedited upstream value failed."));
+    server.ignoreNameOnWrite = false;
+
+    version = result.snapshot->version;
+    server.failReadback = true;
+    result = saveSettings(controller, version, 16, {{threads, QStringLiteral("10")}});
+    require(result.status == SettingsStatus::TransportError && result.saved.isEmpty() && result.refreshRequired &&
+            !result.snapshot && server.writes.size() == 3,
+            QStringLiteral("A POST without verified readback was acknowledged."));
+    result = saveSettings(controller, version, 17, {{threads, QStringLiteral("11")}});
+    require(result.status == SettingsStatus::Stale && result.refreshRequired && server.writes.size() == 3,
+            QStringLiteral("An uncertain write allowed reuse of its old settings revision."));
+    server.failReadback = false;
+    const auto refresh = readSettings(controller);
+    require(refresh.snapshot && refresh.snapshot->config.value(QStringLiteral("values")).toObject().value(threads).toString() ==
+            QStringLiteral("10") && replay->adminOpens == 1,
+            QStringLiteral("Settings operations did not retain the authenticated admin client or refresh its values."));
+
+    const auto lifecycleRequest = controller.state().request;
+    replay->exitStatus = BundledHost::restartRequestedExitCode;
+    replay->exitLaunch = 1;
+    await([&] { return controller.state().phase == Phase::Ready && controller.state().settingsSession != session; },
+          QStringLiteral("Automatic restart did not rotate the authenticated settings session."));
+    require(controller.state().request == lifecycleRequest && !controller.state().settingsSession.isEmpty(),
+            QStringLiteral("The settings token did not distinguish a new launch under the same lifecycle request."));
+    result = saveSettings(controller, refresh.snapshot->version, 18, {{threads, QStringLiteral("11")}});
+    require(result.status == SettingsStatus::Stale && server.writes.size() == 3,
+            QStringLiteral("An old authenticated launch reached POST."));
+
+    const auto current = readSettings(controller);
+    require(current.snapshot.has_value(), QStringLiteral("Replacement session could not read settings."));
+    server.holdNextRead = true;
+    std::optional<SettingsSaveResult> stoppedSave;
+    require(controller.saveSettings({current.snapshot->version, 19, {{threads, QStringLiteral("12")}}},
+        [&](SettingsSaveResult value) { stoppedSave = std::move(value); }), QStringLiteral("Held write did not start."));
+    await([&] { return server.heldRead; }, QStringLiteral("Write did not reach its fresh-config read."));
+    require(controller.stop() && controller.state().settingsSession.isEmpty(),
+            QStringLiteral("Stop did not invalidate the session immediately."));
+    server.releaseRead();
+    awaitPhase(controller, Phase::Stopped);
+    await([&] { return stoppedSave.has_value(); }, QStringLiteral("Cancelled edit did not complete."));
+    require(stoppedSave->status == SettingsStatus::Cancelled && stoppedSave->saved.isEmpty() &&
+            server.writes.size() == 3, QStringLiteral("Stop let an in-flight GET progress to POST."));
+    require(replay->adminOpens == 2 && !replay->touchedGui, QStringLiteral("An authenticated client leaked or ran on the GUI thread."));
+
+    require(controller.start(), QStringLiteral("Could not start the final auth-refusal fixture launch."));
+    awaitPhase(controller, Phase::Ready);
+    server.refuseNextRead = true;
+    const auto denied = readSettings(controller);
+    require(denied.status == SettingsStatus::TransportError && !denied.snapshot,
+            QStringLiteral("An unauthorized read returned a settings view."));
+    awaitPhase(controller, Phase::Failed);
+    require(controller.state().settingsSession.isEmpty(), QStringLiteral("Auth loss did not revoke the settings session."));
+    shutdown(controller);
+}
+
 } // namespace
 
 int main(int argc, char **argv)
@@ -476,6 +660,7 @@ int main(int argc, char **argv)
     testCleanupAndDestruction(fixtures);
     testPinnedReadiness(fixtures, identities, true);
     testPinnedReadiness(fixtures, identities, false);
+    testSettings(fixtures, identities);
     QTextStream(stdout) << "PASS: ephemeral port ownership and pinned admin, worker launch and cleanup, "
-                          "retry, restart, cancellation and stale-result protection\n";
+                          "retry, restart, cancellation and stale-result protection, versioned settings read/save\n";
 }

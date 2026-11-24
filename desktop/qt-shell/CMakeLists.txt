@@ -11,6 +11,7 @@ target_sources(AuroraQtShell PRIVATE
     native/DesktopTray.cpp native/DesktopTray.h native/TrayMenuPlacement.h
     native/NativeDevicePresence.cpp native/NativeDevicePresence.h
     native/NativeDesktop.cpp native/NativeDesktop.h
+    native/NativeDesktopSessions.cpp
     native/NativeInstance.cpp native/NativeInstance.h
     native/preferences/DesktopPreferences.cpp native/preferences/DesktopPreferences.h)
 target_compile_definitions(AuroraQtShell PRIVATE AURORA_DESKTOP_VERSION="${PROJECT_VERSION}")
@@ -32,6 +33,7 @@ if(MSVC)
 endif()
 add_subdirectory(native/platform)
 add_subdirectory(native/discovery)
+add_subdirectory(native/discovery/serverinfo)
 add_subdirectory(native/pairing)
 add_subdirectory(native/presence)
 add_subdirectory(native/session)
@@ -47,5 +49,5 @@ if(WIN32)
 endif()
 target_link_libraries(AuroraQtShell PRIVATE Qt${QT_VERSION_MAJOR}::Quick Qt${QT_VERSION_MAJOR}::QuickControls2
     Qt${QT_VERSION_MAJOR}::Network Qt${QT_VERSION_MAJOR}::Widgets
-    aurora_native_platform aurora_native_discovery aurora_native_pairing aurora_native_presence aurora_native_session
+    aurora_native_platform aurora_native_discovery aurora_native_serverinfo aurora_native_pairing aurora_native_presence aurora_native_session
     Aurora::SunshineLifecycle aurora_native_stream AuroraNativeTailscale)

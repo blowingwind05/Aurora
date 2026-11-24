@@ -18,7 +18,8 @@ if(NOT TARGET Aurora::SunshineAdmin)
     add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../admin" "${CMAKE_CURRENT_BINARY_DIR}/admin")
 endif()
 
-add_library(aurora_sunshine_lifecycle STATIC LifecycleController.cpp LifecycleController.h PortPreflight.cpp PortPreflight.h)
+add_library(aurora_sunshine_lifecycle STATIC LifecycleController.cpp LifecycleController.h
+    PortPreflight.cpp PortPreflight.h SettingsSession.cpp SettingsSession.h SunshineSettings.h)
 add_library(Aurora::SunshineLifecycle ALIAS aurora_sunshine_lifecycle)
 set_target_properties(aurora_sunshine_lifecycle PROPERTIES AUTOMOC ON CXX_EXTENSIONS OFF)
 target_compile_features(aurora_sunshine_lifecycle PUBLIC cxx_std_17)

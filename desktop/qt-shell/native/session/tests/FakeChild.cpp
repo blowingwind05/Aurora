@@ -1,13 +1,25 @@
 // SPDX-License-Identifier: GPL-3.0-only
+#include "AuroraStreamEntry.h"
+
 #include <QCoreApplication>
+#include <QFile>
 #include <QSize>
 #include <QTimer>
 
 #include <cstdio>
+#ifdef Q_OS_WIN
 #include <windows.h>
+#endif
 
 namespace {
 
+void report(const char *line)
+{
+    std::puts(line);
+    std::fflush(stdout);
+}
+
+#ifdef Q_OS_WIN
 LPCWSTR wide(const QString &text)
 {
     return reinterpret_cast<LPCWSTR>(text.utf16());
@@ -19,12 +31,6 @@ bool hasHost(HWND hwnd, DWORD expectedPid, const QString &property)
     return GetWindowThreadProcessId(hwnd, &pid) && pid == expectedPid
         && (GetWindowLongPtrW(hwnd, GWL_STYLE) & WS_CHILD)
         && GetPropW(hwnd, wide(property)) == reinterpret_cast<HANDLE>(1);
-}
-
-void report(const char *line)
-{
-    std::puts(line);
-    std::fflush(stdout);
 }
 
 HWND makeChild(HWND host, const wchar_t *windowClass)
@@ -53,12 +59,33 @@ LRESULT CALLBACK paintVideo(HWND window, UINT message, WPARAM wParam, LPARAM lPa
     }
     return DefWindowProcW(window, message, wParam, lParam);
 }
+#endif
 
 } // namespace
 
 int main(int argc, char **argv)
 {
+    const bool supervisor = argc > 1;
+    if (supervisor) {
+        const int guard = prepareAuroraStreamInvocation(argc, argv);
+        if (guard >= 0)
+            return guard;
+        if (argc < 4 || std::strcmp(argv[1], "stream") || std::strcmp(argv[3], "Desktop")
+            || QByteArray(argv[2]) != qgetenv("AURORA_TEST_STREAM_ENDPOINT")) {
+            return 17;
+        }
+        const auto relay = qgetenv("AURORA_TEST_STREAM_RELAY");
+        if ((!relay.isEmpty() && qgetenv("AURORA_GAMESTREAM_HOST_UUID") != "host-fixture")
+            || qgetenv("AURORA_GAMESTREAM_RELAY_BASE") != relay) {
+            return 18;
+        }
+        QFile launched(qEnvironmentVariable("AURORA_TEST_STREAM_LAUNCHED"));
+        if (!launched.open(QIODevice::WriteOnly))
+            return 19;
+    }
     QCoreApplication app(argc, argv);
+    const auto mode = qgetenv("AURORA_TEST_STREAM_MODE");
+#ifdef Q_OS_WIN
     const auto fields = qEnvironmentVariable("AURORA_EMBEDDED_SESSION").split(QLatin1Char(':'));
     if (fields.size() != 3 || fields[2].size() != 32)
         return 74;
@@ -73,6 +100,8 @@ int main(int argc, char **argv)
     const auto stop = OpenEventW(SYNCHRONIZE, FALSE, wide(prefix + QStringLiteral(".stop")));
     const auto fullscreen = OpenEventW(EVENT_MODIFY_STATE, FALSE, wide(prefix + QStringLiteral(".fullscreen")));
     if (!ready || !stop || !fullscreen)
+        return 74;
+    if (mode == "attach-fail")
         return 74;
 
     WNDCLASSW wc{};
@@ -90,9 +119,40 @@ int main(int argc, char **argv)
     HWND video = nullptr;
     QSize lastSize;
     QByteArray pending;
+    bool receivedStop = false;
+    const auto showVideo = [&] {
+        video = makeChild(host, wc.lpszClassName);
+        if (!video || GetParent(video) != host) {
+            app.exit(74);
+            return;
+        }
+        ShowWindow(stage, SW_HIDE);
+        SetEvent(ready);
+    };
+    if (supervisor) {
+        QTimer::singleShot(40, &app, showVideo);
+        QTimer::singleShot(75, &app, [] {
+            const QByteArray noise(800, 'x');
+            report(noise.constData());
+            std::fputs("aurora-connection/1,1920,1080,2,", stdout);
+            std::fflush(stdout);
+        });
+        QTimer::singleShot(105, &app, [] { report("5994,18000,100,4200,30,1"); });
+        if (mode == "fullscreen")
+            QTimer::singleShot(220, &app, [fullscreen] { SetEvent(fullscreen); });
+    }
     QTimer tick;
     QObject::connect(&tick, &QTimer::timeout, &app, [&] {
         if (WaitForSingleObject(stop, 0) == WAIT_OBJECT_0) {
+            if (mode == "ignore-stop")
+                return;
+            if (supervisor) {
+                if (!receivedStop) {
+                    receivedStop = true;
+                    QTimer::singleShot(240, &app, &QCoreApplication::quit);
+                }
+                return;
+            }
             report("fixture-stop-event");
             app.quit();
             return;
@@ -116,13 +176,7 @@ int main(int argc, char **argv)
             const auto command = pending.left(newline).trimmed();
             pending.remove(0, newline + 1);
             if (command == "ready" && !video) {
-                video = makeChild(host, wc.lpszClassName);
-                if (!video || GetParent(video) != host) {
-                    app.exit(74);
-                    return;
-                }
-                ShowWindow(stage, SW_HIDE);
-                SetEvent(ready);
+                showVideo();
             } else if (command == "fullscreen") {
                 SetEvent(fullscreen);
             } else if (command == "exit74") {
@@ -152,4 +206,13 @@ int main(int argc, char **argv)
     CloseHandle(stop);
     CloseHandle(ready);
     return status;
+#else
+    if (qEnvironmentVariableIsSet("AURORA_EMBEDDED_SESSION"))
+        return 74;
+    QTimer::singleShot(40, &app, [] {
+        report("aurora-stream-setting/1\tresolution\t1920x1080");
+        report("aurora-stream-setting/1\tunknown-option\tbogus");
+    });
+    return app.exec();
+#endif
 }

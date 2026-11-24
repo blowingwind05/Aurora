@@ -7,7 +7,9 @@
 #include <QApplication>
 #include <QByteArray>
 #include <QCoreApplication>
+#include <QDebug>
 #include <QDesktopServices>
+#include <QDir>
 #include <QFileInfo>
 #include <QGuiApplication>
 #include <QIcon>
@@ -15,6 +17,7 @@
 #include <QJsonObject>
 #include <QNetworkAccessManager>
 #include <QQmlApplicationEngine>
+#include <QQmlComponent>
 #include <QQmlContext>
 #include <QTimer>
 #include <QUrl>
@@ -298,6 +301,9 @@ int main(int argc, char *argv[])
                                    state.value(QStringLiteral("trayVisible")).toBool());
         });
     }
+    QNetworkAccessManager network;
+    AuroraMore more(network, &QDesktopServices::openUrl);
+    QQmlApplicationEngine engine;
     std::unique_ptr<NativeDesktop> nativeDesktop;
     std::unique_ptr<NativeInstance> instance;
     if (native) {
@@ -320,9 +326,6 @@ int main(int argc, char *argv[])
                              [&nativeDesktop] { nativeDesktop->activate(); });
         }
     }
-    QNetworkAccessManager network;
-    AuroraMore more(network, &QDesktopServices::openUrl);
-    QQmlApplicationEngine engine;
     engine.rootContext()->setContextProperty("auroraBridge", &bridge);
     if (!windowsSession) {
         engine.rootContext()->setContextProperty("auroraMore", &more);
@@ -352,6 +355,17 @@ int main(int argc, char *argv[])
     if (checkNative) {
         if (!window || window->isVisible() || !window->property("managedClose").toBool() || !macTitleBarReady)
             return 1;
+#ifdef Q_OS_WIN
+        const auto sessionPath = QFileInfo(entry).dir().absoluteFilePath(QStringLiteral("../qml/stream/NativeSessionWindow.qml"));
+        QQmlComponent session(&engine, QUrl::fromLocalFile(sessionPath));
+        std::unique_ptr<QObject> sessionObject(session.isReady() ? session.create() : nullptr);
+        const auto sessionWindow = qobject_cast<QWindow *>(sessionObject.get());
+        if (!sessionWindow || sessionWindow->isVisible() || sessionWindow->property("videoTop").toInt() <= 0) {
+            if (session.isError())
+                qWarning().noquote() << session.errorString();
+            return 1;
+        }
+#endif
         bridge.sendPreference(QStringLiteral("read-general-settings"), 1, {});
         const auto settings = bridge.state().value(QStringLiteral("generalSettings")).toMap();
         if (settings.value(QStringLiteral("acknowledgedRequestId")).toInt() != 1)
@@ -365,6 +379,8 @@ int main(int argc, char *argv[])
         if (!window)
             return 1;
         app.setQuitOnLastWindowClosed(false);
+        nativeDesktop->setSessionWindowSource(engine,
+            QUrl::fromLocalFile(QFileInfo(entry).dir().absoluteFilePath(QStringLiteral("../qml/stream/NativeSessionWindow.qml"))));
         nativeDesktop->start();
     }
 #ifdef Q_OS_WIN

@@ -6,6 +6,7 @@
 #include <QNetworkInterface>
 
 #include <algorithm>
+#include <utility>
 
 namespace {
 using namespace Aurora::Presence;
@@ -60,20 +61,26 @@ NetworkSnapshot networkFromStatus(const aurora::tailscale::Status &status)
 NativeDevicePresence::NativeDevicePresence(const QString &directory) : directory(directory)
 {
     embeddedDeadline.setSingleShot(true);
-    connect(&embeddedDeadline, &QTimer::timeout, this, &NativeDevicePresence::clearEmbeddedScan);
+    routeDeadline.setSingleShot(true);
+    connect(&embeddedDeadline, &QTimer::timeout, this, &NativeDevicePresence::finishEmbeddedScan);
+    connect(&routeDeadline, &QTimer::timeout, this, [this] { finishRouteSurvey(true); });
+    connect(&serverInfo, &ServerInfo::Client::batchFinished, this, &NativeDevicePresence::receiveRouteBatch);
 }
 
 void NativeDevicePresence::update(const aurora::tailscale::Status &status, bool embedded, bool scan)
 {
     currentNetwork = networkFromStatus(status);
-    if (!(account == status.account)) {
+    if (!(account == status.account) || embeddedMode != embedded) {
+        finishRouteSurvey(false);
         clearEmbeddedScan();
         account = status.account;
+        embeddedMode = embedded;
         ++accountGeneration;
         lanRequest = peersRequest = 0;
         lanDevices = {};
         tailnetDevices = {};
     }
+    serverInfo.updateDiscovery(accountGeneration, currentNetwork, lanDevices.devices, tailnetDevices.devices, embeddedMode);
     if (!currentNetwork.isAuthenticated()) {
         if (transport) {
             transport->updateAccess({}, nullptr, accountGeneration);
@@ -93,7 +100,7 @@ void NativeDevicePresence::update(const aurora::tailscale::Status &status, bool 
     tailnetDevices.known = readKnownDevices(directory, currentNetwork);
     transport->updateAccess(links, embedded ? nullptr : &status, accountGeneration);
     transport->startResponding();
-    if (!scan)
+    if (!scan || sessionActive)
         return;
 
     if (lanRequest)
@@ -117,11 +124,14 @@ void NativeDevicePresence::scanEmbedded(aurora::tailscale::EmbeddedStatusClient 
                                         const aurora::tailscale::Status &status, quint64 generation)
 {
     clearEmbeddedScan();
-    if (!status.account || localIdentity.isNull())
+    if (sessionActive || !status.account || localIdentity.isNull())
         return;
     if (embeddedClient != &client) {
         disconnect(embeddedReplies);
+        disconnect(embeddedOpens);
         embeddedClient = &client;
+        embeddedOpens = connect(&client, &aurora::tailscale::EmbeddedStatusClient::openFinished,
+                                this, &NativeDevicePresence::receiveProbeLease);
         embeddedReplies = connect(&client, &aurora::tailscale::EmbeddedStatusClient::presenceFinished, this,
             [this](quint64 replyGeneration, quint64 request, const aurora::tailscale::PresenceResult &result) {
                 if (replyGeneration != embeddedGeneration || !embeddedDeadline.isActive())
@@ -187,6 +197,7 @@ void NativeDevicePresence::finishEmbeddedScan()
         emit changed();
     }
     clearEmbeddedScan();
+    startRouteSurvey();
 }
 
 void NativeDevicePresence::clearEmbeddedScan()
@@ -202,6 +213,21 @@ void NativeDevicePresence::setHosting(bool ready)
     hosting = ready;
     if (transport)
         transport->updateAnnouncement(QHostInfo::localHostName(), localPlatform(), hosting);
+}
+
+void NativeDevicePresence::setSessionActive(bool active)
+{
+    sessionActive = active;
+    if (!active)
+        return;
+    if (transport) {
+        if (const auto request = std::exchange(lanRequest, 0))
+            transport->cancelScan(request);
+        if (const auto request = std::exchange(peersRequest, 0))
+            transport->cancelScan(request);
+    }
+    clearEmbeddedScan();
+    finishRouteSurvey(false);
 }
 
 QByteArray NativeDevicePresence::announcementPacket(bool canHost) const
@@ -227,4 +253,116 @@ void NativeDevicePresence::receiveScan(quint64 request, const Aurora::Presence::
     if (!lan)
         tailnetDevices.known = rememberKnownDevices(directory, currentNetwork, tailnetDevices.devices);
     emit changed();
+    startRouteSurvey();
+}
+
+void NativeDevicePresence::startRouteSurvey()
+{
+    if (sessionActive || !currentNetwork.isAuthenticated() || lanRequest || peersRequest ||
+        embeddedDeadline.isActive() || routeSurvey)
+        return;
+    serverInfo.updateDiscovery(accountGeneration, currentNetwork, lanDevices.devices, tailnetDevices.devices, embeddedMode);
+    routeSurvey.emplace();
+    for (const auto &device : lanDevices.devices) {
+        if (device.hosting)
+            routeSurvey->candidates.append({device.address, {}});
+    }
+    for (const auto &device : tailnetDevices.devices) {
+        if (!device.hosting)
+            continue;
+        if (!embeddedMode)
+            routeSurvey->candidates.append({device.address, {}});
+        else if (device.address.protocol() == QAbstractSocket::IPv4Protocol) {
+            if (const auto *peer = findTailnetPeer(&currentNetwork, device.address))
+                routeSurvey->targets.enqueue({peer->id, device.address});
+        }
+    }
+    routeDeadline.start(4000);
+    if (!routeSurvey->candidates.isEmpty()) {
+        routeSurvey->batch = serverInfo.probeBatch(routeSurvey->candidates, routeSurvey->targets.isEmpty() ? 4000 : 1600);
+        routeSurvey->candidates.clear();
+    }
+    continueRouteSurvey();
+}
+
+void NativeDevicePresence::continueRouteSurvey()
+{
+    if (!routeSurvey || routeSurvey->opening || routeSurvey->batch)
+        return;
+    if (!routeSurvey->candidates.isEmpty() && (routeSurvey->candidates.size() >= 8 || routeSurvey->targets.isEmpty())) {
+        routeSurvey->batch = serverInfo.probeBatch(routeSurvey->candidates, qMax(1, routeDeadline.remainingTime()));
+        routeSurvey->candidates.clear();
+        if (!routeSurvey->batch)
+            finishRouteSurvey(true);
+        return;
+    }
+    if (!embeddedClient || routeSurvey->targets.isEmpty()) {
+        finishRouteSurvey(true);
+        return;
+    }
+    const auto next = routeSurvey->targets.first();
+    const auto opening = embeddedClient->requestOpen(embeddedGeneration, next.first, next.second);
+    if (opening) {
+        routeSurvey->opening = opening;
+        routeSurvey->openingAddress = next.second;
+        routeSurvey->targets.dequeue();
+    } else {
+        QTimer::singleShot(40, this, &NativeDevicePresence::continueRouteSurvey);
+    }
+}
+
+void NativeDevicePresence::receiveProbeLease(quint64 generation, quint64 request,
+                                             const aurora::tailscale::OpenResult &result)
+{
+    if (!routeSurvey || routeSurvey->opening != request)
+        return;
+    routeSurvey->opening = 0;
+    if (generation != embeddedGeneration) {
+        finishRouteSurvey(false);
+        return;
+    }
+    if (result.lease && result.lease->isValid()) {
+        routeSurvey->leases.append(result.lease);
+        routeSurvey->candidates.append({routeSurvey->openingAddress,
+                                           Endpoint{result.lease->address(), result.lease->port()}});
+    }
+    continueRouteSurvey();
+}
+
+void NativeDevicePresence::receiveRouteBatch(quint64 request, const ServerInfo::BatchResult &result)
+{
+    if (!routeSurvey || routeSurvey->batch != request)
+        return;
+    routeSurvey->batch = 0;
+    routeSurvey->leases.clear();
+    if (result.status == ServerInfo::Status::AccessChanged) {
+        finishRouteSurvey(false);
+        return;
+    }
+    for (const auto &route : result.hosts) {
+        const auto address = route.endpoint.address;
+        const bool onLan = !route.viaEmbeddedTailnet &&
+            std::any_of(lanDevices.devices.cbegin(), lanDevices.devices.cend(), [&address](const PresentDevice &item) {
+                return item.address == address;
+            });
+        (onLan ? routeSurvey->lan : routeSurvey->tailnet).append(route);
+    }
+    continueRouteSurvey();
+}
+
+void NativeDevicePresence::finishRouteSurvey(bool keep)
+{
+    if (!routeSurvey)
+        return;
+    auto survey = std::exchange(routeSurvey, std::nullopt);
+    routeDeadline.stop();
+    if (survey->opening && embeddedClient)
+        embeddedClient->cancelOpen(survey->opening);
+    if (survey->batch)
+        serverInfo.cancel(survey->batch);
+    if (keep) {
+        lanDevices.hosts = std::move(survey->lan);
+        tailnetDevices.hosts = std::move(survey->tailnet);
+        emit changed();
+    }
 }

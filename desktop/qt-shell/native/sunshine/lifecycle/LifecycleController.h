@@ -4,6 +4,7 @@
 #include "BundledAdmin.h"
 #include "BundledHost.h"
 #include "PortPreflight.h"
+#include "SunshineSettings.h"
 
 #include <QObject>
 
@@ -21,6 +22,10 @@ public:
     virtual ~ReadinessAdmin() = default;
     // Completion belongs to the worker thread. Destruction cancels a pending read.
     virtual bool readConfig(BundledAdmin::Completion completion) = 0;
+    virtual bool saveConfig(BundledAdmin::PreparePayload, BundledAdmin::VerifyReadback, BundledAdmin::Completion)
+    {
+        return false;
+    }
 };
 
 struct LifecycleDependencies
@@ -51,6 +56,7 @@ public:
         Phase phase = Phase::Stopped;
         QString error;
         bool cleanupPending = false;
+        QString settingsSession;
     };
 
     explicit LifecycleController(HostLayout layout, QObject *parent = nullptr);
@@ -65,11 +71,18 @@ public:
     bool stop();
     bool shutdown();
 
+    // Accepts one settings operation at a time while Ready. An accepted operation
+    // completes asynchronously on this thread while the controller lives.
+    bool settingsBusy() const { return bool(pendingSettings_); }
+    bool readSettings(SettingsReadCompletion completion);
+    bool saveSettings(SettingsEdit edit, SettingsSaveCompletion completion);
+
 signals:
     void stateChanged();
     void shutdownFinished();
 
 private:
+    struct PendingSettings;
     friend class LifecycleWorker;
     enum class Action { Start, Restart, Stop, Shutdown };
 
@@ -81,6 +94,8 @@ private:
     std::shared_ptr<std::atomic<quint64>> latest_;
     LifecycleWorker *worker_ = nullptr;
     State state_;
+    std::unique_ptr<PendingSettings> pendingSettings_;
+    quint64 nextSettingsOperation_ = 0;
     bool closing_ = false;
 };
 

@@ -1,11 +1,57 @@
-# Windows native stream surface
+# Native stream session
 
 Link `aurora_native_session` from `add_subdirectory(native/session)`. The
-helper uses Qt Gui and C++17 on Windows. `StreamSurface::available()`
-reports availability for the Windows QPA backend. The macOS shell can
-query the same API and continue through its existing session path.
+target links the existing `aurora_native_stream` and `AuroraNativeTailscale`
+libraries. `SessionSupervisor` embeds the bundled worker on Windows and
+launches the bundled native Moonlight window on macOS.
 
 ## Coordinator integration
+
+1. Construct an `Aurora::Session::SessionSupervisor` on the GUI thread
+   with the bundled executable and, for embedded Tailnet routes, the
+   existing `EmbeddedStatusClient`. Submit a `SessionCandidate` with the
+   coordinator's generation, display name, and selected host ID. Pass a
+   `DirectRoute` for a direct IP and port or an `EmbeddedRoute` with the
+   verified peer ID and address. `prepare()` returns the attempt token.
+2. Wait for `prepared(PreparedSession)`. This indicates local runtime
+   compatibility and provides the exact executable and endpoint the
+   supervisor will use. On an embedded Tailnet route, that endpoint is
+   the supervisor-owned loopback lease. Confirm the current account,
+   device identity, access, and existing Moonlight pairing for that
+   prepared route through the coordinator's existing checks. Those
+   checks can use the prepared endpoint while this attempt is active.
+3. After the checks pass, call `start({prepared.attempt, prepared.generation}, view)`.
+   The coordinator supplies the grant only for the prepared session it
+   approved. The supervisor accepts it once. Cancel the attempt if the
+   checks fail, the context changes, or the user abandons it. Relay loss
+   also stops the attempt. A cancel during allocation uses
+   `EmbeddedStatusClient::cancelOpen()` and lets the transport drain the reply.
+4. On Windows, pass the top-level stream `QWindow` and logical viewport
+   in `SessionView`. Use `setViewport(rect, suppressed)` for layout and
+   panel visibility. Bind the existing chrome to `videoReady`, `fullScreen`,
+   `connectionMetrics` and `networkPoor`. Route full-screen changes to
+   `setFullScreen()` and Cancel and Disconnect to `requestStop()`. The
+   worker's full-screen event toggles the same owner and restores its
+   previous normal or maximized state afterward.
+5. On macOS, omit the owner window. `Phase::Standalone` means the native
+   worker started. Its own UI owns video readiness and window controls.
+   Pass the existing preference argument provider and macOS session
+   snapshot in `SessionView`. Handle `preferenceChangeRequested` in the
+   preference layer, which validates values and persists them.
+
+Stop keeps the relay leased until the worker exits. Windows signals the
+named stop event, including when the owner receives a close request.
+macOS requests termination from the standalone process. The supervisor
+reaps an unresponsive worker after the six-second grace period. The
+terminal `finished` signal carries the attempt, generation, reason, and
+any worker exit code. It follows worker exit and submission of lease
+cleanup. The tailnet client acknowledges that cleanup asynchronously.
+Coordinator code owns window disposal, access policy, and any retry.
+
+## Windows surface helper
+
+The supervisor uses the existing `StreamSurface` API. The lower-level
+integration remains available to callers that manage their own worker:
 
 1. On the GUI thread, create an `Aurora::Session::StreamSurface` for the
    top-level session `QWindow`. Call `prepare(owner, viewport)` before
@@ -74,10 +120,11 @@ shared-frame contract.
 ## Offline verification
 
 Configure `cmake -S desktop/qt-shell/native/session/tests -B <build-dir>`,
-build with the shell's Windows Qt toolchain and run CTest. The test preview
-loads the existing stream chrome in a `QQuickView` and launches a Win32
-fixture that implements the original invitation and events. It checks the
-connecting stage, ready and fullscreen signaling, child geometry,
-occlusion and minimization, invalid owner and worker handles, the stop
-signal, and cleanup on owner destruction. The fixture uses no Moonlight
-runtime or network operations.
+build with the shell's Qt toolchain and run CTest. The supervisor fixture
+uses the repository's stream entry gate and fake Moonlight and tailnet
+children. It covers the authorization gate, viewport and full-screen
+handling, relay lifetime, cancellation during allocation, and graceful
+and forced worker stops. The Windows surface fixture still loads the
+existing stream chrome in a `QQuickView` and exercises the original
+invitation, window validation and events. Both fixtures use local child
+processes and pipes.
