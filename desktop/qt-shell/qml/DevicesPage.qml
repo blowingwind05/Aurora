@@ -62,12 +62,13 @@ Item {
         height: 34
 
         Text {
+            objectName: "devicesPageTitle"
             anchors.left: parent.left
             anchors.verticalCenter: parent.verticalCenter
             text: qsTr("我的设备")
             font.family: AuroraTheme.font
             font.pixelSize: page.compact ? 21 : 26
-            font.weight: Font.DemiBold
+            font.weight: Font.Bold
             color: AuroraTheme.ink
             Accessible.role: Accessible.Heading
         }

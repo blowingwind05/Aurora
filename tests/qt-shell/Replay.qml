@@ -45,6 +45,12 @@ Live {
                     check(!shell.narrow && shell.deviceModel.count === 2,
                           "wide device list (" + shell.width + "; " + shell.deviceModel.count + ")")
                     check(account.text === "联调账户" && account.subtitle === "GitHub", "signed-in account")
+                    const title = shell.child(shell.contentItem, "devicesPageTitle")
+                    const deviceName = shell.child(shell.contentItem, "deviceName-node:书房")
+                    check(title.font.pixelSize === 26 && title.font.weight === Font.Bold, "page title typography")
+                    check(deviceName.font.pixelSize === 17 && deviceName.font.weight === Font.DemiBold &&
+                          (Qt.platform.os !== "windows" ||
+                           deviceName.font.family.split(",")[0].trim() === "Segoe UI"), "device name typography")
                     const avatar = shell.child(account, "accountPhoto")
                     if (!avatar || avatar.status === Image.Loading)
                         return

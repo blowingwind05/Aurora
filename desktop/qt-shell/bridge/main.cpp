@@ -1,10 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-only
+#include "AuroraMore.h"
+
 #include <QByteArray>
 #include <QCoreApplication>
+#include <QDesktopServices>
 #include <QGuiApplication>
 #include <QIcon>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QNetworkAccessManager>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QTimer>
@@ -221,8 +225,16 @@ int main(int argc, char *argv[])
 #endif
 
     AuroraBridge bridge(windowsSession);
+    QNetworkAccessManager network;
+    AuroraMore more(network, &QDesktopServices::openUrl);
     QQmlApplicationEngine engine;
     engine.rootContext()->setContextProperty("auroraBridge", &bridge);
+    if (!windowsSession) {
+        engine.rootContext()->setContextProperty("auroraMore", &more);
+        QObject::connect(&bridge, &AuroraBridge::stateChanged, &more, [&bridge, &more] {
+            more.setApplicationVersion(bridge.state().value(QStringLiteral("applicationVersion")).toString());
+        });
+    }
     engine.load(QUrl::fromLocalFile(arguments.at(windowsSession ? 2 : 1)));
     if (engine.rootObjects().isEmpty())
         return 1;

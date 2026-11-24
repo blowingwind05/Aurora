@@ -40,15 +40,12 @@ internal sealed record QtShellGeneralPreferences(int AcknowledgedRequestId, bool
     bool StartupEnabled, bool StartupAvailable, string SleepMode, string CloseFeedback, string StartupFeedback,
     string SleepFeedback);
 
-internal sealed record QtShellMoreState(string VersionLabel, string FeedbackAddress,
-    bool Checking = false, int UpdateCompleted = 0, int NoticeId = 0, string Notice = "");
-
 internal sealed record QtShellState(string DeviceAccess, string AccountName, string AccountSubtitle,
     QtShellDevice[] Devices, int DeviceEpoch, bool RefreshAvailable, bool Refreshing, string RefreshFeedback,
     bool RefreshFailed, bool ConnectionPending, bool ReduceMotion)
 {
     public QtShellHostState Host { get; init; }
-    public QtShellMoreState More { get; init; }
+    public string ApplicationVersion { get; init; }
     public QtShellGeneralPreferences GeneralSettings { get; init; }
     public QtShellTailscaleAccount TailscaleAccount { get; init; }
     public string AccountAvatar { get; init; }
@@ -127,8 +124,14 @@ internal sealed class QtShellBridge : IDisposable
 
     internal static QtShellLaunch FindBundledLaunch(string directory)
     {
-        var executable = Path.Combine(directory, "Components", "Moonlight", "AuroraQtShell.exe");
-        var entry = Path.Combine(directory, "QtPreview", "desktop", "qt-shell", "bridge", "Live.qml");
+        if (!OperatingSystem.IsWindows() && !OperatingSystem.IsMacOS()) return null;
+
+        var mac = OperatingSystem.IsMacOS();
+        var executable = mac
+            ? Path.Combine(directory, "AuroraQtShell")
+            : Path.Combine(directory, "Components", "Moonlight", "AuroraQtShell.exe");
+        var resources = mac ? Path.GetFullPath(Path.Combine(directory, "..", "Resources")) : directory;
+        var entry = Path.Combine(resources, "QtPreview", "desktop", "qt-shell", "bridge", "Live.qml");
         return File.Exists(executable) && File.Exists(entry) ? new QtShellLaunch(executable, entry) : null;
     }
 

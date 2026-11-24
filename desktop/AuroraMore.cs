@@ -351,7 +351,6 @@ internal static class AuroraMore
             showNotice(error);
     }
 
-    // The Qt bridge supplies an action ID. Only Aurora-owned destinations reach the system launcher.
     internal static async Task<string> OpenProjectLink(TopLevel owner, string destination)
     {
         var target = destination switch

@@ -233,12 +233,12 @@ internal sealed class SunshineAdmin : IDisposable
     public async Task SaveOptions(IReadOnlyDictionary<string, string> changes)
     {
         if (changes.Count == 0) return;
-        var options = SunshineOptionsPage.ReadCatalog().ToDictionary(option => option.Key);
+        var options = SunshineOptionCatalog.ReadCatalog().ToDictionary(option => option.Key);
         foreach (var change in changes)
         {
             if (!options.TryGetValue(change.Key, out var option))
                 throw new InvalidOperationException("不支持的设置：" + change.Key);
-            SunshineOptionsPage.Validate(option, change.Value);
+            SunshineOptionCatalog.Validate(option, change.Value);
         }
         var payload = MergeOptions(await ReadOptions(), changes);
         await Post("api/config", payload);

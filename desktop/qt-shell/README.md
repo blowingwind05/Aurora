@@ -17,7 +17,7 @@
 
 Windows Qt 便携包带有 Qt 运行时和 QML 入口，可直接双击 `Aurora.exe` 启动。Qt 子程序的窗口图标和可执行文件图标均使用 `desktop/Assets/Aurora.ico`。打包 QML 时复制 `docs/visual-design/assets/icons/` 及其许可文件，并带上 `desktop/Assets/panel-top-tight.svg`。以下命令用于从源码独立构建并试用 Qt 界面。
 
-需要 .NET 9、CMake、C++17 工具链和 Qt Quick、Quick Controls 2 的开发与运行组件。当前验收环境为 Windows x64、MSVC 和 Qt 5.15.2。准备 Qt 运行时后，从已应用补丁的副本根目录运行。Windows 使用 x64 开发者 PowerShell。给 `CMAKE_PREFIX_PATH` 填写 Qt 安装前缀，Windows 的 `PATH` 中加入该 Qt 的 `bin`。下面的构建路径应位于副本或独立临时目录。
+需要 .NET 9、CMake、C++17 工具链和 Qt Quick、Quick Controls 2、Network 的开发与运行组件。当前验收环境为 Windows x64、MSVC 和 Qt 5.15.2。准备 Qt 运行时后，从已应用补丁的副本根目录运行。Windows 使用 x64 开发者 PowerShell。给 `CMAKE_PREFIX_PATH` 填写 Qt 安装前缀，Windows 的 `PATH` 中加入该 Qt 的 `bin`。下面的构建路径应位于副本或独立临时目录。
 
 ```powershell
 cmake -S desktop/qt-shell -B build/qt-shell -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$qtPrefix"
@@ -29,11 +29,13 @@ $live = (Resolve-Path desktop/qt-shell/bridge/Live.qml).Path
 dotnet desktop/bin/Release/net9.0/win-x64/Aurora.dll --qt-shell $qtShell $live
 ```
 
-在 macOS 上用匹配 .NET 目标架构的 Qt 和 CMake 默认生成器构建，将 RID 换成 `osx-arm64` 或 `osx-x64`，将子程序路径换成无 `.exe` 后缀的路径。QML 仍从源码目录加载，以复用现有资源路径。
+macOS 的完整构建由 `Build-Mac.ps1` 调用串流构建脚本。Qt 6 的 `qmake` 与 CMake 用于构建匹配目标架构的 `AuroraQtShell`，同一套 QML 和视觉素材放入 `Aurora.app/Contents/Resources/QtPreview`。应用启动时会找到包内的 Qt 界面。从源码联调时，RID 使用 `osx-arm64` 或 `osx-x64`，Qt 子程序路径使用无 `.exe` 后缀的版本。
 
 `--qt-shell` 在 Aurora 首次启动时以 Qt 窗口作为主窗口，Avalonia 宿主在后台运行。当前若已有 Aurora 实例，请从原窗口退出后再启动带参数的副本。「账户」「设置」和「本机被控」进入 Qt 页。Sunshine 常用设置及全部配置项在 Qt 内显示。账号授权和系统权限按需打开对应的系统界面。Qt 窗口沿用主程序的关闭偏好，退出 Aurora 时结束 Qt 子进程。设备筛选、刷新文案、身份验证、选路及串流由现有 C# 流程负责。
 
 子进程通过重定向的 stdin/stdout 交换 UTF-8 JSON 行。C# 写入完整状态快照，Qt 回写 设备操作与导航请求。连接消息带当前快照的 `deviceEpoch` 和 `deviceId`，以便 C# 拒绝账户切换前的设备操作。标准错误用于 Qt 诊断。
+
+「更多」的项目链接和更新检查由 Qt 子进程处理。宿主快照中的 `applicationVersion` 提供当前程序集版本，Qt 负责版本展示和 GitHub 正式版本比较。离线测试位于 [tests/qt-shell-more](../../tests/qt-shell-more)。
 
 ## 离线回放
 

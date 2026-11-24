@@ -173,48 +173,37 @@ Window {
             spacing: 2
 
             component CaptionButton: AuroraButton {
+                id: caption
+                required property string glyph
                 width: window.compact ? 32 : 40
                 height: 34
-                display: AuroraButton.IconOnly
-                icon.width: 15
-                icon.height: 15
                 hint: text
+
+                contentItem: Text {
+                    text: caption.glyph
+                    font.family: "Segoe MDL2 Assets"
+                    font.pixelSize: 10
+                    horizontalAlignment: Text.AlignHCenter
+                    verticalAlignment: Text.AlignVCenter
+                    renderType: Text.NativeRendering
+                    color: caption.foreground
+                    Accessible.ignored: true
+                }
             }
             CaptionButton {
                 text: qsTr("最小化")
-                icon.source: AuroraTheme.icon("minus")
+                glyph: "\uE921"
                 onClicked: window.showMinimized()
             }
             CaptionButton {
                 objectName: "maximizeWindow"
                 text: window.maximized ? qsTr("还原") : qsTr("最大化")
-                icon.source: window.maximized ? "" : AuroraTheme.icon("square")
+                glyph: window.maximized ? "\uE923" : "\uE922"
                 onClicked: window.toggleMaximized()
-
-                Item {
-                    visible: window.maximized
-                    anchors.centerIn: parent
-                    width: 12
-                    height: 12
-                    Rectangle {
-                        x: 3
-                        width: 9
-                        height: 9
-                        color: "transparent"
-                        border.color: AuroraTheme.ink
-                    }
-                    Rectangle {
-                        y: 3
-                        width: 9
-                        height: 9
-                        color: parent.parent.hovered ? AuroraTheme.hover : AuroraTheme.frame
-                        border.color: AuroraTheme.ink
-                    }
-                }
             }
             CaptionButton {
                 text: qsTr("关闭")
-                icon.source: AuroraTheme.icon("x")
+                glyph: "\uE8BB"
                 hoverFill: "#C42B1C"
                 foreground: hovered || down ? "white" : AuroraTheme.ink
                 onClicked: window.close()

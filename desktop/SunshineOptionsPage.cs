@@ -1,8 +1,6 @@
 using System;
 using System.Collections.Generic;
-using System.Globalization;
 using System.Linq;
-using System.Text.Json;
 using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Automation;
@@ -13,8 +11,6 @@ using Avalonia.Layout;
 using Avalonia.Media;
 
 namespace Aurora;
-
-internal sealed record SunshineOption(string Key, string Label, string Default, string Kind, string Group, string[] Choices);
 
 internal sealed class SunshineOptionsPage : UserControl
 {
@@ -46,17 +42,10 @@ internal sealed class SunshineOptionsPage : UserControl
     internal void Report(string message) => feedback.Text = message;
     internal void DiscardChanges() => changed.Clear();
 
-    internal static SunshineOption[] ReadCatalog()
-    {
-        using var resource = typeof(SunshineOptionsPage).Assembly.GetManifestResourceStream("Aurora.SunshineOptions.json");
-        return JsonSerializer.Deserialize<SunshineOption[]>(resource,
-            new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
-    }
-
     internal SunshineOptionsPage(SunshineAdmin admin)
     {
         this.admin = admin;
-        catalog = ReadCatalog();
+        catalog = SunshineOptionCatalog.ReadCatalog();
         var layout = new Grid { RowDefinitions = new RowDefinitions("Auto,*,Auto"), RowSpacing = 11 };
         Content = layout;
 
@@ -144,7 +133,7 @@ internal sealed class SunshineOptionsPage : UserControl
             if (!changed.TryGetValue(option.Key, out var value)) continue;
             try
             {
-                Validate(option, value);
+                SunshineOptionCatalog.Validate(option, value);
                 valid[option.Key] = value;
             }
             catch (InvalidOperationException error) { validationError ??= error.Message; }
@@ -209,20 +198,13 @@ internal sealed class SunshineOptionsPage : UserControl
         scroll.Offset = default;
     }
 
-    internal static string CategoryFor(SunshineOption option) => option.Group switch
-    {
-        "输入" => "输入",
-        "网络" => "网络",
-        _ => "显示与编码"
-    };
-
     private void Render()
     {
         fields.Children.Clear();
         if (original.Count == 0) return;
         var query = search.Text?.Trim() ?? "";
         var matches = catalog.Where(option => query.Length == 0
-            ? CategoryFor(option) == selectedCategory
+            ? SunshineOptionCatalog.CategoryFor(option) == selectedCategory
             : option.Label.Contains(query, StringComparison.OrdinalIgnoreCase) || option.Key.Contains(query, StringComparison.OrdinalIgnoreCase) ||
               option.Group.Contains(query, StringComparison.OrdinalIgnoreCase));
         foreach (var group in matches.GroupBy(option => option.Group))
@@ -332,28 +314,6 @@ internal sealed class SunshineOptionsPage : UserControl
         if (value == changed.GetValueOrDefault(option.Key, original[option.Key])) return;
         changed[option.Key] = value;
         Edited?.Invoke(text);
-    }
-
-    internal static void Validate(SunshineOption option, string value)
-    {
-        if (value.Any(char.IsControl) || value.Contains('#'))
-            throw new InvalidOperationException($"{option.Label}不能包含换行、控制字符或 #。");
-        if (value.Length == 0) return;
-        if (option.Kind == "number" && (!double.TryParse(value, NumberStyles.Float,
-                CultureInfo.InvariantCulture, out var number) || !double.IsFinite(number)))
-            throw new InvalidOperationException($"{option.Label}请输入数字，小数用点。");
-        if (option.Key == "port" && (!int.TryParse(value, out var port) || port is < 1029 or > 65514))
-            throw new InvalidOperationException("端口须为 1029–65514。");
-        if (option.Kind == "json" && option.Key != "keybindings")
-        {
-            try
-            {
-                using var json = JsonDocument.Parse(value);
-                var expected = option.Key == "global_prep_cmd" ? JsonValueKind.Array : JsonValueKind.Object;
-                if (json.RootElement.ValueKind != expected) throw new JsonException();
-            }
-            catch (JsonException) { throw new InvalidOperationException($"{option.Label}不是有效的 JSON。"); }
-        }
     }
 
     private void UpdateButtons()

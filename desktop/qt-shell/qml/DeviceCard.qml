@@ -82,11 +82,12 @@ FocusScope {
             spacing: 4
 
             Text {
+                objectName: "deviceName-" + card.deviceId
                 width: parent.width
                 text: card.displayName
                 textFormat: Text.PlainText
                 color: "white"
-                font.family: AuroraTheme.font
+                font.family: AuroraTheme.windows ? "Segoe UI, Microsoft YaHei UI" : AuroraTheme.font
                 font.pixelSize: 17
                 font.weight: Font.DemiBold
                 wrapMode: Text.WrapAnywhere

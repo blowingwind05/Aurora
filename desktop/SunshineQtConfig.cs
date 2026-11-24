@@ -13,7 +13,7 @@ internal static class SunshineQtConfig
     private const string Exclusive = "exclusiveDisplay";
     private const string Legacy = "legacyScreensaver";
     private static readonly Dictionary<string, SunshineOption> Catalog =
-        SunshineOptionsPage.ReadCatalog().ToDictionary(option => option.Key, StringComparer.Ordinal);
+        SunshineOptionCatalog.ReadCatalog().ToDictionary(option => option.Key, StringComparer.Ordinal);
 
     internal static async Task<(QtSunshineConfig Config, SunshinePreferences Preferences, SunshinePrivacySettings Displays)>
         ReadAsync(SunshineAdmin admin)
@@ -21,7 +21,7 @@ internal static class SunshineQtConfig
         var snapshot = await admin.ReadOptions();
         var preferences = SunshineAdmin.ParsePreferences(snapshot);
         var options = Catalog.Values.Select(option => new QtSunshineOption(option.Key, option.Label, option.Default,
-            option.Kind, option.Group, SunshineOptionsPage.CategoryFor(option), option.Choices ?? [],
+            option.Kind, option.Group, SunshineOptionCatalog.CategoryFor(option), option.Choices ?? [],
             admin.IsManaged && BundledSunshine.ManagedOptions.ContainsKey(option.Key))).ToArray();
         var values = options.ToDictionary(option => option.Key, option => option.Managed
             ? BundledSunshine.ManagedOptions[option.Key]
@@ -84,7 +84,7 @@ internal static class SunshineQtConfig
                         throw new InvalidOperationException("不支持的 Sunshine 设置。");
                     if (admin.IsManaged && BundledSunshine.ManagedOptions.ContainsKey(key))
                         throw new InvalidOperationException("此配置项由 Aurora 统一管理。");
-                    SunshineOptionsPage.Validate(option, raw);
+                    SunshineOptionCatalog.Validate(option, raw);
                     options[key] = value;
                 }
             }

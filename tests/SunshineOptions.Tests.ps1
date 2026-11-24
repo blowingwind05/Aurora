@@ -5,13 +5,13 @@ param([Parameter(Mandatory)][string] $AssemblyPath)
 $ErrorActionPreference = 'Stop'
 $assembly = [Reflection.Assembly]::LoadFrom((Resolve-Path -LiteralPath $AssemblyPath).Path)
 $flags = [Reflection.BindingFlags]'Static,NonPublic'
-$window = $assembly.GetType('Aurora.SunshineOptionsPage', $true)
-$options = @($window.GetMethod('ReadCatalog', $flags).Invoke($null, $null))
+$catalog = $assembly.GetType('Aurora.SunshineOptionCatalog', $true)
+$options = @($catalog.GetMethod('ReadCatalog', $flags).Invoke($null, $null))
 if ($options.Count -ne 96 -or @($options.Key | Sort-Object -Unique).Count -ne 96) {
     throw 'Expected 96 distinct upstream configuration keys.'
 }
 $port = ($options | Where-Object Key -eq 'port').PSObject.BaseObject
-$validate = $window.GetMethod('Validate', $flags)
+$validate = $catalog.GetMethod('Validate', $flags)
 $validate.Invoke($null, @($port, '47989'))
 try {
     $validate.Invoke($null, @($port, '65535'))

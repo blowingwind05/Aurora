@@ -18,15 +18,11 @@ AuroraMainWindow {
     refreshFailed: snapshot.refreshFailed === true
     connectionPending: snapshot.connectionPending === true
     reduceMotion: snapshot.reduceMotion === true
-    moreVersion: moreState.versionLabel || ""
-    moreFeedbackAddress: moreState.feedbackAddress || ""
-    checkingUpdates: pendingUpdate || moreState.checking === true
+    moreVersion: auroraMore.versionLabel
+    moreFeedbackAddress: auroraMore.feedbackAddress
+    checkingUpdates: auroraMore.checking
 
     readonly property var snapshot: auroraBridge.state
-    readonly property var moreState: snapshot.more || ({})
-    property bool pendingUpdate: false
-    property int lastUpdateCompleted: 0
-    property int lastMoreNotice: 0
 
     readonly property var generalSettings: snapshot.generalSettings || null
     property int nextPreferenceRequestId: 0
@@ -178,28 +174,12 @@ AuroraMainWindow {
             requestPreference("read-general-settings", null)
     }
 
-    onMoreStateChanged: {
-        const completed = moreState.updateCompleted || 0
-        if (completed !== lastUpdateCompleted) {
-            lastUpdateCompleted = completed
-            pendingUpdate = false
-        }
-        const noticeId = moreState.noticeId || 0
-        if (noticeId !== lastMoreNotice) {
-            lastMoreNotice = noticeId
-            if (moreState.notice)
-                showMoreNotice(moreState.notice)
-        }
+    Connections {
+        target: auroraMore
+        function onNotice(message) { shell.showMoreNotice(message) }
     }
 
-    onMoreRequested: function(action) {
-        if (action === "checkUpdates") {
-            if (checkingUpdates || !snapshot.more)
-                return
-            pendingUpdate = true
-        }
-        auroraBridge.send("more." + action, "", 0)
-    }
+    onMoreRequested: function(action) { auroraMore.request(action) }
 
     onHostActionRequested: function(action) { auroraBridge.send(action, "", 0) }
     onSunshineRequested: function(action, data) { auroraBridge.sendSunshine(action, data) }

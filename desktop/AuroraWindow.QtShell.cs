@@ -9,6 +9,8 @@ namespace Aurora;
 
 public sealed partial class AuroraWindow
 {
+    private static readonly string QtApplicationVersion = typeof(AuroraWindow).Assembly.GetName().Version?.ToString();
+
     private QtShellBridge qtShell;
     private bool qtWindowVisible = true;
     private bool qtAvatarVisible;
@@ -36,7 +38,7 @@ public sealed partial class AuroraWindow
         QtShellLaunch launch;
         if (index < 0)
         {
-            launch = OperatingSystem.IsWindows() ? QtShellBridge.FindBundledLaunch(AppContext.BaseDirectory) : null;
+            launch = QtShellBridge.FindBundledLaunch(AppContext.BaseDirectory);
             if (launch == null) return false;
         }
         else
@@ -160,7 +162,7 @@ public sealed partial class AuroraWindow
             connecting || QtTailscaleBlocksDevices, RefreshNotice.ReduceMotion())
         {
             Host = ReadQtHostState(),
-            More = qtMoreState,
+            ApplicationVersion = QtApplicationVersion,
             AccountAvatar = network?.IsAuthenticated == true && network.Owner == accountOwner &&
                 accountState == TailscaleState.Connected && !TailscaleRuntime.IsTransitioning ? qtAccountAvatar : null,
             // Carry the latest preference acknowledgement across device snapshots.
@@ -197,11 +199,6 @@ public sealed partial class AuroraWindow
     private async Task HandleQtShellRequest(QtShellRequest request)
     {
         if (qtShell == null || closed) return;
-        if (request.Action?.StartsWith("more.", StringComparison.Ordinal) == true)
-        {
-            await HandleQtMoreRequest(request.Action[5..]);
-            return;
-        }
         if (qtGeneralSettings.TryHandle(request, out var preferencesChanged))
         {
             if (preferencesChanged)
