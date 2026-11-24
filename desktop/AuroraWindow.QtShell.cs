@@ -125,6 +125,14 @@ public sealed partial class AuroraWindow
                 TrayResidency.ShowMainWindow(this);
                 OpenAccount();
                 break;
+            case "settings":
+                TrayResidency.ShowMainWindow(this);
+                OpenApplicationSettings();
+                break;
+            case "host" when Upstream.SupportsHost:
+                TrayResidency.ShowMainWindow(this);
+                Navigate(Page.Host);
+                break;
         }
     }
 }

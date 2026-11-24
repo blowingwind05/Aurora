@@ -29,9 +29,9 @@ dotnet desktop/bin/Release/net9.0/win-x64/Aurora.dll --qt-shell $qtShell $live
 
 在 macOS 上用匹配 .NET 目标架构的 Qt 和 CMake 默认生成器构建，将 RID 换成 `osx-arm64` 或 `osx-x64`，将子程序路径换成无 `.exe` 后缀的路径。QML 仍从源码目录加载，以复用现有资源路径。
 
-`--qt-shell` 在 Aurora 首次启动时额外打开 Qt 窗口，同时保留 Avalonia 主窗。当前若已有 Aurora 实例，请从原窗口退出后再启动带参数的副本。Qt 中的账户入口打开既有的 Avalonia 账户页。关闭 Qt 窗口会结束联调通道，退出 Aurora 会结束 Qt 子进程。设备筛选、刷新文案、身份验证、选路及串流由现有 C# 流程负责。
+`--qt-shell` 在 Aurora 首次启动时额外打开 Qt 窗口，同时保留 Avalonia 主窗。当前若已有 Aurora 实例，请从原窗口退出后再启动带参数的副本。Qt 中的账户、设置和本机被控入口打开对应的 Avalonia 页面。关闭 Qt 窗口会结束联调通道，退出 Aurora 会结束 Qt 子进程。设备筛选、刷新文案、身份验证、选路及串流由现有 C# 流程负责。
 
-子进程通过重定向的 stdin/stdout 交换 UTF-8 JSON 行。C# 写入完整状态快照，Qt 回写 `refresh`、`connect` 和 `account` 操作。连接消息带当前快照的 `deviceEpoch` 和 `deviceId`，以便 C# 拒绝账户切换前的设备操作。标准错误用于 Qt 诊断。
+子进程通过重定向的 stdin/stdout 交换 UTF-8 JSON 行。C# 写入完整状态快照，Qt 回写 设备操作与导航请求。连接消息带当前快照的 `deviceEpoch` 和 `deviceId`，以便 C# 拒绝账户切换前的设备操作。标准错误用于 Qt 诊断。
 
 ## 离线回放
 
@@ -47,3 +47,7 @@ Remove-Item Env:QT_QPA_PLATFORM, Env:QT_QUICK_BACKEND, Env:QT_FORCE_STDERR_LOGGI
 ```
 
 Windows 的 Qt 若提示缺少离屏字体目录，可在回放前给 `QT_QPA_FONTDIR` 指定本机字体目录。做真实账户验收时使用测试账号和可连接的测试设备，检查 Qt 与 Avalonia 的设备及账户状态一致，Qt 刷新走完既有发现流程，点击可连接卡片后打开目标设备的现有串流窗口。退出测试账户，确认 Qt 中的设备随即消失。
+
+## 通用设置预览
+
+用 `qmlscene desktop/qt-shell/demo/SettingsDemo.qml` 打开通用设置。关闭到托盘或菜单栏、开机自启动和防止休眠从宿主读取已确认的值，操作通过 QML 信号传给宿主。预览使用内存数据，当前试验主窗口的「设置」转到实际的 Avalonia 设置。

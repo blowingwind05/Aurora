@@ -44,7 +44,7 @@ AuroraMainWindow {
     onRefreshRequested: auroraBridge.send("refresh", "", 0)
     onConnectRequested: function(deviceId) { auroraBridge.send("connect", deviceId, snapshot.deviceEpoch) }
     onNavigationRequested: function(destination) {
-        if (destination === "account")
-            auroraBridge.send("account", "", 0)
+        if (destination === "account" || destination === "settings" || destination === "host")
+            auroraBridge.send(destination, "", 0)
     }
 }
