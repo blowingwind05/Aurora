@@ -13,6 +13,7 @@ Window {
     flags: customWindowChrome ? Qt.Window | Qt.FramelessWindowHint : Qt.Window
 
     property bool customWindowChrome: AuroraTheme.windows
+    property int macTitleBarHeight: 52
     property var deviceModel: null
     property string deviceAccess: "loading"
     property bool refreshAvailable: true
@@ -95,7 +96,8 @@ Window {
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.margins: 1
-        height: 52
+        anchors.topMargin: AuroraTheme.mac ? 0 : anchors.margins
+        height: AuroraTheme.mac ? window.macTitleBarHeight : 52
 
         MouseArea {
             anchors.fill: parent

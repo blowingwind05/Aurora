@@ -28,18 +28,23 @@
 #include <unistd.h>
 #endif
 
+#ifdef Q_OS_MACOS
+bool installMacTitleBar(QWindow &window);
+#endif
+
 class AuroraBridge : public QObject
 {
     Q_OBJECT
     Q_PROPERTY(QVariantMap state READ state NOTIFY stateChanged)
 
 public:
-    explicit AuroraBridge(bool windowsSession, bool checkUi) : windowsSession(windowsSession)
+    AuroraBridge(bool windowsSession, bool checkUi, bool prepareMacTitleBar) : windowsSession(windowsSession)
     {
-        if (checkUi) {
+        // Let the first host snapshot show the Cocoa window after its titlebar is installed.
+        if (checkUi || prepareMacTitleBar)
             snapshot.insert(QStringLiteral("windowVisible"), false);
+        if (checkUi)
             return;
-        }
         // Anonymous pipes on Windows cannot be watched by QSocketNotifier.
         connect(&pollTimer, &QTimer::timeout, this, &AuroraBridge::readInput);
         pollTimer.start(25);
@@ -229,7 +234,12 @@ int main(int argc, char *argv[])
     }
 #endif
 
-    AuroraBridge bridge(windowsSession, checkUi);
+#ifdef Q_OS_MACOS
+    const bool prepareMacTitleBar = QGuiApplication::platformName() == QStringLiteral("cocoa");
+#else
+    constexpr bool prepareMacTitleBar = false;
+#endif
+    AuroraBridge bridge(windowsSession, checkUi, prepareMacTitleBar);
     QNetworkAccessManager network;
     AuroraMore more(network, &QDesktopServices::openUrl);
     QQmlApplicationEngine engine;
@@ -243,16 +253,23 @@ int main(int argc, char *argv[])
     engine.load(QUrl::fromLocalFile(arguments.at(windowsSession || checkUi ? 2 : 1)));
     if (engine.rootObjects().isEmpty())
         return 1;
+    const auto window = qobject_cast<QWindow *>(engine.rootObjects().constFirst());
+    bool macTitleBarReady = true;
+#ifdef Q_OS_MACOS
+    if (prepareMacTitleBar && window && window->metaObject()->indexOfProperty("macTitleBarHeight") >= 0) {
+        macTitleBarReady = installMacTitleBar(*window);
+        if (!macTitleBarReady)
+            qWarning("Aurora could not install the native macOS title bar.");
+    }
+#endif
     if (checkUi) {
-        const auto window = qobject_cast<QWindow *>(engine.rootObjects().constFirst());
-        return window && !window->isVisible() ? 0 : 1;
+        return window && !window->isVisible() && macTitleBarReady ? 0 : 1;
     }
 #ifdef Q_OS_WIN
     if (windowsSession) {
-        auto popup = qobject_cast<QWindow *>(engine.rootObjects().constFirst());
-        if (!popup)
+        if (!window)
             return 1;
-        connectSessionPopup(app, *popup, bridge, ownerHandle);
+        connectSessionPopup(app, *window, bridge, ownerHandle);
     }
 #endif
     return app.exec();
