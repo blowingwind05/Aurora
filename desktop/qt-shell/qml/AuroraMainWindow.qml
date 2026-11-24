@@ -15,6 +15,7 @@ Window {
     property bool customWindowChrome: AuroraTheme.windows
     property var deviceModel: null
     property string deviceAccess: "loading"
+    property bool refreshAvailable: true
     property bool refreshing: false
     property string refreshFeedback: ""
     property bool refreshFailed: false
@@ -231,6 +232,7 @@ Window {
             narrow: window.narrow
             deviceModel: window.deviceModel
             accessState: window.deviceAccess
+            refreshAvailable: window.refreshAvailable
             refreshing: window.refreshing
             refreshFeedback: window.refreshFeedback
             refreshFailed: window.refreshFailed

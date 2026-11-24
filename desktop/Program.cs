@@ -36,6 +36,7 @@ public sealed class AuroraApp : Application
         {
             var window = new AuroraWindow();
             desktop.MainWindow = window;
+            window.StartQtShell(desktop.Args);
             Program.Instance?.Listen(() => Dispatcher.UIThread.Post(() => TrayResidency.ShowMainWindow(window)));
             desktop.Exit += (_, _) => EmbeddedTailnet.Stop();
             _ = EmbeddedTailnet.ResumeIfConfigured();

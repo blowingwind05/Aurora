@@ -8,6 +8,7 @@ Item {
     property string accessState: "loading"
     property bool compact: false
     property bool narrow: false
+    property bool refreshAvailable: true
     property bool refreshing: false
     property bool connectionPending: false
     property bool reduceMotion: false
@@ -80,7 +81,7 @@ Item {
             quiet: true
             hoverFill: "transparent"
             visible: page.ready
-            enabled: !page.refreshing
+            enabled: page.refreshAvailable && !page.refreshing
             text: page.refreshing ? qsTr("正在刷新设备列表") : qsTr("刷新设备列表")
             hint: text
             display: AbstractButton.IconOnly

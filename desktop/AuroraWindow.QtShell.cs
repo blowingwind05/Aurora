@@ -1,0 +1,130 @@
+using System;
+using System.ComponentModel;
+using System.IO;
+using System.Linq;
+using System.Threading.Tasks;
+using Avalonia.Threading;
+
+namespace Aurora;
+
+public sealed partial class AuroraWindow
+{
+    private QtShellBridge qtShell;
+    private (int Version, long? Owner, string LocalId, int? Generation) qtCatalogContext;
+    private int qtDeviceEpoch;
+    private string qtAccountName = "";
+    private bool qtRefreshing;
+    private string qtFeedback = "";
+    private bool qtFeedbackFailed;
+
+    private (int, long?, string, int?) QtAccountContext =>
+        (accountVersion, network?.Owner, network?.LocalId, network?.Generation);
+    private bool QtDevicesReady => hasScanned && qtCatalogContext == QtAccountContext &&
+        network?.IsAuthenticated == true && network.Generation == TailscaleRuntime.Generation &&
+        !TailscaleRuntime.IsTransitioning;
+
+    internal void StartQtShell(string[] args)
+    {
+        var index = Array.IndexOf(args ?? Array.Empty<string>(), "--qt-shell");
+        if (index < 0) return;
+        if (index + 2 >= args.Length)
+        {
+            Console.Error.WriteLine("Usage: --qt-shell <companion executable> <Live.qml>");
+            return;
+        }
+
+        try
+        {
+            qtShell = QtShellBridge.Start(args[index + 1], args[index + 2], request =>
+                Dispatcher.UIThread.Post(() => _ = HandleQtShellRequest(request)));
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or
+            Win32Exception or ArgumentException)
+        {
+            Console.Error.WriteLine($"Qt Shell could not start: {error.Message}");
+            return;
+        }
+
+        var bridge = qtShell;
+        Closed += (_, _) => DetachQtShell(bridge);
+        _ = ObserveQtShell(bridge);
+        PublishQtShellState();
+    }
+
+    private async Task ObserveQtShell(QtShellBridge bridge)
+    {
+        try { await bridge.Completion; }
+        finally { DetachQtShell(bridge); }
+    }
+
+    private void DetachQtShell(QtShellBridge bridge)
+    {
+        if (qtShell != bridge) return;
+        qtShell = null;
+        bridge.Dispose();
+    }
+
+    private void SyncQtShellCatalog()
+    {
+        if (qtShell == null) return;
+        if (qtCatalogContext != QtAccountContext)
+        {
+            qtCatalogContext = QtAccountContext;
+            qtDeviceEpoch++;
+            qtFeedback = "";
+            qtFeedbackFailed = false;
+        }
+        PublishQtShellState();
+    }
+
+    private void PublishQtShellState()
+    {
+        if (qtShell == null || closed) return;
+        var ready = QtDevicesReady;
+        var access = ready ? "ready" : !hasScanned || accountState == TailscaleState.Starting ||
+            network?.IsAuthenticated == true ? "loading" : "signedOut";
+        var devices = ready ? displayed.Select(device =>
+        {
+            var path = DesktopWallpaper.CachedPath(device, network);
+            var tailAddress = device.Tailnet?.Endpoint.Address ?? (device.TailnetVisible ? device.Address : null);
+            return new QtShellDevice(device.Id, device.Name, device.Online, device.CanConnect,
+                (device.LanAddress ?? device.Lan?.Endpoint.Address)?.ToString() ?? "", tailAddress?.ToString() ?? "",
+                File.Exists(path) ? new Uri(path).AbsoluteUri : "");
+        }).ToArray() : Array.Empty<QtShellDevice>();
+        qtShell.Publish(new QtShellState(access, qtAccountName, accountSubtitle.Text, devices, qtDeviceEpoch,
+            ready && !refreshing && !manualRefresh && !qtRefreshing, qtRefreshing, qtFeedback, qtFeedbackFailed,
+            connecting, RefreshNotice.ReduceMotion()));
+    }
+
+    private void ReportQtShellFeedback(string message, bool failed)
+    {
+        if (qtShell == null || closed) return;
+        qtFeedback = message;
+        qtFeedbackFailed = failed;
+        PublishQtShellState();
+    }
+
+    private async Task HandleQtShellRequest(QtShellRequest request)
+    {
+        if (qtShell == null || closed) return;
+        switch (request.Action)
+        {
+            case "refresh" when QtDevicesReady && !refreshing && !manualRefresh && !qtRefreshing:
+                await RefreshDevicesAndReport(Page.Devices);
+                break;
+            case "connect" when QtDevicesReady && !connecting:
+                var device = request.DeviceEpoch == qtDeviceEpoch && !string.IsNullOrEmpty(request.DeviceId)
+                    ? displayed.FirstOrDefault(item => item.Id == request.DeviceId && item.Online && item.CanConnect)
+                    : null;
+                if (device != null)
+                    await Launch(device, null, message => ReportQtShellFeedback(message, failed: true));
+                else
+                    ReportQtShellFeedback("设备状态已更新，请刷新后重试。", failed: true);
+                break;
+            case "account":
+                TrayResidency.ShowMainWindow(this);
+                OpenAccount();
+                break;
+        }
+    }
+}

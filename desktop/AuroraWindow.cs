@@ -330,7 +330,22 @@ public sealed partial class AuroraWindow : Window
 
     private async Task RefreshDevicesAndReport(Page activePage)
     {
-        var result = await RefreshDevices();
+        if (activePage == Page.Devices && qtShell != null)
+        {
+            qtRefreshing = true;
+            ReportQtShellFeedback("", failed: false);
+        }
+        try { await RefreshDevicesAndReportCore(activePage); }
+        finally
+        {
+            qtRefreshing = false;
+            PublishQtShellState();
+        }
+    }
+
+    private async Task RefreshDevicesAndReportCore(Page activePage)
+    {
+        if (await RefreshDevices() is not { } result) return;
         if (activePage == Page.Devices)
         {
             var issues = new[]
@@ -339,8 +354,10 @@ public sealed partial class AuroraWindow : Window
                 result.NetworkError == null ? null : network == null ? "Tailscale 未就绪。" : "未能完成 Tailscale 设备检测。"
             };
             var complete = issues.All(issue => issue == null);
-            SetFeedback(complete ? $"已刷新，发现 {displayed.Length} 台设备。" :
-                string.Concat(issues) + $" 共发现 {displayed.Length} 台设备。", activePage, transient: complete);
+            var message = complete ? $"已刷新，发现 {displayed.Length} 台设备。" :
+                string.Concat(issues) + $" 共发现 {displayed.Length} 台设备。";
+            ReportQtShellFeedback(message, failed: !complete);
+            SetFeedback(message, activePage, transient: complete);
         }
         else if (activePage == Page.Host)
         {
@@ -390,9 +407,10 @@ public sealed partial class AuroraWindow : Window
         HostAction.IsEnabled = !refreshing && !changingManagedHost.HasValue;
         AllowManagedHost.IsEnabled = host?.Managed == true && !changingManagedHost.HasValue;
         Refresh.IsEnabled = !manualRefresh && (!refreshing || page == Page.Remote);
+        PublishQtShellState();
     }
 
-    private async Task<(string NetworkError, string LanError, string HostError)> RefreshDevices()
+    private async Task<(string NetworkError, string LanError, string HostError)?> RefreshDevices()
     {
         if (refreshing || closed || presence == null || TailscaleRuntime.IsTransitioning) return default;
         refreshing = true;
@@ -521,6 +539,7 @@ public sealed partial class AuroraWindow : Window
         }.Where(message => message != null));
         ToolTip.SetTip(NetworkMessage, string.Join("\n", new[] { lanError, networkError }.Where(error => error != null)));
         if (page == Page.Devices) UpdatePageHeader();
+        SyncQtShellCatalog();
     }
 
     private void RenderDeviceSignIn()
@@ -587,6 +606,7 @@ public sealed partial class AuroraWindow : Window
         if (!updated) return;
         foreach (var card in DeviceCards.Children.OfType<DeviceCard>().Where(card => card.PreviewPath == path))
             card.ReloadPreview();
+        PublishQtShellState();
     }
 
     private void PlaceDevices(bool force = false)
@@ -808,7 +828,7 @@ public sealed partial class AuroraWindow : Window
 
     private Task Launch(Device device) => Launch(device, null);
 
-    private async Task Launch(Device device, StreamSessionWindow previousSession)
+    private async Task Launch(Device device, StreamSessionWindow previousSession, Action<string> reportToShell = null)
     {
         if (connecting || !device.CanConnect || closed) return;
         if (network?.IsAuthenticated != true)
@@ -840,6 +860,7 @@ public sealed partial class AuroraWindow : Window
             if (session == null)
             {
                 SetFeedback(message);
+                reportToShell?.Invoke(message);
                 return;
             }
             session.ShowFailure(message);
@@ -996,7 +1017,8 @@ public sealed partial class AuroraWindow : Window
         accountOwner = account.OwnerId;
         var name = string.IsNullOrWhiteSpace(account.DisplayName) ? account.LoginName : account.DisplayName;
         var accountTitle = string.IsNullOrWhiteSpace(name) ? account.TailnetName : name;
-        accountLabel.Text = connected && !string.IsNullOrWhiteSpace(accountTitle) ? accountTitle : "Tailscale 账户";
+        qtAccountName = connected && !string.IsNullOrWhiteSpace(accountTitle) ? accountTitle : "";
+        accountLabel.Text = qtAccountName.Length > 0 ? qtAccountName : "Tailscale 账户";
         const string githubSuffix = "@github";
         var loginName = account.LoginName?.Trim();
         var isGitHub = loginName?.Length > githubSuffix.Length &&
@@ -1027,6 +1049,7 @@ public sealed partial class AuroraWindow : Window
         AuroraVisual.Label(TailnetNav, accountLabel.Text + " · " + accountSubtitle.Text);
         if (accountAvatarUri != null && accountAvatar == null && avatarRequest == null && CanLoadAccountAvatar)
             _ = LoadAccountAvatar(account);
+        PublishQtShellState();
     }
 
     private bool CanLoadAccountAvatar => !closed && IsVisible && WindowState != WindowState.Minimized;
