@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: GPL-3.0-only
+cmake_minimum_required(VERSION 3.16)
+if(CMAKE_CURRENT_SOURCE_DIR STREQUAL CMAKE_SOURCE_DIR)
+    project(AuroraNativeDiscovery LANGUAGES CXX)
+    include(CTest)
+endif()
+
+find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS Core Network)
+find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Core Network)
+
+add_library(aurora_native_discovery STATIC Discovery.cpp Discovery.h KnownDevices.cpp KnownDevices.h)
+target_compile_features(aurora_native_discovery PUBLIC cxx_std_17)
+target_include_directories(aurora_native_discovery PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(aurora_native_discovery PUBLIC Qt${QT_VERSION_MAJOR}::Core Qt${QT_VERSION_MAJOR}::Network)
+
+if(CMAKE_CURRENT_SOURCE_DIR STREQUAL CMAKE_SOURCE_DIR AND BUILD_TESTING)
+    add_executable(AuroraDiscoveryFixtures DiscoveryFixtures.cpp)
+    target_link_libraries(AuroraDiscoveryFixtures PRIVATE aurora_native_discovery)
+    foreach(fixture catalog trust routes consumer)
+        add_test(NAME discovery-${fixture} COMMAND AuroraDiscoveryFixtures ${fixture})
+    endforeach()
+    add_executable(AuroraKnownDevicesFixtures KnownDevicesFixtures.cpp)
+    target_link_libraries(AuroraKnownDevicesFixtures PRIVATE aurora_native_discovery)
+    add_test(NAME discovery-device-storage COMMAND AuroraKnownDevicesFixtures)
+endif()

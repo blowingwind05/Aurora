@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "NativeDesktop.h"
+#include "discovery/KnownDevices.h"
 
 #include <QAction>
 #include <QApplication>
@@ -9,11 +10,17 @@
 #include <QFileInfo>
 #include <QIcon>
 #include <QJsonObject>
+#include <QKeySequence>
+#include <QMenuBar>
 #include <QTimer>
 
 namespace {
 using Aurora::Preferences::SleepMode;
 using Aurora::Platform::HostSleepMode;
+using Aurora::Platform::StartupInitialization;
+using Aurora::Platform::StartupRegistration;
+using Aurora::Platform::StartupResult;
+using Aurora::Platform::StartupState;
 using aurora::tailscale::BackendState;
 using aurora::tailscale::EmbeddedStatusClient;
 
@@ -45,9 +52,22 @@ NativeDesktop::NativeDesktop(const QString &version, const QString &dataDirector
 {
 }
 
+NativeDesktop::~NativeDesktop() = default;
+
 void NativeDesktop::start()
 {
+    initializeStartup();
     initializeTray();
+#ifdef Q_OS_MACOS
+    applicationMenu = std::make_unique<QMenuBar>();
+    auto *application = applicationMenu->addMenu(tr("Aurora"));
+    auto *settings = application->addAction(tr("设置…"), this, [this] { activate(QStringLiteral("settings")); });
+    settings->setMenuRole(QAction::PreferencesRole);
+    settings->setShortcut(QKeySequence::Preferences);
+    auto *quit = application->addAction(tr("退出 Aurora"), this, &quitDesktop);
+    quit->setMenuRole(QAction::QuitRole);
+    quit->setShortcut(QKeySequence::Quit);
+#endif
     if (!directory.isEmpty()) {
         QDir applicationDirectory(QCoreApplication::applicationDirPath());
 #ifdef Q_OS_WIN
@@ -71,6 +91,25 @@ void NativeDesktop::start()
         readTailnet();
     }
     activate();
+}
+
+void NativeDesktop::initializeStartup()
+{
+    const auto launcher = QCoreApplication::applicationFilePath();
+    // Register only the executable users can launch directly. During migration
+    // the companion binary needs an explicit --native argument.
+    if (directory.isEmpty() ||
+        QFileInfo(launcher).completeBaseName().compare(QStringLiteral("Aurora"), Qt::CaseInsensitive) != 0)
+        return;
+    startup = std::make_unique<StartupRegistration>([this] {
+        switch (preferences.claimStartupInitialization()) {
+        case Aurora::Preferences::StartupClaim::Claimed: return StartupInitialization::Claimed;
+        case Aurora::Preferences::StartupClaim::AlreadyInitialized: return StartupInitialization::AlreadyClaimed;
+        case Aurora::Preferences::StartupClaim::Failed: return StartupInitialization::Failed;
+        }
+        return StartupInitialization::Failed;
+    }, launcher);
+    startup->initializeDefault();
 }
 
 void NativeDesktop::readTailnet()
@@ -121,9 +160,8 @@ void NativeDesktop::publishTailnetStatus(const aurora::tailscale::Status &status
     const auto name = status.displayName.isEmpty() ? status.loginName : status.displayName;
     snapshot.insert(QStringLiteral("accountName"), name);
     snapshot.insert(QStringLiteral("accountSubtitle"), status.loginName);
-    snapshot.insert(QStringLiteral("deviceAccess"),
-                    status.state == BackendState::NeedsLogin || status.state == BackendState::Stopped
-                        ? QStringLiteral("signedOut") : QStringLiteral("loading"));
+    snapshot.insert(QStringLiteral("refreshAvailable"), refreshAvailable && !refreshing);
+    snapshot.insert(QStringLiteral("refreshing"), refreshing);
     snapshot.insert(QStringLiteral("tailscaleAccount"), QVariantMap{
         {QStringLiteral("mode"), embeddedSelected ? QStringLiteral("embedded") : QStringLiteral("system")},
         {QStringLiteral("modeLabel"), embeddedSelected ? tr("内置 Tailscale") : tr("系统 Tailscale")},
@@ -139,7 +177,39 @@ void NativeDesktop::publishTailnetStatus(const aurora::tailscale::Status &status
         {QStringLiteral("busy"), refreshing},
         {QStringLiteral("revision"), QVariant::fromValue(tailnetGeneration)},
     });
+    updateDeviceCatalog(status);
     emit stateChanged(snapshot);
+}
+
+void NativeDesktop::updateDeviceCatalog(const aurora::tailscale::Status &status)
+{
+    if (!(catalogAccount == status.account)) {
+        catalogAccount = status.account;
+        ++deviceEpoch;
+    }
+    QVariantList rows;
+    if (status.account) {
+        Aurora::Discovery::NetworkSnapshot network{status.localAddress, status.account->ownerId, status.account->nodeId, {}};
+        for (const auto &peer : status.peers) {
+            Aurora::Discovery::Device device;
+            device.id = peer.nodeId;
+            device.name = peer.name;
+            device.platform = peer.platform;
+            device.address = peer.address;
+            device.alternateAddress = peer.alternateAddress;
+            device.online = peer.online;
+            network.devices.append(device);
+        }
+        Aurora::Discovery::TailnetSnapshot cached;
+        cached.known = Aurora::Discovery::readKnownDevices(directory, network);
+        for (const auto &device : Aurora::Discovery::visibleDevices(&network, nullptr, &cached))
+            rows.append(Aurora::Discovery::qtDeviceRow(device).toVariantMap());
+    }
+    snapshot.insert(QStringLiteral("deviceAccess"), status.account ? QStringLiteral("ready")
+        : status.state == BackendState::NeedsLogin || status.state == BackendState::Stopped
+            ? QStringLiteral("signedOut") : QStringLiteral("loading"));
+    snapshot.insert(QStringLiteral("devices"), rows);
+    snapshot.insert(QStringLiteral("deviceEpoch"), deviceEpoch);
 }
 
 QString NativeDesktop::bundledEntryPoint()
@@ -224,6 +294,7 @@ void NativeDesktop::refreshPreferences(const QJsonObject &request)
     const auto value = request.value(QStringLiteral("preferenceValue"));
     const bool trayAvailable = !tray.icon().isNull() && QSystemTrayIcon::isSystemTrayAvailable();
     QString closeFeedback;
+    QString startupFeedback;
     QString sleepFeedback;
     if (action == QLatin1String("set-close-to-tray")) {
         if (!trayAvailable || !value.isBool() || !preferences.setCloseToTray(value.toBool()))
@@ -240,8 +311,32 @@ void NativeDesktop::refreshPreferences(const QJsonObject &request)
         } else {
             sleepFeedback = tr("无法保存自动休眠设置。");
         }
-    } else if (action != QLatin1String("read-general-settings") && action != QLatin1String("set-startup-enabled")) {
+    } else if (action == QLatin1String("set-startup-enabled")) {
+        if (!startup || !value.isBool() || startup->change(value.toBool()) != StartupResult::Ok)
+            startupFeedback = tr("无法更改开机自启动。");
+    } else if (action != QLatin1String("read-general-settings")) {
         return;
+    }
+
+    const auto startupState = startup ? startup->read() : StartupState::Unavailable;
+    const bool startupEnabled = startupState == StartupState::On || startupState == StartupState::NeedsApproval ||
+        startupState == StartupState::OtherLocation;
+    const bool startupAvailable = startupState != StartupState::Unavailable && startupState != StartupState::ReadFailed;
+    if (startupFeedback.isEmpty()) {
+        switch (startupState) {
+        case StartupState::NeedsApproval:
+            startupFeedback = tr("请在系统设置的登录项中允许 Aurora。"); break;
+        case StartupState::OtherLocation:
+            startupFeedback = tr("启动项指向另一个位置的 Aurora。关闭后重新开启可更新路径。"); break;
+        case StartupState::Unavailable:
+            startupFeedback = tr("此系统或应用包无法登记开机自启动。"); break;
+        case StartupState::ReadFailed:
+            startupFeedback = tr("无法读取开机自启动状态。"); break;
+        default:
+            if (startup && startup->initializationFailed())
+                startupFeedback = tr("无法登记开机自启动。");
+            break;
+        }
     }
 
     preferenceRequestId = id;
@@ -250,10 +345,11 @@ void NativeDesktop::refreshPreferences(const QJsonObject &request)
         {QStringLiteral("acknowledgedRequestId"), id},
         {QStringLiteral("closeToTray"), tray.isVisible()},
         {QStringLiteral("trayAvailable"), trayAvailable},
-        {QStringLiteral("startupEnabled"), false},
-        {QStringLiteral("startupAvailable"), false},
+        {QStringLiteral("startupEnabled"), startupEnabled},
+        {QStringLiteral("startupAvailable"), startupAvailable},
         {QStringLiteral("sleepMode"), sleepModeName(preferences.sleepMode())},
         {QStringLiteral("closeFeedback"), closeFeedback},
+        {QStringLiteral("startupFeedback"), startupFeedback},
         {QStringLiteral("sleepFeedback"), sleepFeedback},
     });
     emit stateChanged(snapshot);

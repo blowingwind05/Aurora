@@ -29,8 +29,12 @@ if(MSVC)
     target_compile_options(AuroraQtShell PRIVATE /utf-8)
 endif()
 add_subdirectory(native/platform)
+add_subdirectory(native/discovery)
 add_subdirectory(native/sunshine)
+add_subdirectory(native/sunshine/admin)
+add_subdirectory(native/stream)
 add_subdirectory(native/tailscale)
 target_link_libraries(AuroraQtShell PRIVATE Qt${QT_VERSION_MAJOR}::Quick Qt${QT_VERSION_MAJOR}::QuickControls2
     Qt${QT_VERSION_MAJOR}::Network Qt${QT_VERSION_MAJOR}::Widgets
-    aurora_native_platform Aurora::SunshineConfig AuroraNativeTailscale)
+    aurora_native_platform aurora_native_discovery Aurora::SunshineConfig Aurora::SunshineAdmin
+    aurora_native_stream AuroraNativeTailscale)

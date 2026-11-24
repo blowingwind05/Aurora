@@ -3,6 +3,7 @@
 
 #include "preferences/DesktopPreferences.h"
 #include "platform/HostSleepPrevention.h"
+#include "platform/StartupRegistration.h"
 #include "tailscale/EmbeddedStatusClient.h"
 
 #include <QMenu>
@@ -11,6 +12,7 @@
 #include <QVariantMap>
 
 class QJsonObject;
+class QMenuBar;
 
 class NativeDesktop final : public QObject
 {
@@ -18,6 +20,7 @@ class NativeDesktop final : public QObject
 
 public:
     NativeDesktop(const QString &version, const QString &dataDirectory);
+    ~NativeDesktop() override;
     static QString bundledEntryPoint();
     const QVariantMap &state() const { return snapshot; }
 
@@ -29,9 +32,11 @@ signals:
     void stateChanged(const QVariantMap &next);
 
 private:
+    void initializeStartup();
     void initializeTray();
     void readTailnet();
     void publishTailnetStatus(const aurora::tailscale::Status &status, bool refreshing = false);
+    void updateDeviceCatalog(const aurora::tailscale::Status &status);
     void refreshPreferences(const QJsonObject &request);
 
     const QString directory;
@@ -40,9 +45,13 @@ private:
     QVariantMap snapshot;
     QMenu trayMenu;
     QSystemTrayIcon tray;
+    std::unique_ptr<QMenuBar> applicationMenu;
+    std::unique_ptr<Aurora::Platform::StartupRegistration> startup;
     int preferenceRequestId = 0;
     std::unique_ptr<aurora::tailscale::EmbeddedStatusClient> tailnet;
     aurora::tailscale::Status tailnetStatus;
+    std::optional<aurora::tailscale::AccountIdentity> catalogAccount;
     quint64 tailnetGeneration = 0;
+    int deviceEpoch = 0;
     bool embeddedSelected = false;
 };
