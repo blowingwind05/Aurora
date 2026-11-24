@@ -1,9 +1,9 @@
 #!/bin/bash
 set -euo pipefail
 
-here="$(cd "$(dirname "$0")" && pwd)"
-desktop="$(cd "$here/../.." && pwd)"
-repository="$(cd "$desktop/.." && pwd)"
+here="$(cd "$(dirname "$0")" && pwd -P)"
+desktop="$(cd "$here/../.." && pwd -P)"
+repository="$(cd "$desktop/.." && pwd -P)"
 architecture="${1:?Expected arm64 or x64}"
 destination="${2:?Expected the destination Aurora.app Contents directory}"
 qmake="${3:-qmake}"
@@ -26,6 +26,8 @@ qt_bin="$("$qmake" -query QT_HOST_BINS)"
 
 # The upstream qmake project expects a source and build path without spaces.
 work="$(mktemp -d /tmp/aurora-streamer.XXXXXXXX)"
+# CMake's generated MOC includes must use the physical path behind macOS /tmp.
+work="$(cd "$work" && pwd -P)"
 trap 'rm -rf -- "$work"' EXIT
 source="$work/moonlight"
 build="$work/build"
