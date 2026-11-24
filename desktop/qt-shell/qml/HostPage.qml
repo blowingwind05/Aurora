@@ -141,10 +141,11 @@ Item {
         height: 34
 
         HostText {
+            objectName: "hostPageTitle"
             anchors.verticalCenter: parent.verticalCenter
             text: qsTr("本机被控")
             font.pixelSize: page.compact ? 21 : 26
-            font.weight: Font.DemiBold
+            font.weight: Font.Bold
             Accessible.role: Accessible.Heading
         }
         AuroraButton {
@@ -229,15 +230,17 @@ Item {
                         spacing: 10
 
                         AuroraGlyph {
+                            objectName: "hostComputerIcon"
                             Layout.preferredWidth: 28
                             Layout.preferredHeight: 28
-                            icon.source: Qt.resolvedUrl("../../../docs/visual-design/assets/icons/prototype/panel-top-tight.svg")
+                            icon.source: AuroraTheme.desktopAsset("panel-top-tight.svg")
                         }
                         HostText {
+                            objectName: "hostComputerTitle"
                             Layout.fillWidth: true
                             text: qsTr("这台电脑")
                             font.pixelSize: 15
-                            font.weight: Font.DemiBold
+                            font.weight: Font.Bold
                             Accessible.role: Accessible.Heading
                         }
                         RowLayout {
@@ -402,7 +405,7 @@ Item {
                         width: parent.width
                         text: qsTr("允许极光控制这台 Mac")
                         font.pixelSize: 15
-                        font.weight: Font.DemiBold
+                        font.weight: Font.Bold
                         Accessible.role: Accessible.Heading
                     }
                     HostText {
@@ -443,7 +446,7 @@ Item {
                         Layout.fillWidth: true
                         text: qsTr("常用设置")
                         font.pixelSize: 15
-                        font.weight: Font.DemiBold
+                        font.weight: Font.Bold
                         Accessible.role: Accessible.Heading
                     }
                     PanelLink {

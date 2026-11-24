@@ -8,6 +8,10 @@ Live {
 
     TestEvent { id: input }
     TestResult { id: result }
+    Image {
+        id: hostIconProbe
+        visible: false
+    }
 
     Timer {
         interval: 35
@@ -72,6 +76,14 @@ Live {
                 tryCompare(item("hostStatus"), "text", "未启用")
                 mouseClick(item("navHost"))
                 compare(shell.currentPage, "host")
+                stage = "被控面板标题与图标"
+                const hostIcon = item("hostComputerIcon")
+                compare(hostIcon.width, 28)
+                compare(hostIcon.height, 28)
+                hostIconProbe.source = hostIcon.icon.source
+                tryCompare(hostIconProbe, "status", Image.Ready)
+                compare(item("hostPageTitle").font.weight, Font.Bold)
+                compare(item("hostComputerTitle").font.weight, Font.Bold)
                 const page = item("hostPage")
                 const toggle = item("allowHost")
                 const lan = item("hostLan")

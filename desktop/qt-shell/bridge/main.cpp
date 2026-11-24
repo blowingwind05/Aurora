@@ -2,6 +2,7 @@
 #include <QByteArray>
 #include <QCoreApplication>
 #include <QGuiApplication>
+#include <QIcon>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QQmlApplicationEngine>
@@ -186,6 +187,12 @@ int main(int argc, char *argv[])
 #endif
     QGuiApplication::setHighDpiScaleFactorRoundingPolicy(Qt::HighDpiScaleFactorRoundingPolicy::PassThrough);
     QGuiApplication app(argc, argv);
+#ifdef Q_OS_WIN
+    QIcon icon(QStringLiteral(":/aurora/brand/Aurora.ico"));
+    if (icon.availableSizes().isEmpty())
+        icon = QIcon(QStringLiteral(":/aurora/brand/Aurora-Windows-32.png"));
+    app.setWindowIcon(icon);
+#endif
     const auto arguments = app.arguments();
     if (arguments.size() != (windowsSession ? 5 : 2)) {
         qWarning("Usage: AuroraQtShell <Live.qml> or --windows-session <popup.qml> <owner> <owner-pid>");

@@ -15,7 +15,7 @@
 
 ## 启动真实主窗口联调
 
-Windows Qt 便携包带有 Qt 运行时和 QML 入口，可直接双击 `Aurora.exe` 启动。以下命令用于从源码独立构建并试用 Qt 界面。
+Windows Qt 便携包带有 Qt 运行时和 QML 入口，可直接双击 `Aurora.exe` 启动。Qt 子程序的窗口图标和可执行文件图标均使用 `desktop/Assets/Aurora.ico`。打包 QML 时同时复制 `desktop/Assets/panel-top-tight.svg`，供「这台电脑」卡片使用。以下命令用于从源码独立构建并试用 Qt 界面。
 
 需要 .NET 9、CMake、C++17 工具链和 Qt Quick、Quick Controls 2 的开发与运行组件。当前验收环境为 Windows x64、MSVC 和 Qt 5.15.2。准备 Qt 运行时后，从已应用补丁的副本根目录运行。Windows 使用 x64 开发者 PowerShell。给 `CMAKE_PREFIX_PATH` 填写 Qt 安装前缀，Windows 的 `PATH` 中加入该 Qt 的 `bin`。下面的构建路径应位于副本或独立临时目录。
 
