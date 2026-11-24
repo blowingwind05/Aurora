@@ -1,12 +1,15 @@
 using System;
 using System.Globalization;
 using System.Threading.Tasks;
+using Avalonia.Threading;
 
 namespace Aurora;
 
 public sealed partial class AuroraWindow
 {
-    private TailscalePage qtTailscalePage;
+    private TailscaleAccountSession tailscaleAccount;
+    private readonly DispatcherTimer tailscaleAccountTimer = new() { Interval = TimeSpan.FromSeconds(3) };
+    private bool qtTailscaleOpened;
     private TailscaleStatus qtTailscaleStatus;
     private int qtTailscaleStatusGeneration;
     private bool qtHasSystemTailscale;
@@ -17,14 +20,15 @@ public sealed partial class AuroraWindow
     private string qtTailscaleNotice;
     private int qtTailscaleNoticeVersion;
 
-    private bool QtTailscaleBlocksDevices => qtTailscalePage?.QtInteractionInProgress == true;
+    private bool QtAccountOwnsPresentation => qtTailscaleOpened && qtShell != null && qtWindowVisible;
+    private bool QtTailscaleBlocksDevices => qtTailscaleOpened && tailscaleAccount?.Busy == true;
 
     private void UpdateQtTailscaleAccount(TailscaleStatus status)
     {
         if (qtShell == null) return;
         qtTailscaleStatus = status;
         qtTailscaleStatusGeneration = TailscaleRuntime.Generation;
-        if (qtTailscalePage == null) ReadQtTailscaleCapabilities();
+        if (!qtTailscaleOpened) ReadQtTailscaleCapabilities();
         PublishQtShellState();
     }
 
@@ -36,8 +40,8 @@ public sealed partial class AuroraWindow
 
     private QtShellTailscaleAccount GetQtTailscaleAccount()
     {
-        if (qtTailscalePage != null)
-            return qtTailscalePage.ReadQtPresentation() with
+        if (qtTailscaleOpened && tailscaleAccount != null)
+            return tailscaleAccount.ReadQtPresentation() with
             {
                 Confirmation = qtTailscaleConfirmation,
                 Notice = qtTailscaleNotice,
@@ -47,45 +51,80 @@ public sealed partial class AuroraWindow
         var mode = TailscaleRuntime.Mode;
         var state = TailscaleRuntime.IsTransitioning ? TailscaleState.Starting :
             qtTailscaleStatusGeneration == TailscaleRuntime.Generation ? qtTailscaleStatus?.State : null;
-        var (status, detail, _) = TailscalePage.DescribeStatus(state, mode, qtSupportsEmbeddedTailscale);
+        var (status, detail, _) = TailscaleAccountSession.DescribeStatus(state, mode, qtSupportsEmbeddedTailscale);
         return new QtShellTailscaleAccount(mode == TailscaleMode.Embedded ? "embedded" : "system",
-            TailscalePage.DescribeMode(mode, qtHasSystemTailscale), qtSupportsEmbeddedTailscale, qtHasSystemTailscale,
+            TailscaleAccountSession.DescribeMode(mode, qtHasSystemTailscale), qtSupportsEmbeddedTailscale, qtHasSystemTailscale,
             null, state?.ToString() ?? "Checking", status, detail, "Tailscale", null, null, null, null, "", false, false, false);
+    }
+
+    private TailscaleAccountSession EnsureTailscaleAccount()
+    {
+        if (tailscaleAccount != null) return tailscaleAccount;
+        tailscaleAccount = new TailscaleAccountSession(new TailscaleAccountRuntime(),
+            action => Dispatcher.UIThread.Post(action), ConfirmLogout, ConfirmTailscaleSwitch,
+            () => connecting, ShowTailscaleSwitchSuccess);
+        tailscaleAccount.StatusChanged += OnAccountStatusChanged;
+        tailscaleAccount.Changed += PublishQtShellState;
+        tailscaleAccountTimer.Tick += async (_, _) =>
+        {
+            if (tailscaleAccount != null) await tailscaleAccount.Poll();
+        };
+        return tailscaleAccount;
+    }
+
+    private void UpdateTailscaleAccountActivity()
+    {
+        if (tailscaleAccount == null || closed) return;
+        var active = qtTailscaleOpened || tailscalePage != null && TailnetPage.IsVisible;
+        if (active) tailscaleAccountTimer.Start();
+        else tailscaleAccountTimer.Stop();
+        _ = tailscaleAccount.SetActive(active);
+    }
+
+    private void CloseTailscaleAccount()
+    {
+        tailscaleAccountTimer.Stop();
+        if (tailscaleAccount == null) return;
+        tailscaleAccount.StatusChanged -= OnAccountStatusChanged;
+        tailscaleAccount.Changed -= PublishQtShellState;
+        tailscaleAccount.Dispose();
+        tailscaleAccount = null;
     }
 
     private void OpenQtTailscaleController()
     {
-        if (qtTailscalePage != null) return;
-        qtTailscalePage = new TailscalePage(
-            () => ConfirmQtTailscale("要退出登录吗？", "退出后本机会断开 Tailscale 网络，重新登录后才能连接设备。",
-                "退出登录", destructive: true),
-            (title, description) => ConfirmQtTailscale(title, description, "切换", destructive: false),
-            () => connecting,
-            message =>
-            {
-                qtTailscaleNotice = message;
-                qtTailscaleNoticeVersion++;
-                PublishQtShellState();
-            }, externalPresentation: true);
-        qtTailscalePage.StatusChanged += OnAccountStatusChanged;
-        qtTailscalePage.QtPresentationChanged += PublishQtShellState;
-        qtTailscalePage.SetActive(true);
+        if (qtTailscaleOpened) return;
+        EnsureTailscaleAccount();
+        qtTailscaleOpened = true;
+        UpdateTailscaleAccountActivity();
+        PublishQtShellState();
     }
 
     private void CloseQtTailscaleController()
     {
+        if (!qtTailscaleOpened) return;
+        qtTailscaleOpened = false;
+        tailscaleAccount?.RevokePendingActions();
         FinishQtTailscaleConfirmation(approved: false);
-        if (qtTailscalePage == null) return;
-        qtTailscalePage.StatusChanged -= OnAccountStatusChanged;
-        qtTailscalePage.QtPresentationChanged -= PublishQtShellState;
-        qtTailscalePage.Dispose();
-        qtTailscalePage = null;
         qtTailscaleNotice = null;
+        UpdateTailscaleAccountActivity();
+    }
+
+    private void ShowTailscaleSwitchSuccess(string message)
+    {
+        if (!QtAccountOwnsPresentation)
+        {
+            UpdateNotice.ShowRefreshSuccess(message);
+            return;
+        }
+        qtTailscaleNotice = message;
+        qtTailscaleNoticeVersion++;
+        PublishQtShellState();
     }
 
     private Task<bool> ConfirmQtTailscale(string title, string body, string label, bool destructive)
     {
-        if (qtShell == null || closed || qtTailscaleDecision != null) return Task.FromResult(false);
+        if (!QtAccountOwnsPresentation || closed || qtTailscaleDecision != null) return Task.FromResult(false);
         var decision = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         qtTailscaleDecision = decision;
         qtTailscaleConfirmation = new(++qtTailscaleConfirmationId, title, body, label, destructive);
@@ -117,7 +156,7 @@ public sealed partial class AuroraWindow
                 FinishQtTailscaleConfirmation(request.Action == "tailscale.confirm");
             return;
         }
-        if (qtTailscalePage != null)
-            await qtTailscalePage.HandleQtAction(request.Action, request.AccountTarget, request.AccountRevision);
+        if (QtAccountOwnsPresentation && tailscaleAccount != null)
+            await tailscaleAccount.HandleQtAction(request.Action, request.AccountTarget, request.AccountRevision);
     }
 }

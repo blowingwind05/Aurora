@@ -217,6 +217,7 @@ public sealed partial class AuroraWindow : Window
             presence?.Dispose();
             CloseSunshineSettings();
             tailscalePage?.Dispose();
+            CloseTailscaleAccount();
         };
         TailscaleRuntime.ContextChanging += OnTailscaleContextChanging;
         TailscaleRuntime.ContextChanged += OnTailscaleContextChanged;
@@ -1160,11 +1161,15 @@ public sealed partial class AuroraWindow : Window
         catch (Exception error) when (error is IOException or InvalidOperationException or TimeoutException) { Debug.WriteLine(error.Message); }
     }
 
-    private Task<bool> ConfirmLogout() => ConfirmAction("要退出登录吗？",
+    private Task<bool> ConfirmLogout() => ConfirmAccountAction("要退出登录吗？",
         "退出后本机会断开 Tailscale 网络，重新登录后才能连接设备。", "退出登录", destructive: true);
 
     private Task<bool> ConfirmTailscaleSwitch(string title, string description) =>
-        ConfirmAction(title, description, "切换", destructive: false);
+        ConfirmAccountAction(title, description, "切换", destructive: false);
+
+    private Task<bool> ConfirmAccountAction(string title, string description, string action, bool destructive) =>
+        QtAccountOwnsPresentation ? ConfirmQtTailscale(title, description, action, destructive)
+            : ConfirmAction(title, description, action, destructive);
 
     private Task<bool> ConfirmAction(string title, string description, string action, bool destructive)
     {
@@ -1211,9 +1216,7 @@ public sealed partial class AuroraWindow : Window
         if (!HostPage.IsVisible) sunshinePage?.ClearUnsubmittedSecrets();
         if (TailnetPage.IsVisible && tailscalePage == null)
         {
-            tailscalePage = new TailscalePage(ConfirmLogout, ConfirmTailscaleSwitch, () => connecting,
-                UpdateNotice.ShowRefreshSuccess);
-            tailscalePage.StatusChanged += OnAccountStatusChanged;
+            tailscalePage = new TailscalePage(EnsureTailscaleAccount());
             TailnetPage.Content = tailscalePage;
         }
         if (SettingsPage.IsVisible)
@@ -1222,6 +1225,7 @@ public sealed partial class AuroraWindow : Window
             else settings.Refresh();
         }
         tailscalePage?.SetActive(TailnetPage.IsVisible);
+        UpdateTailscaleAccountActivity();
         UpdatePageHeader();
         UpdateActions();
         if (DevicesPage.IsVisible || HostPage.IsVisible) _ = RefreshDevices();

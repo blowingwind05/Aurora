@@ -54,15 +54,16 @@ pwsh -File ./desktop/Build-Mac.ps1 -Architecture arm64 -TailscaleDirectory ./des
 
 | 领域 | 代码 |
 | --- | --- |
-| 主窗口、页面切换和设备卡 | [AuroraWindow.axaml](desktop/AuroraWindow.axaml)、[AuroraWindow.cs](desktop/AuroraWindow.cs)、[DeviceCard.cs](desktop/DeviceCard.cs) |
-| 主题、控件和资产 | [AuroraApp.axaml](desktop/AuroraApp.axaml)、[AuroraVisual.cs](desktop/AuroraVisual.cs)、[Assets](desktop/Assets) |
-| 设备发现、选路与登录 | [Discovery.cs](desktop/Discovery.cs)、[TailscaleRuntime.cs](desktop/TailscaleRuntime.cs)、[EmbeddedTailnet.cs](desktop/EmbeddedTailnet.cs) |
+| 主窗口、页面切换和设备卡 | [Qt 主窗口](desktop/qt-shell/qml/AuroraMainWindow.qml)、[设备卡](desktop/qt-shell/qml/DeviceCard.qml)、[宿主连接](desktop/AuroraWindow.QtShell.cs) |
+| 主题、控件和资产 | [Qt 主题](desktop/qt-shell/qml/AuroraTheme.qml)、[视觉方案](docs/visual-design/README.md)、[应用资产](desktop/Assets) |
+| 设备发现与选路 | [Discovery.cs](desktop/Discovery.cs)、[TailscaleRuntime.cs](desktop/TailscaleRuntime.cs)、[EmbeddedTailnet.cs](desktop/EmbeddedTailnet.cs) |
+| Tailscale 账户 | [TailscaleAccountSession.cs](desktop/TailscaleAccountSession.cs)、[Qt 账户页](desktop/qt-shell/qml/TailscaleAccountPage.qml) |
 | 同账号配对 | [AutomaticPairing.cs](desktop/AutomaticPairing.cs) 与各组件的后台配对补丁 |
 | 被控组件启动与设置 | [BundledSunshine.cs](desktop/BundledSunshine.cs)、[SunshineHostSession.cs](desktop/SunshineHostSession.cs)、[SunshineAdmin.cs](desktop/SunshineAdmin.cs)、[Qt 设置页](desktop/qt-shell/qml/SunshineSettings.qml) |
 | 串流窗口与主控偏好 | [Windows 串流窗](desktop/Platform/Windows/StreamSessionWindow.cs)、[macOS 原生顶栏补丁](desktop/upstream/moonlight-qt/0013-aurora-macos-unified-session-toolbar.patch)、[StreamPreferences.cs](desktop/StreamPreferences.cs) |
 | 桌面壁纸预览 | [DesktopWallpaper.cs](desktop/DesktopWallpaper.cs) 与组件的壁纸读取补丁 |
 
-Windows 与 macOS 共用 Avalonia 主窗口。Windows 将串流渲染挂进 Aurora 的会话窗，macOS 的窗口化会话使用串流组件的 AppKit 顶栏。调整串流界面时，核对目标平台的实现入口。
+Windows 与 macOS 的正式包共用 Qt Quick 主窗口和 C# 宿主。Windows 将串流渲染挂进 Aurora 的会话窗，macOS 的窗口化会话使用串流组件的 AppKit 顶栏。调整串流界面时，核对目标平台的实现入口。
 
 发现阶段合并同一宿主的局域网和 Tailscale 路径。首次自动配对通过当前 Tailscale 账号核验对端，串流组件继续验证 Sunshine 的配对证书。内置 Tailscale 通过应用内节点转发 Aurora 所需的连接；Sunshine 的管理 HTTPS 在本机回环地址，自定义管理请求也沿用证书校验。
 
