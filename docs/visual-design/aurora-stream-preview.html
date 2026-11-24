@@ -1,0 +1,227 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Aurora 串流窗口</title>
+  <link rel="stylesheet" href="source/aurora-stream.css">
+  <script src="source/aurora-stream.js" defer></script>
+</head>
+<body>
+  <svg class="glyph-library" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+    <symbol id="glyph-monitor" viewBox="0 0 24 24"><rect width="20" height="14" x="2" y="3" rx="2"/><path d="M8 21h8m-4-4v4"/></symbol>
+    <symbol id="glyph-full" viewBox="0 0 24 24"><path d="M8 3H5a2 2 0 0 0-2 2v3m13-5h3a2 2 0 0 1 2 2v3m0 8v3a2 2 0 0 1-2 2h-3m-8 0H5a2 2 0 0 1-2-2v-3"/></symbol>
+    <symbol id="glyph-unfull" viewBox="0 0 24 24"><path d="M8 3v3a2 2 0 0 1-2 2H3m13-5v3a2 2 0 0 0 2 2h3m0 8h-3a2 2 0 0 0-2 2v3m-8 0v-3a2 2 0 0 0-2-2H3"/></symbol>
+    <symbol id="glyph-controls" viewBox="0 0 24 24"><path d="M3 7h2.5m5 0H21M3 17h10.5m5 0H21"/><circle cx="8" cy="7" r="2.5"/><circle cx="16" cy="17" r="2.5"/></symbol>
+    <symbol id="glyph-disconnect" viewBox="0 0 24 24"><path d="M10 17l5-5-5-5m5 5H3m10-8h5a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-5"/></symbol>
+    <symbol id="glyph-check" viewBox="0 0 24 24"><path stroke-width="3" d="m5 12 4 4L19 6"/></symbol>
+    <symbol id="glyph-alert" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 8v4m0 4h.01"/></symbol>
+    <symbol id="glyph-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+    <symbol id="glyph-signal" viewBox="0 0 24 24"><path d="M4 20v-2m5 2v-5m5 5v-9m5 9V6"/></symbol>
+    <symbol id="glyph-next" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></symbol>
+    <symbol id="glyph-back" viewBox="0 0 24 24"><path d="m15 6-6 6 6 6"/></symbol>
+    <symbol id="glyph-volume" viewBox="0 0 24 24"><path d="M11 5 6 9H3v6h3l5 4zm4 4a4 4 0 0 1 0 6m3-9a8 8 0 0 1 0 12"/></symbol>
+    <symbol id="glyph-mouse" viewBox="0 0 24 24"><rect x="5" y="3" width="14" height="18" rx="7"/><path d="M12 3v6"/></symbol>
+    <symbol id="glyph-shield" viewBox="0 0 24 24"><path d="M12 22c4.6-2.4 8-6 8-10V5l-8-3-8 3v7c0 4 3.4 7.6 8 10z"/></symbol>
+    <symbol id="glyph-minus" viewBox="0 0 24 24"><path d="M5 12h14"/></symbol>
+    <symbol id="glyph-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="glyph-max" viewBox="0 0 24 24"><rect width="14" height="14" x="5" y="5" rx="1"/></symbol>
+    <symbol id="glyph-restore" viewBox="0 0 24 24"><rect width="11" height="11" x="4" y="9" rx="1"/><path d="M9 5h10a1 1 0 0 1 1 1v10"/></symbol>
+    <symbol id="glyph-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
+  </svg>
+
+  <main class="preview" aria-label="串流窗口原型">
+    <div class="preview-bar" aria-label="原型选项">
+      <div class="segmented" role="group" aria-label="窗口状态">
+        <button type="button" data-preview-phase="connecting" aria-pressed="false">连接中</button>
+        <button type="button" data-preview-phase="connected" aria-pressed="true">已出画</button>
+        <button type="button" data-preview-phase="failed" aria-pressed="false">连接失败</button>
+        <button type="button" data-preview-offline>设备离线</button>
+      </div>
+      <label class="preview-quality">网络质量
+        <select aria-label="网络质量" data-preview-quality>
+          <option value="good">良好</option><option value="poor">较差</option><option value="bad">很差</option>
+        </select>
+      </label>
+      <div class="segmented" role="group" aria-label="平台">
+        <button type="button" data-preview-platform="windows" aria-pressed="true">Windows</button>
+        <button type="button" data-preview-platform="macos" aria-pressed="false">macOS</button>
+      </div>
+    </div>
+
+    <section class="session" data-phase="connected" data-platform="windows" aria-label="书房主机串流窗口">
+      <div class="fullscreen-edge" aria-hidden="true"></div>
+      <header class="session-bar" aria-label="串流工具栏">
+        <div class="traffic" role="group" aria-label="macOS 窗口控制">
+          <button type="button" data-window="close" aria-label="关闭窗口" title="关闭窗口"></button>
+          <button type="button" data-window="minimize" aria-label="最小化窗口" title="最小化窗口"></button>
+          <button type="button" data-window="zoom" aria-label="切换全屏" title="切换全屏"></button>
+        </div>
+
+        <img class="brand" src="assets/brand/Aurora-transparent.svg" alt="Aurora">
+        <div class="context">
+          <span class="device" title="书房主机">书房主机</span>
+          <div class="status-wrap">
+            <span class="sr-only" role="status" data-state-text>已连接</span>
+            <button class="status" type="button" title="连接详情" aria-label="已连接，查看连接详情" aria-expanded="false" aria-controls="connection-details">
+              <i aria-hidden="true"></i><span>已连接</span><svg class="icon detail-arrow" aria-hidden="true"><use href="#glyph-down"/></svg>
+            </button>
+            <section class="connection-panel detail-panel" id="connection-details" aria-label="连接详情" tabindex="-1" hidden>
+              <div class="detail-panel-head">
+                <svg class="icon" aria-hidden="true"><use href="#glyph-signal"/></svg>
+                <span>网络延迟</span><strong data-metric="latency">12 ms</strong>
+              </div>
+              <dl class="detail-metrics">
+                <div><dt>画面分辨率</dt><dd>1920 × 1080</dd></div>
+                <div><dt>接收帧率</dt><dd data-metric="fps">59.9 fps</dd></div>
+                <div><dt>接收码率</dt><dd data-metric="bitrate">18.6 Mbps</dd></div>
+                <div><dt>网络丢帧</dt><dd data-metric="loss">0.0%</dd></div>
+                <div><dt>视频编码</dt><dd>HEVC (H.265)</dd></div>
+                <div><dt>平均解码耗时</dt><dd>1.8 ms</dd></div>
+              </dl>
+            </section>
+          </div>
+          <div class="display-wrap">
+            <div class="display-strip">
+              <div class="display-tabs" role="group" aria-label="远端显示器页签"></div>
+              <button class="display compact-display" type="button" aria-label="显示器列表与详情" title="显示器列表与详情" aria-expanded="false" aria-controls="display-details">
+                <svg class="icon" aria-hidden="true"><use href="#glyph-monitor"/></svg>
+              </button>
+              <button class="display-add" type="button" aria-label="新增虚拟显示器" title="新增虚拟显示器" aria-busy="false">
+                <svg class="icon" aria-hidden="true"><use href="#glyph-plus"/></svg><i class="spinner" aria-hidden="true"></i>
+              </button>
+              <span class="sr-only" data-display-progress role="status"></span>
+            </div>
+            <p class="display-error" hidden>无法新增虚拟显示器，请重试。</p>
+            <template id="display-tab-template">
+              <button class="display display-tab" type="button" aria-pressed="false">
+                <svg class="icon" aria-hidden="true"><use href="#glyph-monitor"/></svg><span></span><svg class="icon detail-arrow" aria-hidden="true"><use href="#glyph-down"/></svg>
+              </button>
+            </template>
+            <template id="display-close-template">
+              <button class="display-close" type="button"><svg class="icon" aria-hidden="true"><use href="#glyph-close"/></svg></button>
+            </template>
+            <section class="display-panel detail-panel" id="display-details" aria-label="显示器详情" tabindex="-1" hidden>
+              <div class="display-options" role="group" aria-label="切换显示器" hidden></div>
+              <div class="detail-panel-head">
+                <svg class="icon" aria-hidden="true"><use href="#glyph-monitor"/></svg><span data-display-field="name">显示器 1</span><strong data-display-field="type">主显示器</strong>
+              </div>
+              <dl class="detail-metrics">
+                <div><dt>桌面分辨率</dt><dd data-display-field="resolution">2560 × 1440</dd></div>
+                <div><dt>刷新率</dt><dd data-display-field="refresh">60 Hz</dd></div>
+                <div><dt>系统缩放</dt><dd data-display-field="scale">125%</dd></div>
+              </dl>
+            </section>
+          </div>
+        </div>
+
+        <div class="tools" role="group" aria-label="会话操作">
+          <div class="controls-wrap">
+            <button class="tool controls" type="button" aria-label="控制中心" title="控制中心" aria-expanded="false" aria-controls="control-panel">
+              <svg class="icon" aria-hidden="true"><use href="#glyph-controls"/></svg><span>控制中心</span>
+            </button>
+            <section class="control-panel" id="control-panel" aria-label="串流控制中心" hidden>
+              <div data-control-view="root">
+                <button class="control-row" type="button" data-control-page="quality"><svg class="icon" aria-hidden="true"><use href="#glyph-monitor"/></svg><span>画质</span><svg class="icon next" aria-hidden="true"><use href="#glyph-next"/></svg></button>
+                <button class="control-row" type="button" data-control-page="audio"><svg class="icon" aria-hidden="true"><use href="#glyph-volume"/></svg><span>声音</span><svg class="icon next" aria-hidden="true"><use href="#glyph-next"/></svg></button>
+                <button class="control-row" type="button" data-control-page="input"><svg class="icon" aria-hidden="true"><use href="#glyph-mouse"/></svg><span>输入</span><svg class="icon next" aria-hidden="true"><use href="#glyph-next"/></svg></button>
+                <button class="control-row" type="button" data-control-page="safety"><svg class="icon" aria-hidden="true"><use href="#glyph-shield"/></svg><span>安全</span><svg class="icon next" aria-hidden="true"><use href="#glyph-next"/></svg></button>
+                <div class="control-actions">
+                  <button class="control-row fullscreen" type="button" aria-pressed="false"><svg class="icon" aria-hidden="true"><use href="#glyph-full"/></svg><span>全屏</span></button>
+                </div>
+              </div>
+              <div data-control-view="quality" hidden>
+                <div class="control-heading"><button type="button" data-control-back aria-label="返回控制中心"><svg class="icon" aria-hidden="true"><use href="#glyph-back"/></svg></button><strong>画质</strong><small>下次连接生效</small></div>
+                <div class="control-fields">
+                  <fieldset><legend>分辨率</legend><div class="control-choices">
+                    <label><input type="radio" name="resolution" value="720p"><span>720p</span></label>
+                    <label><input type="radio" name="resolution" value="1080p" checked><span>1080p</span></label>
+                    <label><input type="radio" name="resolution" value="1440p"><span>1440p</span></label>
+                    <label><input type="radio" name="resolution" value="4K"><span>4K</span></label>
+                  </div></fieldset>
+                  <fieldset><legend>帧率</legend><div class="control-choices">
+                    <label><input type="radio" name="fps" value="30"><span>30 FPS</span></label>
+                    <label><input type="radio" name="fps" value="60" checked><span>60 FPS</span></label>
+                  </div></fieldset>
+                  <div class="control-range"><label for="control-bitrate">视频码率</label><output for="control-bitrate">20 Mbps</output><input type="range" id="control-bitrate" min="0.5" max="150" step="0.5" value="20"></div>
+                  <fieldset><legend>视频编码</legend><div class="control-choices">
+                    <label><input type="radio" name="codec" value="auto" checked><span>自动</span></label>
+                    <label><input type="radio" name="codec" value="h264"><span>H.264</span></label>
+                    <label><input type="radio" name="codec" value="hevc"><span>HEVC</span></label>
+                    <label><input type="radio" name="codec" value="av1"><span>AV1</span></label>
+                  </div></fieldset>
+                  <label class="control-switch"><span>启用 HDR（实验）</span><input type="checkbox" role="switch"></label>
+                  <label class="control-switch"><span>显示性能统计</span><input type="checkbox" role="switch"></label>
+                </div>
+              </div>
+              <div data-control-view="audio" hidden>
+                <div class="control-heading"><button type="button" data-control-back aria-label="返回控制中心"><svg class="icon" aria-hidden="true"><use href="#glyph-back"/></svg></button><strong>声音</strong><small>下次连接生效</small></div>
+                <div class="control-fields">
+                  <fieldset><legend>音频配置</legend><div class="control-choices">
+                    <label><input type="radio" name="channels" value="stereo" checked><span>立体声</span></label>
+                    <label><input type="radio" name="channels" value="5.1"><span>5.1 声道</span></label>
+                    <label><input type="radio" name="channels" value="7.1"><span>7.1 声道</span></label>
+                  </div></fieldset>
+                  <label class="control-switch"><span>远端扬声器静音</span><input type="checkbox" role="switch" checked></label>
+                  <label class="control-switch"><span>窗口失去焦点时静音</span><input type="checkbox" role="switch"></label>
+                </div>
+              </div>
+              <div data-control-view="input" hidden>
+                <div class="control-heading"><button type="button" data-control-back aria-label="返回控制中心"><svg class="icon" aria-hidden="true"><use href="#glyph-back"/></svg></button><strong>输入</strong></div>
+                <fieldset class="control-fields"><legend class="sr-only">鼠标模式</legend>
+                  <div class="mouse-modes">
+                    <label class="mode"><input type="radio" name="mouse" value="desktop" checked><span>桌面指针</span><svg class="icon check" aria-hidden="true"><use href="#glyph-check"/></svg></label>
+                    <label class="mode"><input type="radio" name="mouse" value="relative"><span>锁定鼠标（相对）</span><svg class="icon check" aria-hidden="true"><use href="#glyph-check"/></svg></label>
+                  </div>
+                  <p class="key-hint" hidden>释放鼠标 <kbd>Ctrl+Alt+Shift+Z</kbd></p>
+                  <p class="control-timing">下次连接生效</p>
+                  <label class="control-switch"><span>交换鼠标左右键</span><input type="checkbox" role="switch"></label>
+                  <label class="control-switch"><span>反转滚轮方向</span><input type="checkbox" role="switch"></label>
+                </fieldset>
+              </div>
+              <div data-control-view="safety" hidden>
+                <div class="control-heading"><button type="button" data-control-back aria-label="返回控制中心"><svg class="icon" aria-hidden="true"><use href="#glyph-back"/></svg></button><strong>安全</strong></div>
+                <div class="control-fields">
+                  <label class="control-switch"><span>隐私屏保</span><input type="checkbox" role="switch" disabled></label>
+                  <p class="control-timing">此预览会话的远端不支持隐私屏保。</p>
+                </div>
+              </div>
+            </section>
+          </div>
+          <button class="tool disconnect" type="button" aria-label="断开" title="断开">
+            <svg class="icon" aria-hidden="true"><use href="#glyph-disconnect"/></svg><span>断开</span>
+          </button>
+        </div>
+
+        <div class="captions" role="group" aria-label="Windows 窗口控制">
+          <button type="button" data-window="minimize" aria-label="最小化窗口" title="最小化窗口"><svg class="icon" aria-hidden="true"><use href="#glyph-minus"/></svg></button>
+          <button type="button" data-window="maximize" aria-label="最大化窗口" title="最大化窗口"><svg class="icon" aria-hidden="true"><use href="#glyph-max"/></svg></button>
+          <button type="button" data-window="close" aria-label="关闭窗口" title="关闭窗口"><svg class="icon" aria-hidden="true"><use href="#glyph-close"/></svg></button>
+        </div>
+      </header>
+
+      <div class="surface" aria-label="远程画面">
+        <img class="frame" src="assets/wallpapers/default/mountain-valley.webp" alt="串流首帧占位，晴空山谷壁纸" draggable="false">
+        <div class="placeholder connection">
+          <div class="center-content">
+            <i class="spinner" aria-hidden="true"></i>
+            <h1>正在连接…</h1>
+          </div>
+        </div>
+        <div class="placeholder failure">
+          <div class="center-content">
+            <svg class="icon error" aria-hidden="true"><use href="#glyph-alert"/></svg>
+            <h1>连接失败</h1>
+            <p>未收到远程画面。请确认书房主机在线后重试。</p>
+            <button class="retry" type="button">重试</button>
+          </div>
+        </div>
+      </div>
+    </section>
+    <div class="preview-closed" hidden>
+      <p data-preview-closed-reason hidden></p>
+      <button type="button" class="retry reopen">重新打开窗口</button>
+    </div>
+  </main>
+</body>
+</html>

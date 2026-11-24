@@ -1,6 +1,6 @@
 # 开发 Aurora
 
-[项目首页](README.md) · [视觉与交互规范](docs/visual-design.md) · [串流运行时](docs/streaming.md)
+[项目首页](README.md) · [视觉与交互规范](docs/visual-design/README.md) · [串流运行时](docs/streaming.md)
 
 ## 开发环境
 
@@ -88,7 +88,7 @@ pwsh -NoProfile -File ./tests/SunshineOptions.Tests.ps1 -AssemblyPath $assembly
 
 界面改动还可运行 [Windows 界面回归检查](tests/windows-visual/README.md)。原生组件改动用实际发布包验证，并在记录中写明平台、架构、测试方式和结果。
 
-端到端验证覆盖同账号首次配对、已配对重连、局域网与跨网选路、断开恢复，以及退出后重开应用时的被控设置。macOS 权限相关改动需实测首次授权、授权后重启宿主和首次串流。界面验收覆盖宽窗、窄窗及键盘操作，见[视觉规范](docs/visual-design.md)。
+端到端验证覆盖同账号首次配对、已配对重连、局域网与跨网选路、断开恢复，以及退出后重开应用时的被控设置。macOS 权限相关改动需实测首次授权、授权后重启宿主和首次串流。界面验收覆盖宽窗、窄窗及键盘操作，见[视觉规范](docs/visual-design/README.md)。
 
 ### 旧命令行诊断
 

@@ -19,7 +19,7 @@ macOS 使用内置 Tailscale。Windows 可在「Tailscale 账户」选择内置�
 ## 开发与设计
 
 - [贡献指南](CONTRIBUTING.md) 包含开发环境、构建命令、代码定位和验证步骤。
-- [视觉与交互规范](docs/visual-design.md) 包含布局、颜色、组件、平台适配和验收口径。
+- [完整视觉设计](docs/visual-design/README.md) 包含布局、颜色、组件、平台适配和验收口径。
 - [上游组件](desktop/upstream) 记录 Moonlight、Sunshine 和 Tailscale 的构建入口与源码版本。
 
 ## 许可
