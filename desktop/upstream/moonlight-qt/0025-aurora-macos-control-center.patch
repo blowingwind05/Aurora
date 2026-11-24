@@ -50,7 +50,7 @@ diff --git a/app/streaming/aurora-session-toolbar.mm b/app/streaming/aurora-sess
 +            [lines stroke];
 +            return YES;
 +        }];
-+        icon.template = YES;
++        [icon setTemplate:YES];
 +        return icon;
      }
  
