@@ -11,6 +11,8 @@ public sealed partial class AuroraWindow
 {
     private QtShellBridge qtShell;
     private bool qtWindowVisible = true;
+    private bool qtAvatarVisible;
+    private string qtAccountAvatar;
     private bool qtDevicesForeground;
     private int qtWindowActivation;
     private string qtWindowPage;
@@ -31,16 +33,25 @@ public sealed partial class AuroraWindow
     internal bool StartQtShell(string[] args)
     {
         var index = Array.IndexOf(args ?? Array.Empty<string>(), "--qt-shell");
-        if (index < 0) return false;
-        if (index + 2 >= args.Length)
+        QtShellLaunch launch;
+        if (index < 0)
         {
-            Console.Error.WriteLine("Usage: --qt-shell <companion executable> <Live.qml>");
-            return false;
+            launch = OperatingSystem.IsWindows() ? QtShellBridge.FindBundledLaunch(AppContext.BaseDirectory) : null;
+            if (launch == null) return false;
+        }
+        else
+        {
+            if (index + 2 >= args.Length)
+            {
+                Console.Error.WriteLine("Usage: --qt-shell <companion executable> <Live.qml>");
+                return false;
+            }
+            launch = new QtShellLaunch(args[index + 1], args[index + 2]);
         }
 
         try
         {
-            qtShell = QtShellBridge.Start(args[index + 1], args[index + 2], request =>
+            qtShell = QtShellBridge.Start(launch.Executable, launch.EntryPoint, request =>
                 Dispatcher.UIThread.Post(() => _ = HandleQtShellRequest(request)));
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or
@@ -49,6 +60,9 @@ public sealed partial class AuroraWindow
             Console.Error.WriteLine($"Qt Shell could not start: {error.Message}");
             return false;
         }
+
+        if (index < 0 && Environment.GetEnvironmentVariable("AURORA_QT_SESSION") == null)
+            Environment.SetEnvironmentVariable("AURORA_QT_SESSION", "1");
 
         var bridge = qtShell;
         Closed += (_, _) => DetachQtShell(bridge);
@@ -78,6 +92,7 @@ public sealed partial class AuroraWindow
     {
         qtWindowVisible = false;
         qtDevicesForeground = false;
+        SetQtAvatarVisibility(false);
         wallpaperRefresh?.Cancel();
         PublishQtShellState();
     }
@@ -107,6 +122,8 @@ public sealed partial class AuroraWindow
     {
         if (qtShell != bridge) return;
         qtShell = null;
+        SetQtAvatarVisibility(false);
+        qtAccountAvatar = null;
         CloseQtTailscaleController();
         bridge.Dispose();
     }
@@ -143,6 +160,9 @@ public sealed partial class AuroraWindow
             connecting || QtTailscaleBlocksDevices, RefreshNotice.ReduceMotion())
         {
             Host = ReadQtHostState(),
+            More = qtMoreState,
+            AccountAvatar = network?.IsAuthenticated == true && network.Owner == accountOwner &&
+                accountState == TailscaleState.Connected && !TailscaleRuntime.IsTransitioning ? qtAccountAvatar : null,
             // Carry the latest preference acknowledgement across device snapshots.
             GeneralSettings = qtGeneralSettings.Snapshot,
             TailscaleAccount = GetQtTailscaleAccount(),
@@ -151,6 +171,19 @@ public sealed partial class AuroraWindow
             WindowActivation = qtWindowActivation,
             WindowPage = qtWindowPage
         });
+    }
+
+    private void SetQtAvatarVisibility(bool visible)
+    {
+        qtAvatarVisible = visible && qtWindowVisible;
+        if (!CanLoadAccountAvatar)
+        {
+            avatarRequest?.Cancel();
+            return;
+        }
+        if (accountAvatar == null && avatarRequest == null && accountAvatarUri != null &&
+            qtTailscaleStatus is { } status && status.OwnerId == accountOwner && status.AvatarUri == accountAvatarUri)
+            _ = LoadAccountAvatar(status);
     }
 
     private void ReportQtShellFeedback(string message, bool failed)
@@ -164,6 +197,11 @@ public sealed partial class AuroraWindow
     private async Task HandleQtShellRequest(QtShellRequest request)
     {
         if (qtShell == null || closed) return;
+        if (request.Action?.StartsWith("more.", StringComparison.Ordinal) == true)
+        {
+            await HandleQtMoreRequest(request.Action[5..]);
+            return;
+        }
         if (qtGeneralSettings.TryHandle(request, out var preferencesChanged))
         {
             if (preferencesChanged)
@@ -189,6 +227,10 @@ public sealed partial class AuroraWindow
                 FinishQtTailscaleConfirmation(approved: false);
                 if (TrayResidency.CloseToTray) HideQtWindow();
                 else Close();
+                break;
+            case "avatar-visible":
+            case "avatar-hidden":
+                SetQtAvatarVisibility(request.Action == "avatar-visible");
                 break;
             case "devices-foreground":
                 qtDevicesForeground = qtWindowVisible;

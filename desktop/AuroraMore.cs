@@ -22,7 +22,7 @@ internal static class AuroraMore
 {
     private const string Repository = "https://github.com/blowingwind05/Aurora";
     private const string Help = Repository + "#从极光窗口开始";
-    private const string FeedbackAddress = "blowingwind05@mail.ustc.edu.cn";
+    internal const string FeedbackAddress = "blowingwind05@mail.ustc.edu.cn";
     private const string LatestRelease = "https://api.github.com/repos/blowingwind05/Aurora/releases/latest";
     private const string CheckLabel = "检查更新";
     private const double CompactWidth = 480;
@@ -47,6 +47,9 @@ internal static class AuroraMore
     });
     private static readonly Version CurrentVersion = typeof(AuroraMore).Assembly.GetName().Version;
     private static readonly HttpClient Releases = CreateReleaseClient();
+
+    internal static string VersionLabel =>
+        CurrentVersion == null ? "版本未知" : $"版本 {DisplayVersion(CurrentVersion)}";
 
     internal static void Attach(Button button, Action<string, Control> showPage, Action<string> showNotice)
     {
@@ -139,13 +142,13 @@ internal static class AuroraMore
         repository.Click += async (_, _) =>
         {
             flyout.Hide();
-            await OpenLink(button, Repository, showNotice);
+            await OpenLink(button, "source", showNotice);
         };
         var help = MenuRow("帮助", HelpIcon);
         help.Click += async (_, _) =>
         {
             flyout.Hide();
-            await OpenLink(button, Help, showNotice);
+            await OpenLink(button, "help", showNotice);
         };
         var feedback = MenuRow("反馈", FeedbackIcon);
         feedback.Click += (_, _) =>
@@ -210,9 +213,9 @@ internal static class AuroraMore
 
     private static Control FeedbackPage(Action<string> showNotice)
     {
-        var email = FeedbackCard("邮箱", FeedbackAddress, MailIcon, "mailto:" + FeedbackAddress, showNotice);
+        var email = FeedbackCard("邮箱", FeedbackAddress, MailIcon, "mail", showNotice);
         var issues = FeedbackCard("GitHub Issues", "公开报告问题或提出功能建议。", GitHubIcon,
-            Repository + "/issues/new/choose", showNotice);
+            "issues", showNotice);
         var channels = new Grid
         {
             ColumnDefinitions = new ColumnDefinitions("*,*"),
@@ -234,9 +237,9 @@ internal static class AuroraMore
         return ScrollPage(channels);
     }
 
-    private static Button FeedbackCard(string title, string detail, string icon, string target, Action<string> showNotice)
+    private static Button FeedbackCard(string title, string detail, string icon, string destination, Action<string> showNotice)
     {
-        var card = LinkButton(title, detail, target, showNotice, 82, new Thickness(14, 13));
+        var card = LinkButton(title, detail, destination, showNotice, 82, new Thickness(14, 13));
         card.Background = Brushes.White;
         card.BorderBrush = Rule;
         card.BorderThickness = new Thickness(1);
@@ -260,7 +263,7 @@ internal static class AuroraMore
         var logo = new Image { Source = AppIcon.Value, Width = 56, Height = 56 };
         var title = Heading("Aurora 远程桌面");
         title.FontSize = 19;
-        var version = Secondary(CurrentVersion == null ? "版本未知" : $"版本 {DisplayVersion(CurrentVersion)}");
+        var version = Secondary(VersionLabel);
         var identity = new StackPanel
         {
             Orientation = Orientation.Horizontal,
@@ -273,13 +276,13 @@ internal static class AuroraMore
             Children = { identity, Secondary("Aurora 是开源远程桌面应用，可通过局域网或 Tailscale 连接自己的电脑并串流桌面。") }
         }, new Thickness(16, 14));
         var project = AboutSection("项目信息",
-            AboutLink("作者", "blowingwind05", "https://github.com/blowingwind05", showNotice),
-            AboutLink("开源仓库", "GitHub", Repository, showNotice),
-            AboutLink("开源许可", "GPL-3.0-only", Repository + "/blob/main/LICENSE", showNotice));
+            AboutLink("作者", "blowingwind05", "author", showNotice),
+            AboutLink("开源仓库", "GitHub", "source", showNotice),
+            AboutLink("开源许可", "GPL-3.0-only", "license", showNotice));
         var components = AboutSection("主要组件",
-            AboutLink("Moonlight", "在主控端播放串流并传送键鼠输入。", "https://github.com/moonlight-stream/moonlight-qt", showNotice),
-            AboutLink("Sunshine", "在被控端采集、编码并发送桌面画面。", "https://github.com/SunshineStream/Sunshine", showNotice),
-            AboutLink("Tailscale", "发现同账号设备并建立跨网连接。", "https://github.com/tailscale/tailscale", showNotice));
+            AboutLink("Moonlight", "在主控端播放串流并传送键鼠输入。", "moonlight", showNotice),
+            AboutLink("Sunshine", "在被控端采集、编码并发送桌面画面。", "sunshine", showNotice),
+            AboutLink("Tailscale", "发现同账号设备并建立跨网连接。", "tailscale", showNotice));
         return ScrollPage(new StackPanel { Spacing = 12, Children = { overview, project, components } });
     }
 
@@ -292,9 +295,9 @@ internal static class AuroraMore
         return new StackPanel { Spacing = 6, Children = { label, Panel(links, new Thickness(8)) } };
     }
 
-    private static Button AboutLink(string title, string detail, string target, Action<string> showNotice)
+    private static Button AboutLink(string title, string detail, string destination, Action<string> showNotice)
     {
-        var row = LinkButton(title, detail, target, showNotice, 33, new Thickness(8, 5));
+        var row = LinkButton(title, detail, destination, showNotice, 33, new Thickness(8, 5));
         var heading = Heading(title);
         var copy = Secondary(detail);
         var label = new Grid
@@ -318,11 +321,11 @@ internal static class AuroraMore
         return row;
     }
 
-    private static Button LinkButton(string title, string detail, string target, Action<string> showNotice, double height, Thickness padding)
+    private static Button LinkButton(string title, string detail, string destination, Action<string> showNotice, double height, Thickness padding)
     {
         var button = RowButton(height, padding);
         AutomationProperties.SetName(button, $"{title}，{detail}");
-        button.Click += async (_, _) => await OpenLink(button, target, showNotice);
+        button.Click += async (_, _) => await OpenLink(button, destination, showNotice);
         return button;
     }
 
@@ -342,19 +345,39 @@ internal static class AuroraMore
     private static TextBlock Secondary(string text) =>
         new() { Text = text, FontSize = 12, Foreground = Muted, TextWrapping = TextWrapping.Wrap };
 
-    private static async Task OpenLink(Control anchor, string target, Action<string> showNotice)
+    private static async Task OpenLink(Control anchor, string destination, Action<string> showNotice)
     {
+        if (await OpenProjectLink(TopLevel.GetTopLevel(anchor), destination) is { } error)
+            showNotice(error);
+    }
+
+    // The Qt bridge supplies an action ID. Only Aurora-owned destinations reach the system launcher.
+    internal static async Task<string> OpenProjectLink(TopLevel owner, string destination)
+    {
+        var target = destination switch
+        {
+            "source" => Repository,
+            "help" => Help,
+            "mail" => "mailto:" + FeedbackAddress,
+            "issues" => Repository + "/issues/new/choose",
+            "author" => "https://github.com/blowingwind05",
+            "license" => Repository + "/blob/main/LICENSE",
+            "moonlight" => "https://github.com/moonlight-stream/moonlight-qt",
+            "sunshine" => "https://github.com/SunshineStream/Sunshine",
+            "tailscale" => "https://github.com/tailscale/tailscale",
+            _ => null
+        };
+        if (target == null) return null;
         try
         {
-            var topLevel = TopLevel.GetTopLevel(anchor);
-            if (topLevel != null && await topLevel.Launcher.LaunchUriAsync(new Uri(target))) return;
+            if (owner != null && await owner.Launcher.LaunchUriAsync(new Uri(target))) return null;
         }
         catch (Exception error) when (error is InvalidOperationException or System.ComponentModel.Win32Exception or
             System.IO.IOException or UnauthorizedAccessException or NotSupportedException)
         {
             System.Diagnostics.Debug.WriteLine(error);
         }
-        showNotice(target.StartsWith("mailto:", StringComparison.Ordinal) ? "无法打开系统邮件应用。" : "无法打开链接。");
+        return destination == "mail" ? "无法打开系统邮件应用。" : "无法打开链接。";
     }
 
     private static HttpClient CreateReleaseClient()
@@ -370,7 +393,7 @@ internal static class AuroraMore
         return client;
     }
 
-    private static async Task<string> CheckLatestRelease()
+    internal static async Task<string> CheckLatestRelease()
     {
         if (CurrentVersion == null) return "无法读取当前版本。";
         try

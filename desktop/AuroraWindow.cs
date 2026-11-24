@@ -1042,6 +1042,7 @@ public sealed partial class AuroraWindow : Window
             accountIcon.Content = null;
             accountAvatar?.Dispose();
             accountAvatar = null;
+            qtAccountAvatar = null;
             accountAvatarUri = avatarUri;
         }
         accountState = account.State;
@@ -1083,7 +1084,9 @@ public sealed partial class AuroraWindow : Window
         UpdateQtTailscaleAccount(account);
     }
 
-    private bool CanLoadAccountAvatar => !closed && IsVisible && WindowState != WindowState.Minimized;
+    private bool CanLoadAccountAvatar => !closed &&
+        ((IsVisible && WindowState != WindowState.Minimized) ||
+            (qtShell != null && qtWindowVisible && qtAvatarVisible));
 
     private async Task LoadAccountAvatar(TailscaleStatus account)
     {
@@ -1101,6 +1104,11 @@ public sealed partial class AuroraWindow : Window
             }
             accountAvatar = bitmap;
             accountIcon.Content = PresentAccountAvatar(bitmap);
+            if (qtShell != null)
+            {
+                qtAccountAvatar = TailscaleAvatar.EncodeRound(bitmap);
+                PublishQtShellState();
+            }
         }
         catch (OperationCanceledException) when (request.IsCancellationRequested) { }
         finally { avatarRequest = null; }

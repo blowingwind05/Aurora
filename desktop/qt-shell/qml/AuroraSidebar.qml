@@ -1,15 +1,21 @@
 // SPDX-License-Identifier: GPL-3.0-only
 import QtQuick 2.15
+import "stream" as Stream
 
 Item {
     id: sidebar
     property bool compact: false
     property bool hostAvailable: true
+    property bool checkingUpdates: false
+    property bool reduceMotion: false
     property string currentPage: "devices"
     property string accountName: ""
     property string accountSubtitle: ""
+    property url accountAvatar
     signal navigationRequested(string destination)
     signal moreRequested(string action)
+
+    onCheckingUpdatesChanged: if (!checkingUpdates) moreMenu.close()
 
     readonly property int inset: compact ? 4 : 13
     readonly property int rowHeight: compact ? 38 : 50
@@ -44,19 +50,13 @@ Item {
                     icon.color: button.foreground
                     visible: !button.initialAvatar
                 }
-                Rectangle {
+                AuroraAccountAvatar {
                     anchors.fill: parent
                     visible: button.initialAvatar
-                    radius: 12
-                    color: "#DCE9F8"
-                    Text {
-                        anchors.centerIn: parent
-                        text: Array.from(button.text)[0] || ""
-                        font.family: AuroraTheme.font
-                        font.pixelSize: 13
-                        font.weight: Font.DemiBold
-                        color: "#2350B4"
-                    }
+                    photo: button.initialAvatar ? sidebar.accountAvatar : ""
+                    initial: Array.from(button.text)[0] || ""
+                    fallbackBackground: "#DCE9F8"
+                    fallbackForeground: "#2350B4"
                 }
             }
             Column {
@@ -101,7 +101,7 @@ Item {
             objectName: "navAccount"
             text: sidebar.accountName || qsTr("Tailscale 账户")
             subtitle: sidebar.accountSubtitle
-            initialAvatar: sidebar.accountName.length > 0
+            initialAvatar: sidebar.accountName.length > 0 || sidebar.accountAvatar.toString().length > 0
             icon.source: AuroraTheme.tailscale
             icon.width: 19
             selected: sidebar.currentPage === "account"
@@ -156,28 +156,72 @@ Item {
                 objectName: "sidebarMenu"
                 x: moreButton.width + 6
                 y: moreButton.height - height
-                CompactMenuItem {
+                AuroraButton {
+                    id: updateEntry
                     objectName: "checkUpdates"
-                    text: qsTr("检查更新")
-                    icon.source: AuroraTheme.icon("refresh-cw")
-                    onTriggered: sidebar.moreRequested("checkUpdates")
+                    width: moreMenu.availableWidth
+                    height: 32
+                    leftPadding: 8
+                    rightPadding: 8
+                    enabled: !sidebar.checkingUpdates
+                    text: sidebar.checkingUpdates ? qsTr("正在检查…") : qsTr("检查更新")
+                    onClicked: sidebar.moreRequested("checkUpdates")
+
+                    contentItem: Row {
+                        spacing: 8
+                        Item {
+                            width: 16
+                            height: 16
+                            anchors.verticalCenter: parent.verticalCenter
+                            AuroraGlyph {
+                                anchors.fill: parent
+                                visible: !sidebar.checkingUpdates
+                                icon.source: AuroraTheme.icon("refresh-cw")
+                            }
+                            Stream.StreamRing {
+                                objectName: "updateRing"
+                                anchors.fill: parent
+                                visible: sidebar.checkingUpdates
+                                spinning: moreMenu.opened
+                                reduceMotion: sidebar.reduceMotion
+                            }
+                        }
+                        Text {
+                            anchors.verticalCenter: parent.verticalCenter
+                            text: updateEntry.text
+                            font: updateEntry.font
+                            color: AuroraTheme.ink
+                        }
+                    }
+
+                    background: Rectangle {
+                        radius: 5
+                        color: updateEntry.enabled && (updateEntry.hovered || updateEntry.down)
+                               ? AuroraTheme.hover : "transparent"
+                        border.width: updateEntry.visualFocus ? 2 : 0
+                        border.color: AuroraTheme.blue
+                    }
                 }
                 CompactMenuItem {
+                    objectName: "moreSourceMenu"
                     text: qsTr("开源地址")
                     icon.source: AuroraTheme.github
                     onTriggered: sidebar.moreRequested("source")
                 }
                 CompactMenuItem {
+                    objectName: "moreHelpMenu"
                     text: qsTr("帮助")
                     icon.source: AuroraTheme.icon("circle-question-mark")
                     onTriggered: sidebar.moreRequested("help")
                 }
                 CompactMenuItem {
+                    objectName: "moreFeedbackMenu"
                     text: qsTr("反馈")
                     icon.source: AuroraTheme.icon("message-square")
                     onTriggered: sidebar.navigationRequested("feedback")
                 }
                 CompactMenuItem {
+                    objectName: "moreAboutMenu"
                     text: qsTr("关于")
                     icon.source: AuroraTheme.icon("info")
                     onTriggered: sidebar.navigationRequested("about")

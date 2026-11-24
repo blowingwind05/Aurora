@@ -45,6 +45,10 @@ Live {
                     check(!shell.narrow && shell.deviceModel.count === 2,
                           "wide device list (" + shell.width + "; " + shell.deviceModel.count + ")")
                     check(account.text === "联调账户" && account.subtitle === "GitHub", "signed-in account")
+                    const avatar = shell.child(account, "accountPhoto")
+                    if (!avatar || avatar.status === Image.Loading)
+                        return
+                    check(avatar.status === Image.Ready && avatar.visible, "account photo rendered")
                     const row = shell.deviceModel.get(0)
                     check(row.lanAddress === "192.0.2.36" && row.tailscaleAddress === "100.100.0.36", "device addresses")
                     connectButton = shell.child(shell.contentItem, "connect-node:书房")
@@ -89,6 +93,7 @@ Live {
                         return
                     check(shell.deviceModel.count === 0, "cleared device list")
                     check(account.text === "Tailscale 账户" && account.subtitle === "未登录", "signed-out account")
+                    check(shell.child(account, "accountPhoto").source.toString() === "", "signed-out account photo cleared")
                     const action = shell.child(shell.contentItem, "deviceAccountAction")
                     check(!refresh.visible && action.visible, "signed-out actions")
                     action.clicked()

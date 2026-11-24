@@ -24,9 +24,15 @@ Window {
     property var enabledDeviceTools: ({})
     property string accountName: ""
     property string accountSubtitle: ""
+    property url accountAvatar
     property var hostState: ({})
     property string currentPage: "devices"
     property Component destinationPage: null
+    property string moreVersion: ""
+    property string moreFeedbackAddress: ""
+    property bool checkingUpdates: false
+    property string moreNoticeText: ""
+    readonly property bool showingMorePage: currentPage === "about" || currentPage === "feedback"
 
     signal navigationRequested(string destination)
     signal moreRequested(string action)
@@ -41,6 +47,12 @@ Window {
     readonly property bool expanded: maximized || visibility === Window.FullScreen
     readonly property int sidebarWidth: compact ? 43 : narrow ? 144 : 184
     readonly property int windowRadius: customWindowChrome && !expanded ? 13 : 0
+
+    function showMoreNotice(message) {
+        moreNoticeText = message
+        moreNotice.visibleWhileTimed = true
+        moreNoticeTimer.restart()
+    }
 
     function toggleMaximized() {
         if (maximized)
@@ -200,9 +212,12 @@ Window {
         width: window.sidebarWidth
         compact: window.compact
         currentPage: window.currentPage
+        checkingUpdates: window.checkingUpdates
+        reduceMotion: window.reduceMotion
         hostAvailable: window.hostState.available !== false
         accountName: window.accountName
         accountSubtitle: window.accountSubtitle
+        accountAvatar: window.accountAvatar
         onNavigationRequested: function(destination) { window.navigationRequested(destination) }
         onMoreRequested: function(action) { window.moreRequested(action) }
     }
@@ -262,7 +277,62 @@ Window {
         Loader {
             anchors.fill: parent
             active: window.currentPage !== "devices" && window.currentPage !== "host"
-            sourceComponent: window.destinationPage
+            sourceComponent: window.showingMorePage ? morePage : window.destinationPage
+        }
+
+        Component {
+            id: morePage
+            MorePage {
+                section: window.currentPage
+                compact: window.compact
+                narrow: window.narrow
+                versionLabel: window.moreVersion
+                feedbackAddress: window.moreFeedbackAddress
+                onLinkRequested: function(destination) { window.moreRequested(destination) }
+            }
+        }
+    }
+
+    Rectangle {
+        id: moreNotice
+        objectName: "moreNotice"
+        property bool visibleWhileTimed: false
+        anchors.centerIn: parent
+        z: 2
+        width: Math.min(window.width - 32, message.implicitWidth + 32)
+        height: message.implicitHeight + 22
+        radius: 10
+        color: "white"
+        border.color: AuroraTheme.panelLine
+        opacity: visibleWhileTimed ? 1 : 0
+        visible: opacity > 0
+        Behavior on opacity {
+            enabled: !window.reduceMotion
+            NumberAnimation { duration: 160 }
+        }
+
+        Text {
+            id: message
+            objectName: "moreNoticeText"
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.leftMargin: 16
+            anchors.rightMargin: 16
+            anchors.verticalCenter: parent.verticalCenter
+            horizontalAlignment: Text.AlignHCenter
+            text: window.moreNoticeText
+            textFormat: Text.PlainText
+            wrapMode: Text.Wrap
+            color: AuroraTheme.ink
+            font.family: AuroraTheme.font
+            font.pixelSize: 13
+            Accessible.role: Accessible.StaticText
+        }
+
+        Timer {
+            id: moreNoticeTimer
+            interval: 3000
+            onTriggered: moreNotice.visibleWhileTimed = false
         }
     }
 

@@ -11,20 +11,34 @@ AuroraMainWindow {
     deviceAccess: snapshot.deviceAccess || "loading"
     accountName: snapshot.accountName || ""
     accountSubtitle: snapshot.accountSubtitle || ""
+    accountAvatar: snapshot.accountAvatar || ""
     refreshAvailable: snapshot.refreshAvailable === true
     refreshing: snapshot.refreshing === true
     refreshFeedback: snapshot.refreshFeedback || ""
     refreshFailed: snapshot.refreshFailed === true
     connectionPending: snapshot.connectionPending === true
     reduceMotion: snapshot.reduceMotion === true
+    moreVersion: moreState.versionLabel || ""
+    moreFeedbackAddress: moreState.feedbackAddress || ""
+    checkingUpdates: pendingUpdate || moreState.checking === true
 
     readonly property var snapshot: auroraBridge.state
+    readonly property var moreState: snapshot.more || ({})
+    property bool pendingUpdate: false
+    property int lastUpdateCompleted: 0
+    property int lastMoreNotice: 0
 
     readonly property var generalSettings: snapshot.generalSettings || null
     property int nextPreferenceRequestId: 0
     property int pendingPreferenceRequestId: 0
 
     property int lastWindowActivation: 0
+    readonly property bool avatarVisible: snapshot.managedWindow === true && visible && visibility !== Window.Minimized
+    onAvatarVisibleChanged: {
+        if (snapshot.managedWindow)
+            auroraBridge.send(avatarVisible ? "avatar-visible" : "avatar-hidden", "", 0)
+    }
+
     readonly property bool devicesForeground: snapshot.managedWindow === true && visible && active && visibility !== Window.Minimized && currentPage === "devices"
 
     destinationPage: currentPage === "settings" ? generalPage : currentPage === "account" ? tailscalePage : null
@@ -75,6 +89,7 @@ AuroraMainWindow {
         id: tailscalePage
         TailscaleAccountPage {
             account: shell.tailscaleAccount
+            avatarPhoto: shell.accountAvatar
             compact: shell.compact
             narrow: shell.narrow
             reduceMotion: shell.reduceMotion
@@ -167,11 +182,35 @@ AuroraMainWindow {
             requestPreference("read-general-settings", null)
     }
 
+    onMoreStateChanged: {
+        const completed = moreState.updateCompleted || 0
+        if (completed !== lastUpdateCompleted) {
+            lastUpdateCompleted = completed
+            pendingUpdate = false
+        }
+        const noticeId = moreState.noticeId || 0
+        if (noticeId !== lastMoreNotice) {
+            lastMoreNotice = noticeId
+            if (moreState.notice)
+                showMoreNotice(moreState.notice)
+        }
+    }
+
+    onMoreRequested: function(action) {
+        if (action === "checkUpdates") {
+            if (checkingUpdates || !snapshot.more)
+                return
+            pendingUpdate = true
+        }
+        auroraBridge.send("more." + action, "", 0)
+    }
+
     onHostActionRequested: function(action) { auroraBridge.send(action, "", 0) }
     onRefreshRequested: auroraBridge.send("refresh", "", 0)
     onConnectRequested: function(deviceId) { auroraBridge.send("connect", deviceId, snapshot.deviceEpoch) }
     onNavigationRequested: function(destination) {
-        if (destination === "host" || destination === "devices") {
+        if (destination === "host" || destination === "devices" ||
+            destination === "feedback" || destination === "about") {
             currentPage = destination
         } else if (destination === "settings" && ("generalSettings" in snapshot)) {
             currentPage = destination

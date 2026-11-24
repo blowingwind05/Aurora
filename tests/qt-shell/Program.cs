@@ -17,6 +17,7 @@ try
         DeviceAccess = "ready",
         AccountName = "联调账户",
         AccountSubtitle = "GitHub",
+        AccountAvatar = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNQDdjyHwAD8AIpSdRvbwAAAABJRU5ErkJggg==",
         DeviceEpoch = 42,
         RefreshAvailable = true,
         Devices = [display, offline]

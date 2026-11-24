@@ -115,6 +115,33 @@ internal static class TailscaleAvatar
         }
     }
 
+    // Qt uses a small local PNG and does not fetch the profile image again.
+    internal static string EncodeRound(Bitmap image)
+    {
+        using var stream = new MemoryStream();
+        image.Save(stream);
+        stream.Position = 0;
+        using var bitmap = SKBitmap.Decode(stream);
+        if (bitmap == null) return null;
+
+        const int size = 96;
+        var side = Math.Min(bitmap.Width, bitmap.Height);
+        var left = (bitmap.Width - side) / 2f;
+        var top = (bitmap.Height - side) / 2f;
+        using var surface = SKSurface.Create(new SKImageInfo(size, size));
+        if (surface == null) return null;
+        surface.Canvas.Clear(SKColors.Transparent);
+        using var circle = new SKPath();
+        circle.AddCircle(size / 2f, size / 2f, size / 2f);
+        surface.Canvas.ClipPath(circle, antialias: true);
+        using var paint = new SKPaint { IsAntialias = true, FilterQuality = SKFilterQuality.Medium };
+        surface.Canvas.DrawBitmap(bitmap, new SKRect(left, top, left + side, top + side),
+            new SKRect(0, 0, size, size), paint);
+        using var avatar = surface.Snapshot();
+        using var encoded = avatar.Encode(SKEncodedImageFormat.Png, 100);
+        return encoded == null ? null : "data:image/png;base64," + Convert.ToBase64String(encoded.ToArray());
+    }
+
     private static Bitmap Decode(byte[] bytes)
     {
         if (bytes is not { Length: > 0 }) return null;

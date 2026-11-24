@@ -12,6 +12,7 @@ Item {
     property bool compact: false
     property bool narrow: false
     property bool reduceMotion: false
+    property url avatarPhoto
     signal actionRequested(string action, string target, Item source)
     readonly property bool actionsAvailable: account.refreshAvailable === true && !account.busy
 
@@ -280,28 +281,12 @@ Item {
                                 anchors.fill: parent
                                 spacing: 10
 
-                                Rectangle {
+                                AuroraAccountAvatar {
                                     Layout.preferredWidth: 40
                                     Layout.preferredHeight: 40
                                     Layout.alignment: Qt.AlignTop
-                                    radius: 20
-                                    color: page.account.initial ? "#DEECFA" : "transparent"
-
-                                    Body {
-                                        anchors.centerIn: parent
-                                        visible: text.length > 0
-                                        text: page.account.initial || ""
-                                        font.pixelSize: 18
-                                        font.weight: Font.DemiBold
-                                        color: AuroraTheme.statusBlue
-                                    }
-                                    AuroraGlyph {
-                                        anchors.centerIn: parent
-                                        visible: !page.account.initial
-                                        width: 28
-                                        height: 28
-                                        icon.source: AuroraTheme.tailscale
-                                    }
+                                    photo: page.connected ? page.avatarPhoto : ""
+                                    initial: page.account.initial || ""
                                 }
 
                                 Column {
