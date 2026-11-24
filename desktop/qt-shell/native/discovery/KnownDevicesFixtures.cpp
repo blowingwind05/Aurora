@@ -41,5 +41,15 @@ int main(int argc, char **argv)
     network.localId = QStringLiteral("other-node");
     if (!readKnownDevices(data.path(), network).isEmpty())
         return 6;
+
+    network.localId = QStringLiteral("local-node");
+    const auto replacement = QUuid(QStringLiteral("{c2f9e074-4aa0-467c-8ade-e943f848dbf2}"));
+    const QList<PresentDevice> reported{{replacement, peer.address, QStringLiteral("new host"), QStringLiteral("windows"), true}};
+    if (rememberKnownDevices(data.path(), network, reported).value(peer.id) != replacement ||
+        readKnownDevices(data.path(), network).value(peer.id) != replacement)
+        return 7;
+    const auto ownIdentity = readOrCreatePresenceIdentity(data.path());
+    if (ownIdentity.isNull() || ownIdentity != readOrCreatePresenceIdentity(data.path()))
+        return 8;
     return 0;
 }

@@ -31,6 +31,7 @@ if(MSVC)
 endif()
 add_subdirectory(native/platform)
 add_subdirectory(native/discovery)
+add_subdirectory(native/pairing)
 add_subdirectory(native/presence)
 add_subdirectory(native/session)
 add_subdirectory(native/sunshine)
@@ -44,5 +45,5 @@ if(WIN32)
 endif()
 target_link_libraries(AuroraQtShell PRIVATE Qt${QT_VERSION_MAJOR}::Quick Qt${QT_VERSION_MAJOR}::QuickControls2
     Qt${QT_VERSION_MAJOR}::Network Qt${QT_VERSION_MAJOR}::Widgets
-    aurora_native_platform aurora_native_discovery aurora_native_presence aurora_native_session
+    aurora_native_platform aurora_native_discovery aurora_native_pairing aurora_native_presence aurora_native_session
     Aurora::SunshineConfig Aurora::SunshineAdmin Aurora::SunshineHost aurora_native_stream AuroraNativeTailscale)
