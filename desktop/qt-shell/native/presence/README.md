@@ -1,9 +1,9 @@
 # Native Aurora presence
 
-Compile `PresencePacket.cpp` and `PresenceProbe.cpp` as C++17 and link Qt Core
-and Qt Network from Qt 5.15 or Qt 6. The API is in `Aurora::Presence`. The
-embedded adapter accepts the existing `aurora::tailscale::Status` snapshot.
-It can build and test independently of the desktop coordinator.
+The module uses C++17 with Qt Core and Qt Network from Qt 5.15 or Qt 6.
+The API is in `Aurora::Presence` and the transport accepts the existing
+`aurora::tailscale::Status` snapshot. It builds and tests independently of
+the desktop coordinator.
 
 ## Wire format
 
@@ -31,28 +31,43 @@ populate a discovery `PresentDevice`.
 
 ## Datagram transport
 
-Create one `DatagramProbe::unicast()` per address-family target set or one
-`DatagramProbe::lan()` per LAN source interface. Send its request to the
-existing transport destinations on port `48988`. Feed the full reply and its
-actual sender endpoint to `addReply()`. Keep at least 193 bytes in a receive
-buffer when detecting oversized datagrams, or pass the original complete
-datagram.
+Link the `aurora_native_presence` CMake target or compile `PresencePacket.cpp`,
+`PresenceProbe.cpp`, and `UdpPresenceTransport.cpp` with Qt AUTOMOC enabled
+for `UdpPresenceTransport.h`. Create the transport on a Qt event-loop thread
+with a stable local presence GUID. The defaults bind IPv4 and IPv6 separately.
+`UdpBindings` can restrict a family to a specific local address or disable it
+with a null address.
 
-The window is at most 900 ms. Unicast admits only the supplied target addresses
-and caps distinct results at the target count. LAN uses the supplied
-same-subnet policy and caps distinct results at 512. The latest accepted
-announcement for an address replaces its earlier one. Stop when
-`remainingMilliseconds()` reaches zero. `cancel()` closes the window and keeps
-the collected replies. Discard stale account results before updating the
-catalog.
+- `updateAccess(links, systemStatus, generation)` replaces the access policy.
+  Pass eligible IPv4 local addresses and masks supplied by the coordinator.
+  Pass the authenticated system-provider snapshot for that generation. Pass
+  null for other providers or when signed out. Clear the LAN list when LAN
+  discovery is disabled. Advance the generation on provider or account
+  transitions. Stale generations are ignored.
+- `startResponding()` reports which families bound UDP port 48988 exclusively.
+  The responder accepts the current same-subnet sources and eligible system
+  Tailnet peers. Ambiguous addresses claimed by different peers are excluded.
+  It sends a valid reply to the original sender endpoint. Update the name,
+  platform and hosting flag with `updateAnnouncement()`. `stopResponding()`
+  releases the listener sockets.
+- `probeLan()` broadcasts once per allowed link using a socket bound to its
+  local address. `probePeers(targets)` sends only to eligible supplied
+  addresses and groups them by family. `scanFinished(requestId, result)`
+  asynchronously returns observations for the ID from either method. An
+  unchanged policy allows concurrent requests. An access-policy change
+  invalidates outstanding results with `ScanStatus::AccessChanged`.
+- Each socket reuses one request nonce. A probe completes at its distinct
+  address bound or after the 900 ms window. The LAN limit is 512 replies per
+  link. A newer valid reply replaces the earlier one for that address on the
+  same socket. If several links see the address, the first link in the input
+  order wins. `cancelScan(id)` closes the probe and can return partial results.
+  `ScanStatus::SocketError` reports a bind or send failure and can also carry
+  partial results.
 
-Use `answerDatagram()` with the transport's current authorized-source predicate
-before replying. Pass the real sender to both APIs. The predicates see
-IPv4-mapped IPv6 senders normalized to IPv4, as in the legacy receive loop.
-The caller owns the socket, interface or group configuration, current trusted
-peer set, and LAN subnet policy. Return a response only to the original
-request sender.
-
+For callers with their own socket, `DatagramProbe` and `answerDatagram()` are
+also usable directly. Their source predicates receive IPv4-mapped IPv6
+addresses normalized to IPv4. Pass the real sender endpoint and preserve the
+complete datagram or retain at least 193 bytes to distinguish oversized packets.
 ## Embedded transport
 
 Call `EmbeddedProbe::start(status, generation, target, localId)` with the active
@@ -81,6 +96,7 @@ cmake --build build/presence --config Release
 cmake -E chdir build/presence ctest -C Release --output-on-failure
 ```
 
-The fixtures use a .NET-generated golden reply, synthetic sender addresses and
-in-memory helper results to exercise framing, names, filtering, probe bounds
-and account changes. They open no sockets and write no Aurora state.
+The packet fixtures use a .NET-generated golden reply and in-memory results.
+The UDP fixtures bind only IPv4 or IPv6 loopback, exercise the responder and
+actual probe sockets there, and check directed broadcast and subnet rules with
+synthetic addresses. They send no LAN broadcasts and write no Aurora state.

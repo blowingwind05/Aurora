@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include <QCoreApplication>
+#include <QDir>
+#include <QFile>
 #include <QFileInfo>
 #include <QStringList>
 #include <QThread>
@@ -39,10 +41,81 @@ int main(int argc, char **argv)
     const bool readStatus = arguments == QStringList{socket, "status", "--json"};
     const bool readProfiles = arguments == QStringList{socket, "switch", "--list", "--json"};
     const bool readLegacy = arguments == QStringList{socket, "switch", "--list"};
-    if (!readStatus && !readProfiles && !readLegacy)
+    const bool up = arguments == QStringList{socket, "up"};
+    const bool logout = arguments == QStringList{socket, "logout"};
+    const bool switchProfile = arguments == QStringList{socket, "switch", "--", "work"};
+    if (!readStatus && !readProfiles && !readLegacy && !up && !logout && !switchProfile)
         return 91;
 
-    const auto scenario = QFileInfo(app.applicationFilePath()).completeBaseName();
+    const QFileInfo executable(app.applicationFilePath());
+    const auto scenario = executable.completeBaseName();
+    QFile trace(executable.dir().filePath("fixture-commands.txt"));
+    if (!trace.open(QIODevice::ReadWrite))
+        return 93;
+    const auto prior = trace.readAll();
+    trace.write(arguments.mid(1).join(' ').toUtf8() + '\n');
+    trace.close();
+
+    if (scenario.startsWith("action-")) {
+        if (readStatus && scenario == "action-up-timeout") {
+            write(stdout, R"({"BackendState":"NeedsLogin","AuthURL":"https://login.tailscale.com/a/fixture"})");
+            return 0;
+        }
+        if (up && scenario == "action-up") {
+            write(stdout, "fixture up completed");
+            return 0;
+        }
+        if (up && scenario == "action-up-denied") {
+            write(stderr, "fixture up refusal");
+            return 17;
+        }
+        if (up && scenario == "action-up-timeout") {
+            write(stdout, "fixture up waiting");
+            QThread::msleep(7000);
+            return 0;
+        }
+        if (logout && scenario == "action-logout")
+            return 0;
+        if (logout && scenario == "action-logout-denied")
+            return 23;
+        return 94;
+    }
+    if (scenario.startsWith("select-")) {
+        const bool changed = prior.contains("switch -- work\n") &&
+            scenario != "select-unverified" && scenario != "select-unconfirmed";
+        if (readProfiles || readLegacy) {
+            if (scenario == "select-legacy" && readProfiles) {
+                write(stderr, "flag provided but not defined: -json");
+                return 1;
+            }
+            if (scenario == "select-disappeared" && !prior.isEmpty()) {
+                write(stdout, R"([{"id":"home","account":"owner@example.invalid","selected":true}])");
+                return 0;
+            }
+            auto list = readLegacy ? legacy : profiles;
+            if (changed) {
+                if (readLegacy) {
+                    list.replace("device*", "device");
+                    list.replace("work@example.invalid", "work@example.invalid*");
+                } else {
+                    list.replace("\"selected\":true", "\"selected\":false");
+                    list.replace("\"account\":\"work@example.invalid\",\"selected\":false",
+                        "\"account\":\"work@example.invalid\",\"selected\":true");
+                }
+            }
+            write(stdout, list);
+            return 0;
+        }
+        if (switchProfile) {
+            if (scenario == "select-timeout") {
+                QThread::msleep(14000);
+                return 0;
+            }
+            return scenario == "select-recovered" || scenario == "select-unverified" || scenario == "select-legacy"
+                ? 37 : 0;
+        }
+        return 95;
+    }
     if (scenario == "status" && readStatus) {
         write(stdout, "\xef\xbb\xbf" + status.left(169));
         QThread::msleep(35);

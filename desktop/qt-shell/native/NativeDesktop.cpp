@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "NativeDesktop.h"
-#include "discovery/KnownDevices.h"
 #include "tailscale/ProviderSelection.h"
 
 #include <QAction>
 #include <QApplication>
+#include <QClipboard>
 #include <QCoreApplication>
 #include <QDesktopServices>
 #include <QDir>
@@ -22,6 +22,8 @@ using Aurora::Platform::StartupInitialization;
 using Aurora::Platform::StartupRegistration;
 using Aurora::Platform::StartupResult;
 using Aurora::Platform::StartupState;
+using Aurora::Sunshine::HostLayout;
+using Aurora::Sunshine::LifecycleController;
 using aurora::tailscale::BackendState;
 using aurora::tailscale::EmbeddedStatusClient;
 using aurora::tailscale::StatusError;
@@ -40,6 +42,16 @@ void quitDesktop()
 {
     auto *application = QCoreApplication::instance();
     QTimer::singleShot(0, application, [] { QCoreApplication::exit(0); });
+}
+
+QString hostAddress(const QHostAddress &address)
+{
+    if (address.isNull())
+        return {};
+    const auto literal = address.toString();
+    const auto host = address.protocol() == QAbstractSocket::IPv6Protocol
+        ? QLatin1Char('[') + literal + QLatin1Char(']') : literal;
+    return host + QLatin1Char(':') + QString::number(Aurora::Discovery::BundledSunshinePort);
 }
 }
 
@@ -66,11 +78,16 @@ void NativeDesktop::start()
     auto *settings = application->addAction(tr("设置…"), this, [this] { activate(QStringLiteral("settings")); });
     settings->setMenuRole(QAction::PreferencesRole);
     settings->setShortcut(QKeySequence::Preferences);
-    auto *quit = application->addAction(tr("退出 Aurora"), this, &quitDesktop);
+    auto *quit = application->addAction(tr("退出 Aurora"), this, &NativeDesktop::requestExit);
     quit->setMenuRole(QAction::QuitRole);
     quit->setShortcut(QKeySequence::Quit);
 #endif
     if (!directory.isEmpty()) {
+        localPresence = std::make_unique<NativeDevicePresence>(directory);
+        connect(localPresence.get(), &NativeDevicePresence::changed, this, [this] {
+            updateDeviceCatalog(tailnetStatus);
+            emit stateChanged(snapshot);
+        });
         QDir applicationDirectory(QCoreApplication::applicationDirPath());
 #ifdef Q_OS_WIN
         if (applicationDirectory.dirName().compare(QStringLiteral("Moonlight"), Qt::CaseInsensitive) == 0)
@@ -114,14 +131,39 @@ void NativeDesktop::start()
                         tailnetFeedback = tr("无法退出 Tailscale，请刷新状态后重试。");
                     readTailnet();
                 });
+        connect(tailnet.get(), &EmbeddedStatusClient::hostFinished, this,
+                [this](quint64 generation, StatusError error) {
+                    if (!pendingAdvertisement)
+                        return;
+                    const auto next = *pendingAdvertisement;
+                    if (error != StatusError::None || generation != tailnetGeneration ||
+                        !tailnet->requestPublish(generation, next.account.has_value(), next.account,
+                            next.account && localPresence ? localPresence->announcementPacket(next.hosting) : QByteArray{}))
+                        pendingAdvertisement.reset();
+                });
+        connect(tailnet.get(), &EmbeddedStatusClient::publishFinished, this,
+                [this](quint64 generation, StatusError error) {
+                    if (!pendingAdvertisement)
+                        return;
+                    const auto completed = *pendingAdvertisement;
+                    pendingAdvertisement.reset();
+                    if (error == StatusError::None && generation == tailnetGeneration) {
+                        advertisedHost = completed;
+                        publishHostState();
+                    }
+                });
         connect(&tailnetPoll, &QTimer::timeout, this, [this] {
+            if (localPresence && localPresence->scanning())
+                return;
             if (snapshot.value(QStringLiteral("windowVisible")).toBool() &&
-                (tailnetStatus.state == BackendState::Starting || tailnetStatus.state == BackendState::NeedsLogin ||
+                (tailnetStatus.state == BackendState::Connected || tailnetStatus.state == BackendState::Starting ||
+                 tailnetStatus.state == BackendState::NeedsLogin ||
                  tailnetStatus.state == BackendState::NeedsApproval))
-                readTailnet();
+                readTailnet(false);
         });
         tailnetPoll.start(3000);
         readTailnet();
+        initializeHost();
     }
     activate();
 }
@@ -145,7 +187,113 @@ void NativeDesktop::initializeStartup()
     startup->initializeDefault();
 }
 
-void NativeDesktop::readTailnet()
+void NativeDesktop::initializeHost()
+{
+    const auto layout = HostLayout::installed();
+    if (layout && layout->hasPayload()) {
+        host = std::make_unique<LifecycleController>(*layout);
+        connect(host.get(), &LifecycleController::stateChanged, this, &NativeDesktop::publishHostState);
+        connect(host.get(), &LifecycleController::shutdownFinished, this, &quitDesktop);
+        if (preferences.managedHostAllowed())
+            host->start();
+    }
+    publishHostState();
+}
+
+void NativeDesktop::publishHostState()
+{
+    using Phase = LifecycleController::Phase;
+    const auto current = host ? host->state() : LifecycleController::State{};
+    const bool ready = current.phase == Phase::Ready;
+    const bool allowed = preferences.managedHostAllowed();
+    const bool busy = current.phase == Phase::Starting || current.phase == Phase::Restarting || current.phase == Phase::Stopping;
+    QString status;
+    switch (current.phase) {
+    case Phase::Ready: status = QStringLiteral("running"); break;
+    case Phase::Starting: status = QStringLiteral("starting"); break;
+    case Phase::Restarting: status = QStringLiteral("preparing"); break;
+    case Phase::Stopping: status = QStringLiteral("stopping"); break;
+    case Phase::Stopped: status = QStringLiteral("disabled"); break;
+    case Phase::Failed: status = QStringLiteral("notReady"); break;
+    }
+    const auto hint = !hostPreferenceFeedback.isEmpty() ? hostPreferenceFeedback : current.error;
+    const bool tailnetReachable = tailnetStatus.account && (!embeddedSelected ||
+        (advertisedHost.hosting && advertisedHost.account == tailnetStatus.account));
+    const auto tailnetAddress = ready && tailnetReachable ? hostAddress(tailnetStatus.localAddress) : QString();
+    const auto lanAddress = ready && localPresence ? hostAddress(localPresence->lan().address) : QString();
+    snapshot.insert(QStringLiteral("host"), QVariantMap{
+        {QStringLiteral("available"), bool(host)},
+        {QStringLiteral("managed"), bool(host)},
+        {QStringLiteral("allowed"), allowed},
+        {QStringLiteral("busy"), busy},
+        {QStringLiteral("status"), status},
+        {QStringLiteral("toggleAvailable"), bool(host)},
+        {QStringLiteral("refreshAvailable"), bool(host) && !busy},
+        {QStringLiteral("retryAvailable"), bool(host) && allowed && current.phase == Phase::Failed},
+        {QStringLiteral("lanAddress"), lanAddress},
+        {QStringLiteral("tailscaleAddress"), tailnetAddress},
+#ifdef Q_OS_MACOS
+        {QStringLiteral("permissionsAvailable"), bool(host) && allowed},
+#endif
+        {QStringLiteral("hint"), hint},
+    });
+    sleepPrevention.setHostActive(ready);
+    if (localPresence)
+        localPresence->setHosting(ready);
+    syncEmbeddedHost();
+    emit stateChanged(snapshot);
+}
+
+bool NativeDesktop::handleHostAction(const QString &action)
+{
+    if (!action.startsWith(QLatin1String("host")))
+        return false;
+    if (!host)
+        return true;
+
+    using Phase = LifecycleController::Phase;
+    const auto phase = host->state().phase;
+    if (phase == Phase::Starting || phase == Phase::Restarting || phase == Phase::Stopping)
+        return true;
+    hostPreferenceFeedback.clear();
+    if (action == QLatin1String("hostEnable")) {
+        if (!preferences.setManagedHostAllowed(true))
+            hostPreferenceFeedback = tr("无法保存允许本机被控的设置。");
+        else
+            host->start();
+    } else if (action == QLatin1String("hostDisable")) {
+        if (!preferences.setManagedHostAllowed(false))
+            hostPreferenceFeedback = tr("无法保存允许本机被控的设置。");
+        host->stop();
+    } else if (action == QLatin1String("hostCopyLan") || action == QLatin1String("hostCopyTailnet")) {
+        const auto addressField = action == QLatin1String("hostCopyLan") ? QStringLiteral("lanAddress")
+            : QStringLiteral("tailscaleAddress");
+        const auto address = snapshot.value(QStringLiteral("host")).toMap().value(addressField).toString();
+        if (!address.isEmpty() && QGuiApplication::clipboard())
+            QGuiApplication::clipboard()->setText(address);
+    } else if ((action == QLatin1String("hostRetry") || action == QLatin1String("hostRefresh") ||
+                action == QLatin1String("hostContinuePermissions")) && preferences.managedHostAllowed() &&
+               (phase == Phase::Stopped || phase == Phase::Failed)) {
+        host->start();
+    }
+#ifdef Q_OS_MACOS
+    else if (action == QLatin1String("hostOpenPermissions") && preferences.managedHostAllowed()) {
+        QDesktopServices::openUrl(QUrl(QStringLiteral("x-apple.systempreferences:com.apple.preference.security?Privacy")));
+    }
+#endif
+    publishHostState();
+    return true;
+}
+
+void NativeDesktop::requestExit()
+{
+    if (host)
+        host->shutdown();
+    else
+        quitDesktop();
+}
+
+void NativeDesktop::readTailnet(bool showRefresh)
 {
     if (tailnetBusy || logoutAccount)
         return;
@@ -167,7 +315,7 @@ void NativeDesktop::readTailnet()
         tailnetGeneration = next;
         tailnetBusy = true;
     }
-    publishTailnetStatus(tailnetStatus, accepted);
+    publishTailnetStatus(tailnetStatus, accepted && showRefresh);
 }
 
 void NativeDesktop::receiveTailnetStatus(quint64 generation, const aurora::tailscale::StatusResult &result)
@@ -176,12 +324,34 @@ void NativeDesktop::receiveTailnetStatus(quint64 generation, const aurora::tails
         return;
     tailnetBusy = false;
     tailnetStatus = result.status.value_or(aurora::tailscale::Status{});
+    if (localPresence) {
+        const bool visible = snapshot.value(QStringLiteral("windowVisible")).toBool();
+        localPresence->update(tailnetStatus, embeddedSelected, visible);
+        if (visible && embeddedSelected && tailnet && tailnetStatus.account)
+            localPresence->scanEmbedded(*tailnet, tailnetStatus, generation);
+    }
     if (openLoginAfterStatus) {
         openLoginAfterStatus = false;
         if (snapshot.value(QStringLiteral("windowVisible")).toBool() && tailnetStatus.state == BackendState::NeedsLogin)
             openTailnetLogin();
     }
     publishTailnetStatus(tailnetStatus);
+    publishHostState();
+}
+
+void NativeDesktop::syncEmbeddedHost()
+{
+    if (!tailnet || !localPresence || pendingAdvertisement || tailnetBusy)
+        return;
+    EmbeddedAdvertisement next;
+    if (embeddedSelected && tailnetStatus.account) {
+        next.account = tailnetStatus.account;
+        next.hosting = host && host->state().phase == LifecycleController::Phase::Ready;
+    }
+    if (next == advertisedHost)
+        return;
+    if (tailnet->requestHost(tailnetGeneration, next.hosting))
+        pendingAdvertisement = next;
 }
 
 void NativeDesktop::openTailnetLogin()
@@ -221,7 +391,10 @@ bool NativeDesktop::handleTailnetAction(const QString &action, const QJsonObject
             tailnetGeneration = next;
             tailnetBusy = true;
             tailnetStatus = {};
+            if (localPresence)
+                localPresence->update(tailnetStatus, embeddedSelected, false);
             tailnetFeedback.clear();
+            publishHostState();
         }
         publishTailnetStatus(tailnetStatus);
         return true;
@@ -328,21 +501,10 @@ void NativeDesktop::updateDeviceCatalog(const aurora::tailscale::Status &status)
         ++deviceEpoch;
     }
     QVariantList rows;
-    if (status.account) {
-        Aurora::Discovery::NetworkSnapshot network{status.localAddress, status.account->ownerId, status.account->nodeId, {}};
-        for (const auto &peer : status.peers) {
-            Aurora::Discovery::Device device;
-            device.id = peer.nodeId;
-            device.name = peer.name;
-            device.platform = peer.platform;
-            device.address = peer.address;
-            device.alternateAddress = peer.alternateAddress;
-            device.online = peer.online;
-            network.devices.append(device);
-        }
-        Aurora::Discovery::TailnetSnapshot cached;
-        cached.known = Aurora::Discovery::readKnownDevices(directory, network);
-        for (const auto &device : Aurora::Discovery::visibleDevices(&network, nullptr, &cached))
+    if (status.account && localPresence) {
+        const auto devices = Aurora::Discovery::visibleDevices(&localPresence->network(), &localPresence->lan(),
+                                                               &localPresence->tailnet());
+        for (const auto &device : devices)
             rows.append(Aurora::Discovery::qtDeviceRow(device).toVariantMap());
     }
     snapshot.insert(QStringLiteral("deviceAccess"), status.account ? QStringLiteral("ready")
@@ -372,7 +534,7 @@ void NativeDesktop::initializeTray()
         return;
     connect(&tray, &DesktopTray::openRequested, this, [this] { activate(); });
     connect(&tray, &DesktopTray::settingsRequested, this, [this] { activate(QStringLiteral("settings")); });
-    connect(&tray, &DesktopTray::quitRequested, this, &quitDesktop);
+    connect(&tray, &DesktopTray::quitRequested, this, &NativeDesktop::requestExit);
     tray.setVisible(preferences.closeToTray());
 }
 
@@ -390,6 +552,8 @@ void NativeDesktop::handleRequest(const QJsonObject &request)
     const auto action = request.value(QStringLiteral("action")).toString();
     if (handleTailnetAction(action, request))
         return;
+    if (handleHostAction(action))
+        return;
     if (action != QLatin1String("window-close")) {
         refreshPreferences(request);
         return;
@@ -400,7 +564,7 @@ void NativeDesktop::handleRequest(const QJsonObject &request)
         snapshot.insert(QStringLiteral("windowVisible"), false);
         publishTailnetStatus(tailnetStatus);
     } else {
-        quitDesktop();
+        requestExit();
     }
 }
 

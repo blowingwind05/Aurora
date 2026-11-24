@@ -9,6 +9,7 @@ add_executable(AuroraQtShell bridge/main.cpp bridge/AuroraMore.cpp bridge/Aurora
 target_sources(AuroraQtShell PRIVATE
     bridge/aurora-brand.qrc
     native/DesktopTray.cpp native/DesktopTray.h native/TrayMenuPlacement.h
+    native/NativeDevicePresence.cpp native/NativeDevicePresence.h
     native/NativeDesktop.cpp native/NativeDesktop.h
     native/NativeInstance.cpp native/NativeInstance.h
     native/preferences/DesktopPreferences.cpp native/preferences/DesktopPreferences.h)
@@ -37,6 +38,7 @@ add_subdirectory(native/session)
 add_subdirectory(native/sunshine)
 add_subdirectory(native/sunshine/admin)
 add_subdirectory(native/sunshine/host)
+add_subdirectory(native/sunshine/lifecycle)
 add_subdirectory(native/stream)
 add_subdirectory(native/tailscale)
 if(WIN32)
@@ -46,4 +48,4 @@ endif()
 target_link_libraries(AuroraQtShell PRIVATE Qt${QT_VERSION_MAJOR}::Quick Qt${QT_VERSION_MAJOR}::QuickControls2
     Qt${QT_VERSION_MAJOR}::Network Qt${QT_VERSION_MAJOR}::Widgets
     aurora_native_platform aurora_native_discovery aurora_native_pairing aurora_native_presence aurora_native_session
-    Aurora::SunshineConfig Aurora::SunshineAdmin Aurora::SunshineHost aurora_native_stream AuroraNativeTailscale)
+    Aurora::SunshineLifecycle aurora_native_stream AuroraNativeTailscale)

@@ -2,9 +2,11 @@
 #pragma once
 
 #include "DesktopTray.h"
+#include "NativeDevicePresence.h"
 #include "preferences/DesktopPreferences.h"
 #include "platform/HostSleepPrevention.h"
 #include "platform/StartupRegistration.h"
+#include "sunshine/lifecycle/LifecycleController.h"
 #include "tailscale/EmbeddedStatusClient.h"
 #ifdef Q_OS_WIN
 #include "tailscale/system/SystemTailscaleClient.h"
@@ -36,10 +38,15 @@ signals:
 private:
     void initializeStartup();
     void initializeTray();
-    void readTailnet();
+    void initializeHost();
+    bool handleHostAction(const QString &action);
+    void publishHostState();
+    void requestExit();
+    void readTailnet(bool showRefresh = true);
     void receiveTailnetStatus(quint64 generation, const aurora::tailscale::StatusResult &result);
     bool handleTailnetAction(const QString &action, const QJsonObject &request);
     void openTailnetLogin();
+    void syncEmbeddedHost();
     void publishTailnetStatus(const aurora::tailscale::Status &status, bool refreshing = false);
     void updateDeviceCatalog(const aurora::tailscale::Status &status);
     void refreshPreferences(const QJsonObject &request);
@@ -51,6 +58,9 @@ private:
     DesktopTray tray;
     std::unique_ptr<QMenuBar> applicationMenu;
     std::unique_ptr<Aurora::Platform::StartupRegistration> startup;
+    std::unique_ptr<Aurora::Sunshine::LifecycleController> host;
+    std::unique_ptr<NativeDevicePresence> localPresence;
+    QString hostPreferenceFeedback;
     int preferenceRequestId = 0;
     std::unique_ptr<aurora::tailscale::EmbeddedStatusClient> tailnet;
 #ifdef Q_OS_WIN
@@ -61,6 +71,16 @@ private:
     QString tailnetFeedback;
     std::optional<aurora::tailscale::AccountIdentity> catalogAccount;
     std::optional<aurora::tailscale::AccountIdentity> logoutAccount;
+    struct EmbeddedAdvertisement {
+        std::optional<aurora::tailscale::AccountIdentity> account;
+        bool hosting = false;
+        bool operator==(const EmbeddedAdvertisement &other) const
+        {
+            return account == other.account && hosting == other.hosting;
+        }
+    };
+    EmbeddedAdvertisement advertisedHost;
+    std::optional<EmbeddedAdvertisement> pendingAdvertisement;
     quint64 tailnetGeneration = 0;
     int deviceEpoch = 0;
     int logoutInvitation = 0;

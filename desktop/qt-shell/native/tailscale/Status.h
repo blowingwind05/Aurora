@@ -50,7 +50,7 @@ struct Status
 
 enum class StatusError {
     None, Unavailable, InvalidStateDirectory, StartFailed, Transport, Timeout,
-    ResponseTooLarge, InvalidResponse, HelperRejected
+    ResponseTooLarge, InvalidResponse, HelperRejected, Cancelled
 };
 
 struct StatusResult

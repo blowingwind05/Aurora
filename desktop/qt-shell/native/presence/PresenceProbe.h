@@ -61,6 +61,7 @@ public:
 
     int remainingMilliseconds() const;
     QJsonObject requestParameters() const;
+    const QByteArray &packet() const { return request_; }
     // The transport must correlate this result to its own existing helper RPC request.
     std::optional<Response> decodeResult(const QJsonValue &result, const aurora::tailscale::Status &current,
                                          quint64 generation) const;

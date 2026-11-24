@@ -2,19 +2,28 @@
 
 AuroraNativeTailscale links Qt Core and Network and uses the bundled AuroraTailnet helper. The coordinator owns one EmbeddedStatusClient on its event-loop thread. Pass the Windows package root or the macOS bundle's Contents/MacOS directory to bundledExecutable, and pass the existing absolute, per-user Aurora/Tailnet state directory to the constructor.
 
-The three request methods share a child process and one in-flight slot. A method that returns false has queued nothing. Each accepted request completes asynchronously through its matching signal and echoes the supplied generation. The coordinator gates requests against its current context and discards stale completions.
+The typed methods share one child process. Status and mutations use one in-flight slot. Up to eight presence requests can overlap each other and that slot. A method that returns false or zero has queued nothing. Accepted requests complete asynchronously and echo the supplied generation. Presence and open also return the request ID used in their completion signals.
 
 | Request and signal | Successful Go result | Coordinator use |
 | --- | --- | --- |
 | requestStatus / statusFinished | Status object | Use the snapshot for display and account identity. |
 | requestLogin / loginFinished | An object containing only the boolean pending | When true, the helper has queued or started authorization. When false, the node is already running. Poll status for a vetted login URL. |
 | requestLogout / logoutFinished | Empty object | Refresh status and resolve signed-out presentation from that result. |
+| requestHost / hostFinished | Boolean enabled echo | Enable or disable the existing Sunshine listener. |
+| requestPublish / publishFinished | Boolean enabled echo | Publish a kind-2 presence template for the supplied account or disable publication. |
+| requestPresence / presenceFinished | Base64 kind-2 packet | Probe a verified peer using a kind-1 request. The reply carries the same nonce. |
+| requestOpen / openFinished | Lease ID and relay base port | Open the bundled Sunshine port on a verified IPv4 peer. Use the returned loopback endpoint. |
+| requestClose / closeFinished | Empty object | Release a lease through its original helper. The completion echoes the open request ID. |
 
-The child uses the existing --state-dir argument. Every request has an empty params object and a string request ID. The deadline is 12 seconds including startup. Status replies are limited to 4 MiB and login/logout replies to 4 KiB. A timeout, malformed frame, or broken pipe invalidates the transport. Mutations are sent once. After an ambiguous failure, refresh status before deciding whether to retry. Stderr and helper error text stay out of public results. The helper can start or resume its node when launched.
+The child uses the existing `--state-dir` argument and string request IDs. The transport deadline is 12 seconds including startup or waiting to send a lease close. Presence reports timeout after 900 ms and retains sent requests until their replies are drained or the transport deadline expires. Status replies are limited to 4 MiB and other replies to 4 KiB. A hard timeout, malformed frame, broken pipe, or failed lease close invalidates the transport and stops the helper. Mutations are sent once. After an ambiguous failure, refresh status before retrying. Stderr and helper error text stay out of public results. The helper can start or resume its node when launched. Disable requests use an already-running helper.
 
 Only status can expose a login URL. The legacy HTTPS host and path check applies during NeedsLogin. The helper client leaves browser launch and user confirmation to its caller.
 
 The snapshot keeps Self.UserID as a positive signed 64-bit value. Use its decimal string form when forwarding the ID to QML. The decoder treats Self.ID and CurrentTailnet.StableID as opaque identifiers. User display data is selected by that exact owner. Peer rows use the stable ID field in each Peer entry. The projection omits tagged, shared, other-owner, duplicate-ID and unusable-address records. A connected backend can lack a verified account identity or local address. The helper's account and peer checks remain authoritative for pairing and streaming.
+
+Pass the generation from the latest authenticated status completion to enable hosting or publication, probe a peer, or open a stream. Publication checks the owner and both stable IDs against that status. The wire owner is a decimal signed 64-bit JSON number even on Qt 5. Presence and open require the stable peer ID and an address from that same status. Open always targets port 48989, and the Go RPC rechecks the peer at the selected address. The coordinator owns context revalidation and can discard stale completions. It also owns discovery packet creation and payload interpretation.
+
+Keep the returned shared `StreamLease` for as long as the stream uses its loopback address and port. Use and release the lease on the client's event-loop thread. Calling `close()` or dropping the last reference schedules a close. `isValid()` tracks local ownership and helper lifetime. `cancelOpen(id)` cancels a queued open before send or lets the client consume the allocation reply and schedule its close, with a `Cancelled` completion. Transport loss invalidates all owned leases and emits `leasesInvalidated()`. The coordinator should stop using the corresponding endpoints.
 
 selectWindowsProvider implements the legacy startup fallback from saved preference text and the two availability flags. The caller supplies these inputs. System remains the default when both runtimes are absent.
 
@@ -28,11 +37,11 @@ cmake --build build/native-tailscale --config Release
 ctest --test-dir build/native-tailscale -C Release --output-on-failure
 ~~~
 
-The fixture executable accepts the three RPCs and keeps its simulated state in memory. An embedding CMake target can add this directory and link AuroraNativeTailscale. The test executable is built only when this directory is configured as the top-level project with BUILD_TESTING enabled.
+The fixture keeps its simulated state in memory and exercises the RPCs over child pipes. An embedding CMake target can add this directory and link AuroraNativeTailscale. The tests build only when this directory is configured as the top-level project with BUILD_TESTING enabled.
 
 ## Remaining coordinator work
 
 - Wire startup, shutdown, per-user paths, polling and context generations. Read and persist the Windows provider preference and apply the macOS embedded-only policy.
 - Wire user confirmation, browser authorization and login/logout readback to the desktop entry point.
 - Implement Windows system-client discovery, service and protected-pipe access, system login/logout, and saved-profile list and switching.
-- Wire host and publish, presence, pairing (pair-host, pair-open, pair-source) and stream leases (open and close) through the existing helper.
+- Wire the host, publication, presence, and stream lease methods into discovery and the coordinator. Pairing RPCs (pair-host, pair-open, pair-source) are a separate slice.

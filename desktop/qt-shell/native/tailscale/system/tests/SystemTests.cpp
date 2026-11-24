@@ -4,6 +4,7 @@
 #include <QCoreApplication>
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QTest>
@@ -22,6 +23,14 @@ QString fakeCli(const QTemporaryDir &directory, const QString &scenario)
     if (!QFile::copy(executable, target))
         qFatal("Could not stage the offline CLI fixture.");
     return target;
+}
+
+QByteArray commands(const QString &executable)
+{
+    QFile trace(QFileInfo(executable).dir().filePath("fixture-commands.txt"));
+    if (!trace.open(QIODevice::ReadOnly))
+        qFatal("The fake CLI produced no command trace.");
+    return trace.readAll();
 }
 
 } // namespace
@@ -253,6 +262,183 @@ private slots:
         }
         if (scenario == "legacy-deadline")
             QVERIFY(elapsed.elapsed() >= 7900 && elapsed.elapsed() < 9400);
+    }
+
+
+    void connectionActions_data()
+    {
+        QTest::addColumn<QString>("scenario");
+        QTest::addColumn<int>("action");
+        QTest::addColumn<int>("error");
+        QTest::addColumn<int>("outcome");
+        QTest::addColumn<int>("exitCode");
+        QTest::newRow("login-up") << QStringLiteral("action-up") << int(Action::Login)
+            << int(StatusError::None) << int(ActionOutcome::ReadStatus) << 0;
+        QTest::newRow("resume-up") << QStringLiteral("action-up") << int(Action::Resume)
+            << int(StatusError::None) << int(ActionOutcome::ReadStatus) << 0;
+        QTest::newRow("up-denied") << QStringLiteral("action-up-denied") << int(Action::Login)
+            << int(StatusError::HelperRejected) << int(ActionOutcome::Failed) << 17;
+        QTest::newRow("up-timeout-means-read-status") << QStringLiteral("action-up-timeout") << int(Action::Resume)
+            << int(StatusError::None) << int(ActionOutcome::ReadStatus) << -1;
+        QTest::newRow("logout") << QStringLiteral("action-logout") << int(Action::Logout)
+            << int(StatusError::None) << int(ActionOutcome::Completed) << 0;
+        QTest::newRow("logout-denied") << QStringLiteral("action-logout-denied") << int(Action::Logout)
+            << int(StatusError::HelperRejected) << int(ActionOutcome::Failed) << 23;
+    }
+
+    void connectionActions()
+    {
+        QFETCH(QString, scenario);
+        QFETCH(int, action);
+        QFETCH(int, error);
+        QFETCH(int, outcome);
+        QFETCH(int, exitCode);
+        QTemporaryDir fixture;
+        QVERIFY(fixture.isValid());
+        const auto executable = fakeCli(fixture, scenario);
+        auto service = action == int(Action::Resume) ? ServiceState::Stopped : ServiceState::Running;
+        SystemTailscaleClient client([&] { return Installation{executable, service}; });
+        QSignalSpy actions(&client, &SystemTailscaleClient::actionFinished);
+        QSignalSpy statuses(&client, &SystemTailscaleClient::statusFinished);
+        const quint64 generation = 0xfedcba9876543210ULL;
+        QElapsedTimer elapsed;
+        elapsed.start();
+
+        switch (Action(action)) {
+        case Action::Login: QVERIFY(client.requestLogin(generation)); break;
+        case Action::Resume: QVERIFY(client.requestResume(generation)); break;
+        case Action::Logout: QVERIFY(client.requestLogout(generation)); break;
+        default: QFAIL("Unexpected fixture operation");
+        }
+        QVERIFY(!client.requestStatus(generation + 1));
+        QVERIFY(!client.requestLogout(generation + 1));
+        QVERIFY(actions.isEmpty());
+        QTRY_COMPARE_WITH_TIMEOUT(actions.size(), 1, 7500);
+        QCOMPARE(actions.first().first().toULongLong(), generation);
+        const auto result = actions.first().at(1).value<ActionResult>();
+        QCOMPARE(int(result.action), action);
+        QCOMPARE(int(result.error), error);
+        QCOMPARE(int(result.outcome), outcome);
+        QCOMPARE(result.exitCode.value_or(-1), exitCode);
+        if (scenario == "action-up-timeout")
+            QVERIFY(elapsed.elapsed() >= 4900);
+        QCOMPARE(commands(executable), action == int(Action::Logout) ? QByteArray("logout\n") : QByteArray("up\n"));
+        QVERIFY(statuses.isEmpty());
+        if (scenario == "action-up-timeout") {
+            service = ServiceState::Running;
+            bool accepted = false;
+            QTRY_VERIFY_WITH_TIMEOUT(accepted || (accepted = client.requestStatus(generation + 1)), 3000);
+            QTRY_COMPARE_WITH_TIMEOUT(statuses.size(), 1, 3000);
+            QCOMPARE(statuses.first().first().toULongLong(), generation + 1);
+            const auto status = statuses.first().at(1).value<StatusResult>();
+            QVERIFY(status.status);
+            QCOMPARE(status.status->loginUrl, QUrl("https://login.tailscale.com/a/fixture"));
+            QCOMPARE(commands(executable), QByteArray("up\nstatus --json\n"));
+        }
+    }
+
+    void selectingProfiles_data()
+    {
+        QTest::addColumn<QString>("scenario");
+        QTest::addColumn<QString>("id");
+        QTest::addColumn<int>("error");
+        QTest::addColumn<int>("outcome");
+        QTest::addColumn<int>("exitCode");
+        QTest::addColumn<QByteArray>("expectedCommands");
+        const QByteArray checks = "switch --list --json\nswitch --list --json\n";
+        const QByteArray transaction = checks + "switch -- work\nswitch --list --json\n";
+        QTest::newRow("success-readback") << QStringLiteral("select-normal") << QStringLiteral("work")
+            << int(StatusError::None) << int(ActionOutcome::Completed) << 0 << transaction;
+        QTest::newRow("already-current") << QStringLiteral("select-current") << QStringLiteral("home")
+            << int(StatusError::None) << int(ActionOutcome::AlreadyCurrent) << -1 << checks;
+        QTest::newRow("profile-removed-after-listing") << QStringLiteral("select-disappeared") << QStringLiteral("work")
+            << int(StatusError::Unavailable) << int(ActionOutcome::Failed) << -1 << checks;
+        QTest::newRow("nonzero-but-selected") << QStringLiteral("select-recovered") << QStringLiteral("work")
+            << int(StatusError::None) << int(ActionOutcome::Revalidated) << 37 << transaction;
+        QTest::newRow("nonzero-still-unselected") << QStringLiteral("select-unverified") << QStringLiteral("work")
+            << int(StatusError::HelperRejected) << int(ActionOutcome::Failed) << 37 << transaction;
+        QTest::newRow("exit-zero-still-unselected") << QStringLiteral("select-unconfirmed") << QStringLiteral("work")
+            << int(StatusError::InvalidResponse) << int(ActionOutcome::Failed) << 0 << transaction;
+        QTest::newRow("timeout-but-selected") << QStringLiteral("select-timeout") << QStringLiteral("work")
+            << int(StatusError::None) << int(ActionOutcome::Revalidated) << -1 << transaction;
+        QTest::newRow("legacy-listing-and-readback") << QStringLiteral("select-legacy") << QStringLiteral("work")
+            << int(StatusError::None) << int(ActionOutcome::Revalidated) << 37
+            << QByteArray("switch --list --json\nswitch --list\nswitch --list --json\nswitch --list\n"
+                          "switch -- work\nswitch --list --json\nswitch --list\n");
+    }
+
+    void selectingProfiles()
+    {
+        QFETCH(QString, scenario);
+        QFETCH(QString, id);
+        QFETCH(int, error);
+        QFETCH(int, outcome);
+        QFETCH(int, exitCode);
+        QFETCH(QByteArray, expectedCommands);
+        QTemporaryDir fixture;
+        QVERIFY(fixture.isValid());
+        const auto executable = fakeCli(fixture, scenario);
+        SystemTailscaleClient client([=] { return Installation{executable, ServiceState::Running}; });
+        QSignalSpy profiles(&client, &SystemTailscaleClient::profilesFinished);
+        QSignalSpy actions(&client, &SystemTailscaleClient::actionFinished);
+        const quint64 generation = 131;
+
+        QVERIFY(!client.requestProfileSwitch(id, generation));
+        QVERIFY(!QFile::exists(QFileInfo(executable).dir().filePath("fixture-commands.txt")));
+        QVERIFY(client.requestProfiles(generation));
+        QVERIFY(!client.requestProfileSwitch(id, generation));
+        QTRY_COMPARE_WITH_TIMEOUT(profiles.size(), 1, 3000);
+        const auto list = profiles.first().at(1).value<ProfilesResult>();
+        QCOMPARE(list.error, StatusError::None);
+        QCOMPARE(list.profiles.size(), 2);
+        QVERIFY(!client.requestProfileSwitch("not-listed", generation));
+        QVERIFY(!client.requestProfileSwitch("--work", generation));
+        QVERIFY(!client.requestProfileSwitch("Work", generation));
+        QVERIFY(!client.requestProfileSwitch(id, generation + 1));
+
+        QVERIFY(client.requestProfileSwitch(id, generation));
+        QVERIFY(!client.requestProfileSwitch(id, generation));
+        QVERIFY(!client.requestProfiles(generation));
+        QTRY_COMPARE_WITH_TIMEOUT(actions.size(), 1, 17000);
+        QCOMPARE(actions.first().first().toULongLong(), generation);
+        const auto result = actions.first().at(1).value<ActionResult>();
+        QCOMPARE(result.action, Action::SwitchProfile);
+        QCOMPARE(int(result.error), error);
+        QCOMPARE(int(result.outcome), outcome);
+        QCOMPARE(result.exitCode.value_or(-1), exitCode);
+        QCOMPARE(commands(executable), expectedCommands);
+        QCOMPARE(profiles.size(), 1);
+        QVERIFY(!client.requestProfileSwitch(id, generation));
+    }
+
+    void unusedListingAuthorizationIsInvalidated()
+    {
+        QTemporaryDir fixture;
+        QVERIFY(fixture.isValid());
+        const auto first = fakeCli(fixture, "select-normal");
+        const auto other = fakeCli(fixture, "select-recovered");
+        auto executable = first;
+        auto service = ServiceState::Running;
+        SystemTailscaleClient client([&] { return Installation{executable, service}; });
+        QSignalSpy profiles(&client, &SystemTailscaleClient::profilesFinished);
+        QSignalSpy actions(&client, &SystemTailscaleClient::actionFinished);
+
+        QVERIFY(client.requestProfiles(110));
+        QTRY_COMPARE_WITH_TIMEOUT(profiles.size(), 1, 3000);
+        executable = other;
+        QVERIFY(client.requestProfileSwitch("work", 110));
+        QTRY_COMPARE_WITH_TIMEOUT(actions.size(), 1, 3000);
+        QCOMPARE(actions.first().at(1).value<ActionResult>().error, StatusError::Unavailable);
+        QCOMPARE(commands(first), QByteArray("switch --list --json\n"));
+
+        executable = first;
+        QVERIFY(client.requestProfiles(111));
+        QTRY_COMPARE_WITH_TIMEOUT(profiles.size(), 2, 3000);
+        service = ServiceState::Stopped;
+        QVERIFY(client.requestProfiles(111));
+        QTRY_COMPARE_WITH_TIMEOUT(profiles.size(), 3, 3000);
+        QVERIFY(!client.requestProfileSwitch("work", 111));
+        QCOMPARE(commands(first), QByteArray("switch --list --json\nswitch --list --json\n"));
     }
 
     void oversizedStatus()

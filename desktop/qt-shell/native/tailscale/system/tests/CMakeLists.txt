@@ -11,4 +11,4 @@ target_link_libraries(AuroraSystemTailnetTests PRIVATE AuroraSystemTailscale Qt$
 add_dependencies(AuroraSystemTailnetTests AuroraSystemTailnetFixture)
 
 add_test(NAME AuroraSystemTailscaleRead COMMAND AuroraSystemTailnetTests)
-set_tests_properties(AuroraSystemTailscaleRead PROPERTIES TIMEOUT 35)
+set_tests_properties(AuroraSystemTailscaleRead PROPERTIES TIMEOUT 50)

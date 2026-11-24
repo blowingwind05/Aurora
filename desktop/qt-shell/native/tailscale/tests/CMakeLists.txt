@@ -14,3 +14,10 @@ add_dependencies(AuroraTailnetTests AuroraTailnetFixture)
 
 add_test(NAME AuroraTailnetStatus COMMAND AuroraTailnetTests)
 set_tests_properties(AuroraTailnetStatus PROPERTIES TIMEOUT 50)
+
+add_executable(AuroraTailnetRpcTests RpcTests.cpp)
+set_target_properties(AuroraTailnetRpcTests PROPERTIES AUTOMOC ON)
+target_link_libraries(AuroraTailnetRpcTests PRIVATE AuroraNativeTailscale Qt${QT_VERSION_MAJOR}::Test)
+add_dependencies(AuroraTailnetRpcTests AuroraTailnetFixture)
+add_test(NAME AuroraTailnetRpc COMMAND AuroraTailnetRpcTests)
+set_tests_properties(AuroraTailnetRpc PROPERTIES TIMEOUT 30)
