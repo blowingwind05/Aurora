@@ -16,6 +16,8 @@ power_patch="$script_dir/0009-aurora-device-power.patch"
 privacy_patch="$script_dir/0010-aurora-macos-privacy-screensaver.patch"
 geometry_patch="$script_dir/0012-aurora-capture-geometry.patch"
 geometry_platform_patch="$script_dir/0013-aurora-macos-capture-geometry.patch"
+boost_fetch_patch="$script_dir/0014-aurora-macos-boost-locale-cmake.patch"
+boost_locale_patch="$script_dir/Boost-Locale-1.89-CMake.patch"
 privacy_provenance="$script_dir/Mac-Privacy-SOURCE.txt"
 privacy_preview="${AURORA_MACOS_PRIVACY_PREVIEW:-OFF}"
 
@@ -42,7 +44,7 @@ staged="$work/stage"
 git clone --depth 1 --branch "$tag" --recurse-submodules --shallow-submodules \
   https://github.com/SunshineStream/Sunshine.git "$source_dir"
 [[ "$(git -C "$source_dir" rev-parse HEAD)" == "$revision" ]]
-for host_patch in "$patch" "$wallpaper_patch" "$private_admin_patch" "$pair_source_port_patch" "$encoder_probe_patch" "$power_patch" "$privacy_patch" "$geometry_patch" "$geometry_platform_patch"; do
+for host_patch in "$patch" "$wallpaper_patch" "$private_admin_patch" "$pair_source_port_patch" "$encoder_probe_patch" "$power_patch" "$privacy_patch" "$geometry_patch" "$geometry_platform_patch" "$boost_fetch_patch"; do
   git -C "$source_dir" apply --check "$host_patch"
   git -C "$source_dir" apply "$host_patch"
 done
@@ -55,6 +57,7 @@ BRANCH="$tag" BUILD_VERSION="$tag" COMMIT="$revision" \
     -DBUILD_DOCS=OFF -DBUILD_TESTS=OFF \
     -DSUNSHINE_ENABLE_TRAY=OFF -DAURORA_SUNSHINE_HOST=ON \
     -DAURORA_MACOS_PRIVACY_PREVIEW="$privacy_preview" \
+    -DAURORA_BOOST_LOCALE_PATCH="$boost_locale_patch" \
     -DICU_ROOT="$(brew --prefix icu4c@78)" \
     -DOPENSSL_ROOT_DIR="$(brew --prefix openssl@3)" \
     -DOpus_ROOT_DIR="$(brew --prefix opus)" \
@@ -93,6 +96,7 @@ cp "$desktop/Assets/Aurora.icns" "$resources/sunshine.icns"
 licenses="$resources/licenses"
 mkdir -p "$licenses"
 cp "$source_dir/LICENSE" "$source_dir/NOTICE" "$patch" "$wallpaper_patch" "$private_admin_patch" "$pair_source_port_patch" "$encoder_probe_patch" "$power_patch" "$privacy_patch" "$geometry_patch" "$geometry_platform_patch" "$privacy_provenance" "$licenses/"
+cp "$boost_fetch_patch" "$boost_locale_patch" "$licenses/"
 {
   printf '%s\n' 'https://github.com/SunshineStream/Sunshine' "$tag" "$revision"
   git -C "$source_dir" submodule status --recursive
