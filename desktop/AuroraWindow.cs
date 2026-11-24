@@ -58,6 +58,7 @@ public sealed partial class AuroraWindow : Window
     private bool allowManagedHostOnLaunch;
     private HostStatus host;
     private SunshinePage sunshinePage;
+    private SunshineHostSession sunshine;
     private TailscalePage tailscalePage;
     private bool refreshing;
     private bool manualRefresh;
@@ -174,10 +175,10 @@ public sealed partial class AuroraWindow : Window
                 args.Cancel = true;
                 return;
             }
-            if (sunshinePage?.IsBusy == true)
+            if (sunshine?.Busy == true || sunshinePage?.IsBusy == true)
             {
                 args.Cancel = true;
-                Navigate(Page.Host);
+                if (!TryShowQtWindow("host")) Navigate(Page.Host);
                 return;
             }
             if (sunshinePage?.HasPendingSettings == true)
@@ -214,7 +215,7 @@ public sealed partial class AuroraWindow : Window
             lifetime.Dispose();
             accountAvatar?.Dispose();
             presence?.Dispose();
-            sunshinePage?.Dispose();
+            CloseSunshineSettings();
             tailscalePage?.Dispose();
         };
         TailscaleRuntime.ContextChanging += OnTailscaleContextChanging;
@@ -515,8 +516,9 @@ public sealed partial class AuroraWindow : Window
             {
                 var prepareEmbeddedPairing = host.Managed && host.SettingsAvailable &&
                     network?.IsAuthenticated == true && network.Mode == TailscaleMode.Embedded;
-                if (HostPage.IsVisible || prepareEmbeddedPairing || AutomaticPairing.IsConfigured) OpenHostSettings();
-                if (sunshinePage != null) _ = sunshinePage.SetNetwork(network);
+                if (HostPage.IsVisible && qtShell == null) OpenHostSettings();
+                else if (prepareEmbeddedPairing || AutomaticPairing.IsConfigured) EnsureSunshineSession();
+                _ = SyncSunshineNetwork(network);
             }
         }
         UpdateActions();
@@ -700,11 +702,8 @@ public sealed partial class AuroraWindow : Window
             await RestoreManagedHost();
             return;
         }
-        if (host?.Installed == true)
-        {
-            OpenHostSettings();
-            await sunshinePage.ReloadIfUnavailable();
-        }
+        if (host?.Installed == true && !LegacySunshineEditing)
+            await EnsureSunshineSession().ReloadIfUnavailable();
         await RefreshDevices();
     }
 
@@ -743,7 +742,7 @@ public sealed partial class AuroraWindow : Window
     private async Task ChangeManagedHost(bool enable)
     {
         if (!CanChangeManagedHost(enable)) return;
-        if (sunshinePage?.IsBusy == true)
+        if (sunshine?.Busy == true || sunshinePage?.IsBusy == true)
         {
             managedHostError = "请等本机被控设置处理完成后再试。";
             RenderHost();
@@ -778,7 +777,8 @@ public sealed partial class AuroraWindow : Window
             }
             else if (host.Installed)
             {
-                sunshinePage?.SuspendManagedPairing();
+                sunshinePage?.DismissRestartConfirmation();
+                sunshine?.SuspendManagedPairing();
                 await stopManagedHost();
             }
             applied = true;
@@ -805,19 +805,14 @@ public sealed partial class AuroraWindow : Window
             changingManagedHost = null;
             if (!closed)
             {
-                if (host is { Managed: true, Installed: false } && sunshinePage != null)
-                {
-                    sunshinePage.Dispose();
-                    sunshinePage = null;
-                    HostSettings.Content = null;
-                }
-                else if (host?.Installed == true && page == Page.Host) OpenHostSettings();
+                if (host is { Managed: true, Installed: false }) CloseSunshineSettings();
+                else if (host?.Installed == true && page == Page.Host && qtShell == null) OpenHostSettings();
                 RenderHost();
                 UpdateActions();
                 if (page == Page.Host) AllowManagedHost.Focus();
                 if (applied && managedHostError == null && host?.Installed == enable)
                     SetFeedback(enable ? "已允许本机被控" : "已关闭本机被控", Page.Host, transient: true);
-                if (sunshinePage != null) _ = sunshinePage.SetNetwork(network);
+                _ = SyncSunshineNetwork(network);
                 _ = RefreshDevices();
             }
         }
@@ -1156,7 +1151,7 @@ public sealed partial class AuroraWindow : Window
         wallpaperAfterSession = null;
         presence?.UpdateTailnet(null);
         _ = ClearEmbeddedHost();
-        if (sunshinePage != null) _ = sunshinePage.SetNetwork(null);
+        _ = SyncSunshineNetwork(null);
     }
 
     private static async Task ClearEmbeddedHost()
@@ -1255,18 +1250,42 @@ public sealed partial class AuroraWindow : Window
         refreshTip.Content = refreshLabel;
     }
 
-    private void OpenHostSettings(bool syncNetwork = true)
+    private bool LegacySunshineEditing =>
+        sunshinePage?.HasPendingSettings == true || sunshinePage?.DetailTitle != null || sunshinePage?.IsBusy == true;
+
+    private SunshineHostSession EnsureSunshineSession()
+    {
+        if (sunshine != null) return sunshine;
+        sunshine = new SunshineHostSession();
+        sunshine.Changed += PublishQtShellState;
+        return sunshine;
+    }
+
+    private Task SyncSunshineNetwork(NetworkSnapshot snapshot) =>
+        sunshine?.SetNetwork(snapshot, refresh: !LegacySunshineEditing) ?? Task.CompletedTask;
+
+    private void OpenHostSettings()
     {
         if (sunshinePage != null) return;
-        sunshinePage = new SunshinePage();
+        sunshinePage = new SunshinePage(EnsureSunshineSession());
         sunshinePage.DetailsChanged += showingDetails =>
         {
             HostSummary.IsVisible = !showingDetails;
             UpdatePageHeader();
         };
         HostSettings.Content = sunshinePage;
-        sunshinePage.QtChanged += PublishQtShellState;
-        if (syncNetwork) _ = sunshinePage.SetNetwork(network);
+        _ = SyncSunshineNetwork(network);
+    }
+
+    private void CloseSunshineSettings()
+    {
+        sunshinePage?.Dispose();
+        sunshinePage = null;
+        HostSettings.Content = null;
+        if (sunshine == null) return;
+        sunshine.Changed -= PublishQtShellState;
+        sunshine.Dispose();
+        sunshine = null;
     }
 
     private void SetFeedback(string message, Page source = Page.Devices, bool transient = false)

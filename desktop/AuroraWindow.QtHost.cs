@@ -58,7 +58,7 @@ public sealed partial class AuroraWindow
             Feedback: qtHostFeedback,
             FeedbackFailed: qtHostFeedbackFailed)
         {
-            Sunshine = installed ? sunshinePage?.QtState ?? SunshinePage.QtIdleState(managed) : null
+            Sunshine = installed ? sunshine?.QtState ?? SunshineHostSession.QtIdleState(managed) : null
         };
     }
 
@@ -96,8 +96,8 @@ public sealed partial class AuroraWindow
             {
                 case "hostRefresh":
                     await RefreshDevicesAndReportCore(Page.Host);
-                    if (sunshinePage?.QtAttached == true)
-                        await sunshinePage.RefreshQtSettings();
+                    if (sunshine?.QtAttached == true && !LegacySunshineEditing)
+                        await sunshine.RefreshSettings();
                     break;
                 case "hostEnable":
                 case "hostDisable":
@@ -114,7 +114,7 @@ public sealed partial class AuroraWindow
                     await CopyAddressValue(state.TailscaleAddress, "Tailscale", Page.Host, ReportQtHostFeedback);
                     break;
                 case "hostOpenPermissions":
-                    SunshinePage.OpenMacPrivacySettings();
+                    SunshineHostSession.OpenMacPrivacySettings();
                     ReportQtHostFeedback("已打开 macOS 隐私设置。", failed: false);
                     break;
                 case "hostContinuePermissions":

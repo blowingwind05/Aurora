@@ -6,7 +6,7 @@
 
 - 桌面端使用 .NET 9 SDK、Avalonia 和 PowerShell 7。用 Git 获取仓库，从仓库根目录执行下列命令。
 - Windows 原生组件面向 x64。Moonlight 使用 Visual Studio x64 开发环境、带 `qmake` 和 `windeployqt` 的 Qt 工具链。构建脚本使用 Moonlight 源码附带的 `jom`。Sunshine 使用 MSYS2 UCRT64、GCC 14 或更新版本和原生 x64 Node.js。制作安装器时准备 Inno Setup 6。
-- macOS 原生构建使用与目标架构相同的 Mac、Xcode 工具和带 `qmake`、`macdeployqt` 的 Qt 6。Sunshine 的 Homebrew 和 Python 依赖见[宿主构建说明](desktop/upstream/sunshine/README.md#macos)。
+- macOS 原生构建使用与目标架构相同的 Mac、Xcode 工具、CMake 和带 `qmake`、`macdeployqt` 的 Qt 6。Sunshine 的 Homebrew 和 Python 依赖见[宿主构建说明](desktop/upstream/sunshine/README.md#macos)。
 - 内置 Tailscale 节点的构建脚本使用 Go 1.27.4。Windows 目标还需要 GNU `windres` 和配套的预处理器。 [节点构建说明](desktop/upstream/tsnet/README.md)
 
 调试主窗口、卡片或设置页时，可先运行桌面工程。把运行时改为当前机器的 `win-x64`、`osx-arm64` 或 `osx-x64`。
@@ -58,7 +58,7 @@ pwsh -File ./desktop/Build-Mac.ps1 -Architecture arm64 -TailscaleDirectory ./des
 | 主题、控件和资产 | [AuroraApp.axaml](desktop/AuroraApp.axaml)、[AuroraVisual.cs](desktop/AuroraVisual.cs)、[Assets](desktop/Assets) |
 | 设备发现、选路与登录 | [Discovery.cs](desktop/Discovery.cs)、[TailscaleRuntime.cs](desktop/TailscaleRuntime.cs)、[EmbeddedTailnet.cs](desktop/EmbeddedTailnet.cs) |
 | 同账号配对 | [AutomaticPairing.cs](desktop/AutomaticPairing.cs) 与各组件的后台配对补丁 |
-| 被控组件启动与设置 | [BundledSunshine.cs](desktop/BundledSunshine.cs)、[SunshineAdmin.cs](desktop/SunshineAdmin.cs)、[SunshinePage.axaml](desktop/SunshinePage.axaml) |
+| 被控组件启动与设置 | [BundledSunshine.cs](desktop/BundledSunshine.cs)、[SunshineHostSession.cs](desktop/SunshineHostSession.cs)、[SunshineAdmin.cs](desktop/SunshineAdmin.cs)、[Qt 设置页](desktop/qt-shell/qml/SunshineSettings.qml) |
 | 串流窗口与主控偏好 | [Windows 串流窗](desktop/Platform/Windows/StreamSessionWindow.cs)、[macOS 原生顶栏补丁](desktop/upstream/moonlight-qt/0013-aurora-macos-unified-session-toolbar.patch)、[StreamPreferences.cs](desktop/StreamPreferences.cs) |
 | 桌面壁纸预览 | [DesktopWallpaper.cs](desktop/DesktopWallpaper.cs) 与组件的壁纸读取补丁 |
 

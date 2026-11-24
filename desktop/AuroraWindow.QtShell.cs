@@ -99,13 +99,6 @@ public sealed partial class AuroraWindow
         PublishQtShellState();
     }
 
-    private void ShowAvaloniaPage(Page destination)
-    {
-        HideQtWindow();
-        TrayResidency.ShowAvaloniaWindow(this);
-        Navigate(destination);
-    }
-
     private async Task ObserveQtShell(QtShellBridge bridge)
     {
         try { await bridge.Completion; }
@@ -241,18 +234,14 @@ public sealed partial class AuroraWindow
             case string action when action.StartsWith("tailscale.", StringComparison.Ordinal):
                 await HandleQtTailscaleRequest(request);
                 break;
-            case "settings":
-                ShowAvaloniaPage(Page.Settings);
-                break;
             case "sunshineLoad" when host?.Installed == true && !changingManagedHost.HasValue && !stoppingHost:
-                OpenHostSettings(syncNetwork: false);
-                await sunshinePage.AttachQt(network);
+                await EnsureSunshineSession().AttachQt(network, LegacySunshineEditing);
                 break;
             case "sunshineSave" or "sunshineRestart" or "sunshineCertificate" or "sunshineLogin" or
                 "sunshineForget" or "sunshineOriginal" or "sunshineReauthorize" or "sunshinePair"
                 when host?.Installed == true && !changingManagedHost.HasValue && !stoppingHost &&
-                    sunshinePage?.QtAttached == true:
-                await sunshinePage.HandleQtRequest(request.Action, request.Sunshine);
+                    sunshine?.QtAttached == true:
+                await sunshine.HandleQtRequest(request.Action, request.Sunshine, LegacySunshineEditing);
                 if (request.Action == "sunshineRestart") _ = RefreshDevices();
                 break;
             default:

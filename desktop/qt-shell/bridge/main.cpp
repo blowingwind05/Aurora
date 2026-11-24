@@ -34,8 +34,12 @@ class AuroraBridge : public QObject
     Q_PROPERTY(QVariantMap state READ state NOTIFY stateChanged)
 
 public:
-    explicit AuroraBridge(bool windowsSession) : windowsSession(windowsSession)
+    explicit AuroraBridge(bool windowsSession, bool checkUi) : windowsSession(windowsSession)
     {
+        if (checkUi) {
+            snapshot.insert(QStringLiteral("windowVisible"), false);
+            return;
+        }
         // Anonymous pipes on Windows cannot be watched by QSocketNotifier.
         connect(&pollTimer, &QTimer::timeout, this, &AuroraBridge::readInput);
         pollTimer.start(25);
@@ -185,6 +189,7 @@ static void connectSessionPopup(QGuiApplication &app, QWindow &popup, AuroraBrid
 
 int main(int argc, char *argv[])
 {
+    const bool checkUi = argc > 1 && std::strcmp(argv[1], "--check-ui") == 0;
 #ifdef Q_OS_WIN
     const bool windowsSession = argc > 1 && std::strcmp(argv[1], "--windows-session") == 0;
 #else
@@ -203,8 +208,8 @@ int main(int argc, char *argv[])
     app.setWindowIcon(icon);
 #endif
     const auto arguments = app.arguments();
-    if (arguments.size() != (windowsSession ? 5 : 2)) {
-        qWarning("Usage: AuroraQtShell <Live.qml> or --windows-session <popup.qml> <owner> <owner-pid>");
+    if (arguments.size() != (windowsSession ? 5 : checkUi ? 3 : 2)) {
+        qWarning("Usage: AuroraQtShell [--check-ui] <Live.qml> or --windows-session <popup.qml> <owner> <owner-pid>");
         return 2;
     }
 
@@ -224,7 +229,7 @@ int main(int argc, char *argv[])
     }
 #endif
 
-    AuroraBridge bridge(windowsSession);
+    AuroraBridge bridge(windowsSession, checkUi);
     QNetworkAccessManager network;
     AuroraMore more(network, &QDesktopServices::openUrl);
     QQmlApplicationEngine engine;
@@ -235,9 +240,13 @@ int main(int argc, char *argv[])
             more.setApplicationVersion(bridge.state().value(QStringLiteral("applicationVersion")).toString());
         });
     }
-    engine.load(QUrl::fromLocalFile(arguments.at(windowsSession ? 2 : 1)));
+    engine.load(QUrl::fromLocalFile(arguments.at(windowsSession || checkUi ? 2 : 1)));
     if (engine.rootObjects().isEmpty())
         return 1;
+    if (checkUi) {
+        const auto window = qobject_cast<QWindow *>(engine.rootObjects().constFirst());
+        return window && !window->isVisible() ? 0 : 1;
+    }
 #ifdef Q_OS_WIN
     if (windowsSession) {
         auto popup = qobject_cast<QWindow *>(engine.rootObjects().constFirst());

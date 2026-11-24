@@ -95,6 +95,11 @@ for directory in Frameworks PlugIns Resources; do
     /usr/bin/ditto "$stage/$directory" "$destination/$directory"
   fi
 done
+if [[ "$expected_arch" == "$native_arch" ]]; then
+  /usr/bin/env -u QT_PLUGIN_PATH -u QT_QPA_PLATFORM_PLUGIN_PATH -u QML2_IMPORT_PATH -u QML_IMPORT_PATH \
+    QT_QPA_PLATFORM=cocoa "$destination/MacOS/AuroraQtShell" --check-ui \
+    "$destination/Resources/QtPreview/desktop/qt-shell/bridge/Live.qml"
+fi
 
 mkdir -p "$destination/Resources"
 cp "$here/../../Assets/Aurora.png" "$destination/Resources/AuroraStreamBrand.png"

@@ -189,7 +189,7 @@ AuroraMainWindow {
         if (destination === "host" || destination === "devices" ||
             destination === "feedback" || destination === "about") {
             currentPage = destination
-        } else if (destination === "settings" && ("generalSettings" in snapshot)) {
+        } else if (destination === "settings") {
             currentPage = destination
             requestPreference("read-general-settings", null)
         } else if (destination === "account") {
@@ -198,8 +198,6 @@ AuroraMainWindow {
                 auroraBridge.sendTailscale("tailscale.enter", "", 0)
             else
                 auroraBridge.send("account", "", 0)
-        } else if (destination === "settings") {
-            auroraBridge.send(destination, "", 0)
         }
     }
 }

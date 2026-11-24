@@ -50,8 +50,43 @@ static async Task RunAsync(string[] args)
         "restore the original display layout choice");
     Console.WriteLine("PASS: SunshineAdmin offline read, save/readback, invalid input, fixed options, mismatch and display state.");
 
+    await VerifyHeadlessSession();
     if (args.Length == 2)
         await RunQtAsync(args, admin, handler);
+}
+
+static async Task VerifyHeadlessSession()
+{
+    using var handler = new OfflineSunshine();
+    var endpoint = new Uri("https://127.0.0.1:47990/");
+    using var session = new SunshineHostSession(() => true, (managed, _) => new SunshineAdmin(handler, endpoint, managed));
+    await session.SetNetwork(null);
+    Require(session.Overview?.Preferences.Name == "书房电脑" && session.QtState == null,
+        "start the managed administration session before opening any UI");
+    await session.AttachQt(null, legacyEditing: false);
+    var initial = session.QtState;
+    Require(initial.Status == "ready" && initial.Config.Values["sunshine_name"] == "书房电脑" &&
+        !initial.RememberAvailable && initial.PairingRequests.Length == 1,
+        "attach Qt, load configuration and list manual pairing requests without creating Avalonia controls");
+
+    var edit = new QtSunshineRequest
+    {
+        Session = initial.Session, Id = 6, Changes = new() { ["sunshine_name"] = "跨平台配置" }
+    };
+    await session.HandleQtRequest("sunshineSave", edit, legacyEditing: true);
+    Require(session.QtState.Result.Errors.ContainsKey("sunshine_name") &&
+        handler.Config["sunshine_name"].GetString() == "书房电脑", "defer writes while the fallback editor has pending changes");
+    await session.HandleQtRequest("sunshineSave", edit, legacyEditing: false);
+    Require(session.QtState.Result.Saved.SequenceEqual(new[] { "sunshine_name" }) &&
+        session.QtState.Config.Values["sunshine_name"] == "跨平台配置",
+        "save and read back through the shared session");
+    await session.HandleQtRequest("sunshineSave", new QtSunshineRequest
+    {
+        Session = "previous-session", Id = 7, Changes = new() { ["sunshine_name"] = "已过期" }
+    }, legacyEditing: false);
+    Require(session.QtState.Result.Id == 6 && handler.Config["sunshine_name"].GetString() == "跨平台配置",
+        "ignore stale edits from a previous host session");
+    Console.WriteLine("PASS: headless Sunshine session read, shared Qt attach, pairing snapshot, edit exclusion and stale request rejection.");
 }
 
 static async Task RunQtAsync(string[] args, SunshineAdmin admin, OfflineSunshine handler)
@@ -178,6 +213,11 @@ sealed class OfflineSunshine : HttpMessageHandler
                     active = "", saved_exclusive = saved, active_exclusive = false,
                     displays = new[] { new { id = VirtualId, name = "离线虚拟显示器" } }
                 });
+            case "/api/pin" when request.Method == HttpMethod.Get:
+                return Reply(new { pairings = new[]
+                {
+                    new { id = "30000000000000000000000000000000", name = "测试主控", address = "192.0.2.20" }
+                } });
             case "/api/restart" when request.Method == HttpMethod.Post:
                 RestartCount++;
                 return Reply(new { status = true });
