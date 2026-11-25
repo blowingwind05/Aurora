@@ -34,8 +34,8 @@ void NativeDesktop::setSessionWindowSource(QQmlEngine &engine, const QUrl &sourc
 
 void NativeDesktop::initializeStreamSessions(const QString &applicationDirectory)
 {
-    sessionSupervisor = std::make_unique<SessionSupervisor>(Aurora::Stream::findMoonlight(applicationDirectory),
-                                                            tailnet.get());
+    const auto runtime = Aurora::Stream::findMoonlight(applicationDirectory);
+    sessionSupervisor = std::make_unique<SessionSupervisor>(runtime, tailnet.get());
     connect(sessionSupervisor.get(), &SessionSupervisor::prepared, this, &NativeDesktop::receivePrepared);
     connect(sessionSupervisor.get(), &SessionSupervisor::finished, this, &NativeDesktop::sessionFinished);
     connect(sessionSupervisor.get(), &SessionSupervisor::preferenceChangeRequested, this,
@@ -54,6 +54,7 @@ void NativeDesktop::initializeStreamSessions(const QString &applicationDirectory
         failRoute(tr("等待串流组件验证配对超时。"), true);
     });
     initializePairingClient();
+    initializeDeviceWallpapers(runtime);
 }
 
 bool NativeDesktop::handleConnectAction(const QString &action, const QJsonObject &request)
@@ -78,6 +79,7 @@ bool NativeDesktop::handleConnectAction(const QString &action, const QJsonObject
     }
 
     connection.emplace(Connection{selected->id, selected->name, *tailnetStatus.account, embeddedSelected});
+    refreshDeviceWallpapers();
     localPresence->setSessionActive(true);
     reportConnection(tr("正在检查设备连接…"), false);
     connectionStatusRetry.start();

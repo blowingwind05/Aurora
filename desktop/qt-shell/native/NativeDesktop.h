@@ -4,6 +4,7 @@
 #include "DesktopTray.h"
 #include "NativeDevicePresence.h"
 #include "pairing/client/PairingClient.h"
+#include "pairing/host/EmbeddedPairingHost.h"
 #include "preferences/DesktopPreferences.h"
 #include "platform/HostSleepPrevention.h"
 #include "platform/StartupRegistration.h"
@@ -13,6 +14,7 @@
 #include "tailscale/EmbeddedStatusClient.h"
 #include "tailscale/avatar/AvatarLoader.h"
 #include "wallpaper/host/HostWallpaper.h"
+#include "wallpaper/client/WallpaperClient.h"
 #ifdef Q_OS_WIN
 #include "tailscale/system/SystemPairingNc.h"
 #include "tailscale/system/SystemTailscaleClient.h"
@@ -52,6 +54,19 @@ private:
     void initializeTray();
     void initializeHost();
     void refreshHostWallpaper();
+    void initializeDeviceWallpapers(const QString &runtime);
+    QString cachedDeviceWallpaper(const Aurora::Discovery::Device &device) const;
+    void refreshDeviceWallpapers();
+    void tryWallpaperRoute();
+    void checkWallpaperRoute();
+    void releaseWallpaperPreview();
+    void finishWallpaperPreview(bool updated);
+    bool wallpaperRouteCurrent() const;
+    void initializePairingHost();
+    void refreshPairingHost(bool confirmed = false);
+    void retirePairingHost();
+    QString pairingHostConfirmation() const;
+    QString pairingHostFeedback() const;
     bool handleHostAction(const QString &action);
     bool handleSunshineAction(const QString &action, const QJsonObject &request);
     void readHostSettings();
@@ -151,6 +166,9 @@ private:
     QString hostPreferenceFeedback;
     int preferenceRequestId = 0;
     std::unique_ptr<aurora::tailscale::EmbeddedStatusClient> tailnet;
+    std::optional<Aurora::Pairing::EmbeddedHostContext> pairingHostContext;
+    std::unique_ptr<Aurora::Pairing::EmbeddedPairingHost> embeddedPairingHost;
+    QElapsedTimer pairingHostRetry;
 #ifdef Q_OS_WIN
     std::unique_ptr<aurora::tailscale::system::SystemTailscaleClient> systemTailnet;
     QVector<aurora::tailscale::system::Profile> profiles;
@@ -217,5 +235,24 @@ private:
     QUuid sessionWindowAttempt;
     std::unique_ptr<Aurora::Stream::MoonlightProcess> trustCheck;
     QTimer trustDeadline;
+    struct WallpaperAttempt
+    {
+        QString deviceId;
+        QString cachePath;
+        int epoch;
+        quint64 authorization;
+        QQueue<Aurora::Discovery::StreamHost> routes;
+        std::optional<Aurora::Discovery::StreamHost> selected;
+        quint64 relayRequest = 0;
+        quint64 check = 0;
+        quint64 fetch = 0;
+        std::shared_ptr<aurora::tailscale::StreamLease> relay;
+        std::unique_ptr<QObject> leaseLifetime;
+    };
+    std::unique_ptr<Aurora::Wallpaper::PreviewClient> wallpaperClient;
+    QString wallpaperMoonlight;
+    QElapsedTimer wallpaperClock;
+    QHash<QString, qint64> wallpaperChecked;
+    std::optional<WallpaperAttempt> wallpaperAttempt;
     bool exitAfterSession = false;
 };

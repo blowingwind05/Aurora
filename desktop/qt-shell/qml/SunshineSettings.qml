@@ -344,7 +344,9 @@ Column {
         hoverFill: "transparent"
         text: qsTr("允许当前账号的设备连接")
         implicitWidth: implicitContentWidth + 16
-        onClicked: settings.editor.command("sunshineReauthorize")
+        onClicked: settings.editor.command("sunshineReauthorize", {
+            pairingConfirmation: settings.editor.state.pairingConfirmation || ""
+        })
     }
 
     SunshineFeedback {

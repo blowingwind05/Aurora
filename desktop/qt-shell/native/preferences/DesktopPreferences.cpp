@@ -181,6 +181,8 @@ bool GeneralPreferences::setCloseToTray(bool enabled) const
 
 SleepMode GeneralPreferences::sleepMode() const
 {
+    if (directory_.isEmpty())
+        return SleepMode::System;
     QFile file(preferencePath(directory_, HostSleepMode));
     if (!file.open(QIODevice::ReadOnly))
         return SleepMode::System;

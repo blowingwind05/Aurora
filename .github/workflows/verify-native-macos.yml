@@ -1,0 +1,198 @@
+name: Verify native Aurora for macOS
+
+on:
+  workflow_dispatch:
+    inputs:
+      donor_run_id:
+        description: Trusted successful Build Aurora for macOS run ID from the default branch (architecture both)
+        type: string
+        required: true
+
+permissions:
+  actions: read
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  verify:
+    name: Native macOS ${{ matrix.architecture }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - architecture: arm64
+            native_arch: arm64
+            runner: macos-15
+          - architecture: x64
+            native_arch: x86_64
+            runner: macos-15-intel
+    env:
+      AURORA_ARCHITECTURE: ${{ matrix.architecture }}
+      NATIVE_ARCH: ${{ matrix.native_arch }}
+      DONOR_ARTIFACT: Aurora-macOS-${{ matrix.architecture }}-integrated
+
+    steps:
+      - name: Validate donor run provenance
+        id: donor
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DONOR_RUN_ID: ${{ inputs.donor_run_id }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          if [[ ! "$DONOR_RUN_ID" =~ ^[1-9][0-9]*$ ]]; then
+            echo "Enter the numeric run ID of the trusted integrated macOS build." >&2
+            exit 1
+          fi
+          workflow_path=.github/workflows/build-macos.yml
+          workflow_id="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/build-macos.yml" --jq '.id')"
+          run="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$DONOR_RUN_ID")"
+          if ! jq -e --arg repo "$GITHUB_REPOSITORY" --arg branch "$DEFAULT_BRANCH" \
+              --arg path "$workflow_path" --argjson workflow_id "$workflow_id" '
+                .repository.full_name == $repo and .head_repository.full_name == $repo
+                and .head_branch == $branch and .workflow_id == $workflow_id
+                and (.path | split("@")[0]) == $path and .event == "workflow_dispatch"
+                and .status == "completed" and .conclusion == "success"
+              ' <<< "$run" > /dev/null; then
+            echo "Run $DONOR_RUN_ID must be a successful $workflow_path dispatch from $GITHUB_REPOSITORY:$DEFAULT_BRANCH." >&2
+            exit 1
+          fi
+          echo "run-id=$DONOR_RUN_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Download integrated donor
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.DONOR_ARTIFACT }}
+          path: ${{ runner.temp }}/aurora-donor-artifact
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ steps.donor.outputs.run-id }}
+
+      - name: Verify original donor signatures
+        run: |
+          test "$(uname -m)" = "$NATIVE_ARCH"
+          zip="$RUNNER_TEMP/aurora-donor-artifact/$DONOR_ARTIFACT.zip"
+          test -f "$zip"
+          /usr/bin/ditto -x -k "$zip" "$RUNNER_TEMP/aurora-donor"
+          donor="$RUNNER_TEMP/aurora-donor/Aurora.app"
+          /usr/bin/codesign --verify --deep --strict --verbose=2 "$donor"
+          /usr/bin/codesign --verify --deep --strict --verbose=2 "$donor/Contents/Helpers/AuroraHost.app"
+
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.6.3'
+          host: mac
+          target: desktop
+          arch: clang_64
+
+      - name: Build and assemble standalone Aurora.app
+        run: |
+          qt_bin="$QT_ROOT_DIR/bin"
+          test "$("$qt_bin/qmake" -query QT_VERSION)" = 6.6.3
+          min_os="$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' desktop/Info.plist)"
+          build="$RUNNER_TEMP/aurora-native-build"
+          cmake -S desktop/native-package -B "$build" -DCMAKE_BUILD_TYPE=Release \
+            "-DCMAKE_PREFIX_PATH=$QT_ROOT_DIR" "-DCMAKE_OSX_ARCHITECTURES=$NATIVE_ARCH" \
+            "-DCMAKE_OSX_DEPLOYMENT_TARGET=$min_os"
+          cmake --build "$build" --config Release --target AuroraQtShell --parallel "$(sysctl -n hw.logicalcpu)"
+          python3 desktop/Build-NativeDesktop.py macos --launcher "$build/bin/Aurora" \
+            --runtime-app "$RUNNER_TEMP/aurora-donor/Aurora.app" --qt-bin "$qt_bin" \
+            --architecture "$AURORA_ARCHITECTURE" --output "$RUNNER_TEMP/aurora-native/Aurora.app"
+
+      - name: Sign and scan standalone Aurora.app
+        run: |
+          app="$RUNNER_TEMP/aurora-native/Aurora.app"
+          contents="$app/Contents"
+          host="$contents/Helpers/AuroraHost.app"
+          donor_host="$RUNNER_TEMP/aurora-donor/Aurora.app/Contents/Helpers/AuroraHost.app"
+
+          # Seal the runtimes and Qt code before the outer app.
+          /usr/bin/codesign --force --sign - "$contents/MacOS/AuroraTailnet"
+          find "$contents/Frameworks" "$contents/PlugIns" "$contents/Resources/qml" \
+            -type f -name '*.dylib' -exec /usr/bin/codesign --force --sign - {} +
+          find "$contents/Frameworks" -depth -type d -name '*.framework' \
+            -exec /usr/bin/codesign --force --sign - {} +
+          /usr/bin/codesign --force --sign - "$contents/MacOS/AuroraStream"
+
+          # AuroraHost.app already carries its donor signature.
+          /usr/bin/codesign --verify --deep --strict --verbose=2 "$host"
+          /usr/bin/codesign --force --sign - "$app"
+          /usr/bin/codesign --verify --deep --strict --verbose=2 "$app"
+          cmp "$donor_host/Contents/MacOS/AuroraHost" "$host/Contents/MacOS/AuroraHost"
+          cmp "$donor_host/Contents/_CodeSignature/CodeResources" "$host/Contents/_CodeSignature/CodeResources"
+          python3 tests/Check-NativeDesktopPackage.py "$app"
+
+      - name: Verify packaged load paths and native startup
+        run: |
+          contents="$RUNNER_TEMP/aurora-native/Aurora.app/Contents"
+          launcher="$contents/MacOS/Aurora"
+          stream="$contents/MacOS/AuroraStream"
+          tailnet="$contents/MacOS/AuroraTailnet"
+          host="$contents/Helpers/AuroraHost.app/Contents/MacOS/AuroraHost"
+
+          fail() { echo "$*" >&2; exit 1; }
+          for executable in "$launcher" "$stream" "$tailnet" "$host"; do
+            test -x "$executable"
+            /usr/bin/lipo "$executable" -verify_arch "$NATIVE_ARCH"
+            linked="$(/usr/bin/otool -arch "$NATIVE_ARCH" -L "$executable")"
+            printf '%s\n' "$linked"
+            imports="$(sed -nE 's/^[[:space:]]+(.+) \(compatibility version.*$/\1/p' <<< "$linked")"
+            test -n "$imports"
+            rpaths="$(/usr/bin/otool -arch "$NATIVE_ARCH" -l "$executable" |
+              awk '$1 == "cmd" { rpath = ($2 == "LC_RPATH") }
+                   rpath && $1 == "path" { sub(/^[[:space:]]*path[[:space:]]+/, ""); sub(/ \(offset [0-9]+\)$/, ""); print }')"
+            has_frameworks_rpath=false
+            while IFS= read -r rpath; do
+              case "$rpath" in
+                @executable_path/../Frameworks|@loader_path/../Frameworks) has_frameworks_rpath=true ;;
+                '') ;;
+                *) fail "Unexpected rpath in $executable: $rpath" ;;
+              esac
+            done <<< "$rpaths"
+            if [[ "$executable" == "$launcher" || "$executable" == "$stream" ]]; then
+              "$has_frameworks_rpath" || fail "Missing bundle Frameworks rpath in $executable"
+              grep -Fq '/QtCore.framework/' <<< "$imports" || fail "Missing QtCore dependency in $executable"
+            fi
+            frameworks="$(dirname "$executable")/../Frameworks"
+            while IFS= read -r dependency; do
+              case "$dependency" in
+                /System/Library/*|/usr/lib/*) continue ;;
+                @rpath/*)
+                  "$has_frameworks_rpath" || fail "No bundle rpath in $executable for $dependency"
+                  library="${dependency#@rpath/}" ;;
+                @executable_path/../Frameworks/*|@loader_path/../Frameworks/*)
+                  library="${dependency#*/Frameworks/}" ;;
+                *) fail "Non-bundled dependency in $executable: $dependency" ;;
+              esac
+              [[ "/$library/" != */../* && -f "$frameworks/$library" ]] ||
+                fail "Missing bundled dependency in $executable: $dependency"
+            done <<< "$imports"
+          done
+
+          # Clear SDK and loader overrides so the probes use the deployed bundle.
+          clean_env=(/usr/bin/env -i "HOME=$HOME" "TMPDIR=${TMPDIR:-/tmp}" PATH=/usr/bin:/bin QT_QPA_PLATFORM=cocoa)
+          test "$("${clean_env[@]}" "$stream" --aurora-runtime-info)" = aurora-stream/1
+          test "$("${clean_env[@]}" "$stream" --aurora-gamestream-relay-info)" = aurora-gamestream-relay/1
+          test "$("${clean_env[@]}" "$tailnet" --aurora-runtime-info)" = aurora-tailnet/1
+          test "$("${clean_env[@]}" "$host" --aurora-runtime-info)" = aurora-host/1
+          "${clean_env[@]}" "$launcher" --check-native
+
+      - name: Archive the verified Aurora.app
+        run: |
+          /usr/bin/ditto -c -k --sequesterRsrc --keepParent "$RUNNER_TEMP/aurora-native/Aurora.app" \
+            "$RUNNER_TEMP/Aurora-macOS-$AURORA_ARCHITECTURE-native.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Aurora-macOS-${{ matrix.architecture }}-native
+          path: ${{ runner.temp }}/Aurora-macOS-${{ matrix.architecture }}-native.zip
+          if-no-files-found: error
+          compression-level: 0

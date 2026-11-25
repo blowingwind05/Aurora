@@ -97,6 +97,7 @@ void NativeDesktop::start()
         connect(localPresence.get(), &NativeDevicePresence::changed, this, [this] {
             updateDeviceCatalog(tailnetStatus);
             emit stateChanged(snapshot);
+            refreshDeviceWallpapers();
         });
         QDir applicationDirectory(QCoreApplication::applicationDirPath());
 #ifdef Q_OS_WIN
@@ -218,6 +219,7 @@ void NativeDesktop::initializeHost()
         hostWallpaper = std::make_unique<Aurora::Wallpaper::HostWallpaperUpdater>(layout->profileDirectory());
         connect(host.get(), &LifecycleController::stateChanged, this, &NativeDesktop::publishHostState);
         connect(host.get(), &LifecycleController::shutdownFinished, this, &quitDesktop);
+        initializePairingHost();
         if (preferences.managedHostAllowed())
             host->start();
     }
@@ -235,6 +237,7 @@ void NativeDesktop::publishHostState()
     using Phase = LifecycleController::Phase;
     const auto current = host ? host->state() : LifecycleController::State{};
     const bool ready = current.phase == Phase::Ready;
+    refreshPairingHost();
     if (hostSettingsSession != current.settingsSession) {
         hostSettingsSession = current.settingsSession;
         hostSettings.reset();
@@ -285,6 +288,9 @@ void NativeDesktop::publishHostState()
             {QStringLiteral("config"), hostSettings ? hostSettings->config.toVariantMap() : QVariantMap{}},
             {QStringLiteral("result"), hostSettingsReceipt.toVariantMap()},
             {QStringLiteral("feedback"), hostSettingsFeedback},
+            {QStringLiteral("pairingFeedback"), pairingHostFeedback()},
+            {QStringLiteral("reauthorizeAvailable"), !pairingHostConfirmation().isEmpty()},
+            {QStringLiteral("pairingConfirmation"), pairingHostConfirmation()},
         });
     }
     snapshot.insert(QStringLiteral("host"), hostState);
@@ -368,6 +374,13 @@ bool NativeDesktop::handleSunshineAction(const QString &action, const QJsonObjec
         return true;
     if (action == QLatin1String("sunshineLoad")) {
         readHostSettings();
+    } else if (action == QLatin1String("sunshineReauthorize")) {
+        const auto confirmation = pairingHostConfirmation();
+        if (!confirmation.isEmpty() && message.value(QStringLiteral("pairingConfirmation")).toString() == confirmation &&
+            !tailnetBusy && !tailnetConfirmation && !tailnetVerification) {
+            refreshPairingHost(true);
+            publishHostState();
+        }
     } else if (action == QLatin1String("sunshineRestart") && !host->settingsBusy()) {
         host->restart();
     } else if (action == QLatin1String("sunshineSave")) {
@@ -404,6 +417,7 @@ bool NativeDesktop::handleSunshineAction(const QString &action, const QJsonObjec
 
 void NativeDesktop::requestExit()
 {
+    retirePairingHost();
     if ((sessionSupervisor && sessionSupervisor->phase() != Aurora::Session::SessionSupervisor::Phase::Idle) ||
         (pairingAttempt && pairingAttempt->exchange)) {
         exitAfterSession = true;
@@ -449,7 +463,9 @@ void NativeDesktop::readTailnet(bool showRefresh)
 
 void NativeDesktop::receiveTailnetStatus(quint64 generation, const aurora::tailscale::StatusResult &result)
 {
-    if (generation != tailnetGeneration)
+    // The pairing listener also refreshes identity using this helper. Only the
+    // desktop's pending status request may complete its refresh or account action.
+    if (generation != tailnetGeneration || !tailnetBusy)
         return;
     tailnetBusy = false;
     tailnetRefreshing = false;
@@ -494,6 +510,7 @@ void NativeDesktop::receiveTailnetStatus(quint64 generation, const aurora::tails
     connectionAccountReady();
     publishTailnetStatus(tailnetStatus);
     publishHostState();
+    refreshDeviceWallpapers();
 #ifdef Q_OS_WIN
     if (wantSystemProfiles)
         readSystemProfiles();
@@ -536,10 +553,12 @@ void NativeDesktop::openTailnetLogin()
 
 void NativeDesktop::clearTailnetContext()
 {
+    retirePairingHost();
     cancelConnection(tr("账号已变化，连接已停止。"));
     tailnetStatus = {};
     ++accountRevision;
     ++deviceEpoch;
+    refreshDeviceWallpapers();
 #ifdef Q_OS_WIN
     profiles.clear();
     profilesGeneration = 0;
@@ -866,7 +885,7 @@ void NativeDesktop::updateDeviceCatalog(const aurora::tailscale::Status &status)
         const auto devices = Aurora::Discovery::visibleDevices(&localPresence->network(), &localPresence->lan(),
                                                                &localPresence->tailnet());
         for (const auto &device : devices)
-            rows.append(Aurora::Discovery::qtDeviceRow(device).toVariantMap());
+            rows.append(Aurora::Discovery::qtDeviceRow(device, cachedDeviceWallpaper(device)).toVariantMap());
     }
     snapshot.insert(QStringLiteral("deviceAccess"), status.account ? QStringLiteral("ready")
         : status.state == BackendState::NeedsLogin || status.state == BackendState::Stopped
@@ -919,6 +938,7 @@ void NativeDesktop::handleRequest(const QJsonObject &request)
     if (action == QLatin1String("devices-foreground") || action == QLatin1String("devices-background")) {
         devicesForeground = action == QLatin1String("devices-foreground");
         refreshHostWallpaper();
+        refreshDeviceWallpapers();
         return;
     }
     if (handleTailnetAction(action, request))
@@ -937,6 +957,7 @@ void NativeDesktop::handleRequest(const QJsonObject &request)
     tailnetConfirmation.reset();
     if (tray.isVisible()) {
         snapshot.insert(QStringLiteral("windowVisible"), false);
+        refreshDeviceWallpapers();
         publishTailnetStatus(tailnetStatus);
     } else {
         requestExit();
