@@ -69,6 +69,7 @@ jobs:
           clean_env=(/usr/bin/env -i "HOME=$HOME" "TMPDIR=${TMPDIR:-/tmp}" PATH=/usr/bin:/bin QT_QPA_PLATFORM=cocoa)
           launcher="$app/Contents/MacOS/Aurora"
           test -x "$launcher"
+          test -f "$app/Contents/Resources/ui/desktop/app/qml/Main.qml"
           "${clean_env[@]}" "$launcher" --check-native
           runtime="$app/Contents/MacOS/AuroraStream"
           test -x "$runtime"

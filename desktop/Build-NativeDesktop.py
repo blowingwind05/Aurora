@@ -48,7 +48,7 @@ def pe_executable(path, windowed=False):
             len(optional) != 70 or optional[:2] != b"\x0b\x02"):
         raise ValueError(f"Expected a Windows x64 executable at {path}")
     if windowed and struct.unpack_from("<H", optional, 68)[0] != 2:
-        raise ValueError(f"Build {path} as a Windows GUI executable with desktop/native-package.")
+        raise ValueError(f"Build {path} as the Windows GUI target from desktop/CMakeLists.txt.")
 
 
 def macho_executable(path, architecture):
@@ -94,19 +94,18 @@ def copy_tree(source, target, ignore=None):
     shutil.copytree(require_directory(source), target, symlinks=True, ignore=ignore)
 
 
-def stage_preview(preview):
-    shell = DESKTOP / "qt-shell"
+def stage_ui(ui_directory):
+    app = DESKTOP / "app"
     assets = DESKTOP / "Assets"
     design = REPOSITORY / "docs/visual-design/assets"
-    target_shell = preview / "desktop/qt-shell"
-    copy_tree(shell / "qml", target_shell / "qml")
-    copy_file(shell / "bridge/Live.qml", target_shell / "bridge/Live.qml")
+    target_app = ui_directory / "desktop/app"
+    copy_tree(app / "qml", target_app / "qml")
     for name in ("Aurora.png", "Aurora-Windows-32.png", "tailscale-dot.svg", "panel-top-tight.svg"):
-        copy_file(assets / name, preview / "desktop/Assets" / name)
-    copy_tree(assets / "Wallpapers", preview / "desktop/Assets/Wallpapers")
-    copy_tree(design / "icons", preview / "docs/visual-design/assets/icons")
+        copy_file(assets / name, ui_directory / "desktop/Assets" / name)
+    copy_tree(assets / "Wallpapers", ui_directory / "desktop/Assets/Wallpapers")
+    copy_tree(design / "icons", ui_directory / "docs/visual-design/assets/icons")
     brand = "brand/Aurora-transparent-512.png"
-    copy_file(design / brand, preview / "docs/visual-design/assets" / brand)
+    copy_file(design / brand, ui_directory / "docs/visual-design/assets" / brand)
 
 
 def stage_windows(destination, launcher, streamer, sunshine, tailscale):
@@ -139,7 +138,7 @@ def stage_windows(destination, launcher, streamer, sunshine, tailscale):
 
     stream_target = destination / WIN_STREAM
     copy_tree(streamer, stream_target, ignore=shutil.ignore_patterns(
-        "AuroraQtShell.exe", "QtPreview", "portable.dat", "Moonlight Game Streaming Project"
+        "Aurora.exe", "AuroraQtShell.exe", "ui", "QtPreview", "portable.dat", "Moonlight Game Streaming Project"
     ))
     copy_tree(sunshine, destination / WIN_HOST)
     copy_file(tailscale / "AuroraTailnet.exe", destination / WIN_TAILNET / "AuroraTailnet.exe")
@@ -155,7 +154,7 @@ def stage_windows(destination, launcher, streamer, sunshine, tailscale):
         + ("\n[Platforms]\nWindowsArguments = darkmode=1\n" if major == 5 else ""),
         encoding="utf-8",
     )
-    stage_preview(destination / "QtPreview")
+    stage_ui(destination / "ui")
     for notice in ("LICENSE", "THIRD-PARTY-NOTICES.txt"):
         copy_file(REPOSITORY / notice, destination / notice)
 
@@ -199,7 +198,7 @@ def stage_macos_components(destination, launcher, streamer_contents, host, tailn
         copy_tree(streamer_contents / "PlugIns", contents / "PlugIns")
         copy_tree(streamer_resources / "qml", resources / "qml")
         copy_file(streamer_resources / "qt.conf", resources / "qt.conf")
-    stage_preview(resources / "QtPreview")
+    stage_ui(resources / "ui")
 
     if deploy_qt:
         deploy_qt(destination)
@@ -239,7 +238,7 @@ def deploy_mac_qt(bundle, qt_bin):
             raise ValueError(f"The macOS deployment tool must match the streamer Qt version {streamer_version}.")
 
     subprocess.run([str(deploy), str(bundle), "-codesign=-", "-no-strip", "-appstore-compliant",
-                    f"-qmldir={contents / 'Resources/QtPreview/desktop/qt-shell'}"], check=True)
+                    f"-qmldir={contents / 'Resources/ui/desktop/app'}"], check=True)
     if not has_frameworks:
         qt_prefix = Path(subprocess.check_output([str(qmake), "-query", "QT_INSTALL_PREFIX"], text=True).strip())
         notices = contents / "Resources/ThirdParty/Qt"
@@ -283,7 +282,7 @@ def assemble(output, stage):
 
 
 def check_output_location(output, *input_trees):
-    sources = input_trees + (DESKTOP / "qt-shell", DESKTOP / "Assets", REPOSITORY / "docs/visual-design/assets")
+    sources = input_trees + (DESKTOP / "app", DESKTOP / "Assets", REPOSITORY / "docs/visual-design/assets")
     if any(output.resolve().is_relative_to(tree.resolve()) for tree in sources):
         raise ValueError("Choose an output outside the runtime and source input trees.")
 
@@ -339,7 +338,7 @@ def main():
                 input_trees = (args.streamer_contents, args.host_app, args.tailscale_directory)
                 check_output_location(args.output, *(path for path in input_trees if path is not None))
                 # The streamer builder deploys its launcher alongside the shared Qt runtime.
-                launcher = args.launcher or args.streamer_contents / "MacOS/AuroraQtShell"
+                launcher = args.launcher or args.streamer_contents / "MacOS/Aurora"
                 tailnet = args.tailscale_directory
                 assemble(args.output, lambda bundle: stage_macos_components(
                     bundle, launcher, args.streamer_contents, args.host_app,

@@ -99,10 +99,10 @@ jobs:
           test "$("$qt_bin/qmake" -query QT_VERSION)" = 6.6.3
           min_os="$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' desktop/Info.plist)"
           build="$RUNNER_TEMP/aurora-native-build"
-          cmake -S desktop/native-package -B "$build" -DCMAKE_BUILD_TYPE=Release \
+          cmake -S desktop -B "$build" -DCMAKE_BUILD_TYPE=Release \
             "-DCMAKE_PREFIX_PATH=$QT_ROOT_DIR" "-DCMAKE_OSX_ARCHITECTURES=$NATIVE_ARCH" \
             "-DCMAKE_OSX_DEPLOYMENT_TARGET=$min_os"
-          cmake --build "$build" --config Release --target AuroraQtShell --parallel "$(sysctl -n hw.logicalcpu)"
+          cmake --build "$build" --config Release --target Aurora --parallel "$(sysctl -n hw.logicalcpu)"
           python3 desktop/Build-NativeDesktop.py macos --launcher "$build/bin/Aurora" \
             --runtime-app "$RUNNER_TEMP/aurora-donor/Aurora.app" --qt-bin "$qt_bin" \
             --architecture "$AURORA_ARCHITECTURE" --output "$RUNNER_TEMP/aurora-native/Aurora.app"
@@ -183,6 +183,7 @@ jobs:
           test "$("${clean_env[@]}" "$stream" --aurora-gamestream-relay-info)" = aurora-gamestream-relay/1
           test "$("${clean_env[@]}" "$tailnet" --aurora-runtime-info)" = aurora-tailnet/1
           test "$("${clean_env[@]}" "$host" --aurora-runtime-info)" = aurora-host/1
+          test -f "$contents/Resources/ui/desktop/app/qml/Main.qml"
           "${clean_env[@]}" "$launcher" --check-native
 
       - name: Archive the verified Aurora.app

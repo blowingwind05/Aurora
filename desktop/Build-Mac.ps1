@@ -54,9 +54,9 @@ try {
         $minimumOS = Invoke-Native /usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' $plist
         $jobs = Invoke-Native /usr/sbin/sysctl -n hw.logicalcpu
         $launcherBuild = Join-Path $work 'launcher'
-        Invoke-Native cmake -S (Join-Path $PSScriptRoot 'native-package') -B $launcherBuild -DCMAKE_BUILD_TYPE=Release `
+        Invoke-Native cmake -S $PSScriptRoot -B $launcherBuild -DCMAKE_BUILD_TYPE=Release `
             "-DCMAKE_PREFIX_PATH=$qtPrefix" "-DCMAKE_OSX_ARCHITECTURES=$nativeArch" "-DCMAKE_OSX_DEPLOYMENT_TARGET=$minimumOS"
-        Invoke-Native cmake --build $launcherBuild --config Release --target AuroraQtShell --parallel $jobs
+        Invoke-Native cmake --build $launcherBuild --config Release --target Aurora --parallel $jobs
         $assemble += @('--without-streamer', '--qt-bin', $qtBin, '--launcher', (Join-Path $launcherBuild 'bin/Aurora'))
     }
     else {

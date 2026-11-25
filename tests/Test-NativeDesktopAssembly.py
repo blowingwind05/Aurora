@@ -50,7 +50,7 @@ def windows_inputs(root):
     put(streamer, "AuroraStream.exe", pe())
     put(streamer, "AuroraQtShell.exe", b"obsolete companion")
     put(streamer, "portable.dat")
-    put(streamer, "QtPreview/stale.txt")
+    put(streamer, "ui/stale.txt")
     for module in ("Core", "Gui", "Network", "Qml", "Quick", "QuickControls2", "Widgets"):
         put(streamer, f"Qt5{module}.dll")
     put(streamer, "platforms/qwindows.dll")
@@ -76,8 +76,8 @@ class AssemblyTest(unittest.TestCase):
         inputs = windows_inputs(self.root)
         assembly.assemble(output, lambda target: assembly.stage_windows(target, *inputs))
         self.assertTrue((output / "Aurora.exe").is_file())
-        self.assertTrue((output / "QtPreview/desktop/qt-shell/qml/stream/NativeSessionWindow.qml").is_file())
-        self.assertFalse((output / "QtPreview/stale.txt").exists())
+        self.assertTrue((output / "ui/desktop/app/qml/stream/NativeSessionWindow.qml").is_file())
+        self.assertFalse((output / "ui/stale.txt").exists())
         streamer = output / "Components/Moonlight"
         self.assertFalse((streamer / "AuroraQtShell.exe").exists())
         self.assertFalse((streamer / "portable.dat").exists())
@@ -134,7 +134,7 @@ class AssemblyTest(unittest.TestCase):
             staged = bundle / "Contents"
             self.assertEqual((staged / "MacOS/Aurora").read_bytes(), macho())
             self.assertFalse((staged / "Helpers").exists())
-            self.assertTrue((staged / "Resources/QtPreview/desktop/qt-shell/bridge/Live.qml").exists())
+            self.assertTrue((staged / "Resources/ui/desktop/app/qml/Main.qml").exists())
 
         output = self.root / "Aurora.app"
         assembly.assemble(output, lambda bundle: assembly.stage_macos(bundle, launcher, donor, "arm64", mock_macdeployqt))

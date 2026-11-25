@@ -41,14 +41,14 @@ pwsh -File ./desktop/Build-Mac.ps1 -Architecture arm64 -TailscaleDirectory ./des
 
 | 目录 | 职责 |
 | --- | --- |
-| [desktop/qt-shell/bridge](desktop/qt-shell/bridge) | Qt 入口和 QML 请求转发 |
-| [desktop/qt-shell/qml](desktop/qt-shell/qml) | 界面、主题和会话控件 |
-| [desktop/qt-shell/native/app](desktop/qt-shell/native/app) | 账号、设备、会话和被控功能的协调 |
-| [desktop/qt-shell/native/platform](desktop/qt-shell/native/platform) | 进程单实例、托盘、开机启动和系统适配 |
-| [desktop/qt-shell/native](desktop/qt-shell/native) | 串流、Sunshine、Tailscale、配对和壁纸模块 |
+| [desktop/app/src/main.cpp](desktop/app/src/main.cpp) | 进程入口和 QML 请求转发 |
+| [desktop/app/qml](desktop/app/qml) | `Main.qml`、界面、主题和会话控件 |
+| [desktop/app/src/desktop](desktop/app/src/desktop) | 账号、设备、会话和被控功能的协调 |
+| [desktop/app/src/platform](desktop/app/src/platform) | 进程单实例、托盘、开机启动和系统适配 |
+| [desktop/app/src](desktop/app/src) | 串流、Sunshine、Tailscale、配对和壁纸模块 |
 | [desktop/upstream](desktop/upstream) | 上游固定版本、补丁和部署脚本 |
-| [desktop/native-package](desktop/native-package) | 原生构建与打包 |
-| [tests/qt-ui](tests/qt-ui) | Qt 界面回归用例 |
+| [desktop/CMakeLists.txt](desktop/CMakeLists.txt) | 桌面程序的统一 CMake 构建入口 |
+| [tests/qt-ui](tests/qt-ui) | Qt 界面回归和模拟预览 |
 
 ## 验证改动
 

@@ -15,7 +15,7 @@ case "$architecture" in
   *) echo 'Expected arm64 or x64.' >&2; exit 1 ;;
 esac
 [[ -d "$destination/MacOS" && -f "$destination/Info.plist" ]] ||
-  { echo 'Publish Aurora.app before building the streaming runtime.' >&2; exit 1; }
+  { echo 'Prepare the staging Contents directory with Info.plist and MacOS before building.' >&2; exit 1; }
 xcrun --sdk macosx --find clang++ > /dev/null
 command -v cmake > /dev/null || { echo 'CMake is required to build the Aurora Qt interface.' >&2; exit 1; }
 
@@ -56,32 +56,33 @@ mkdir "$build"
 )
 stage="$build/app/Moonlight.app/Contents"
 
-echo '编译 Aurora Qt 界面…'
+echo '编译 Aurora…'
 qt_prefix="$("$qmake" -query QT_INSTALL_PREFIX)"
 min_os="$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$destination/Info.plist")"
-cmake -S "$desktop/qt-shell" -B "$work/qt-shell" -DCMAKE_BUILD_TYPE=Release \
+aurora_build="$work/aurora"
+cmake -S "$desktop" -B "$aurora_build" -DCMAKE_BUILD_TYPE=Release \
   "-DCMAKE_PREFIX_PATH=$qt_prefix" "-DCMAKE_OSX_ARCHITECTURES=$native_arch" \
-  "-DCMAKE_OSX_DEPLOYMENT_TARGET=$min_os" "-DCMAKE_RUNTIME_OUTPUT_DIRECTORY_RELEASE=$work/qt-shell/bin"
-cmake --build "$work/qt-shell" --config Release --parallel "$(sysctl -n hw.logicalcpu)"
-/usr/bin/ditto "$work/qt-shell/bin/AuroraQtShell" "$stage/MacOS/AuroraQtShell"
+  "-DCMAKE_OSX_DEPLOYMENT_TARGET=$min_os"
+cmake --build "$aurora_build" --config Release --target Aurora --parallel "$(sysctl -n hw.logicalcpu)"
+/usr/bin/ditto "$aurora_build/bin/Aurora" "$stage/MacOS/Aurora"
 
 /usr/bin/lipo "$stage/MacOS/Moonlight" -verify_arch "$native_arch"
-/usr/bin/lipo "$stage/MacOS/AuroraQtShell" -verify_arch "$native_arch"
+/usr/bin/lipo "$stage/MacOS/Aurora" -verify_arch "$native_arch"
 
 # Keep QML's relative asset paths identical to the Windows Qt bundle.
-preview="$stage/Resources/QtPreview"
-mkdir -p "$preview/desktop/qt-shell/bridge" "$preview/desktop/Assets" "$preview/docs/visual-design/assets"
-/usr/bin/ditto "$desktop/qt-shell/qml" "$preview/desktop/qt-shell/qml"
-cp "$desktop/qt-shell/bridge/Live.qml" "$preview/desktop/qt-shell/bridge/"
+ui="$stage/Resources/ui"
+mkdir -p "$ui/desktop/app" "$ui/desktop/Assets" "$ui/docs/visual-design/assets/brand"
+/usr/bin/ditto "$desktop/app/qml" "$ui/desktop/app/qml"
 for asset in Aurora.png Aurora-Windows-32.png tailscale-dot.svg panel-top-tight.svg; do
-  cp "$desktop/Assets/$asset" "$preview/desktop/Assets/"
+  cp "$desktop/Assets/$asset" "$ui/desktop/Assets/"
 done
-/usr/bin/ditto "$desktop/Assets/Wallpapers" "$preview/desktop/Assets/Wallpapers"
-/usr/bin/ditto "$repository/docs/visual-design/assets/icons" "$preview/docs/visual-design/assets/icons"
+/usr/bin/ditto "$desktop/Assets/Wallpapers" "$ui/desktop/Assets/Wallpapers"
+/usr/bin/ditto "$repository/docs/visual-design/assets/icons" "$ui/docs/visual-design/assets/icons"
+cp "$repository/docs/visual-design/assets/brand/Aurora-transparent-512.png" "$ui/docs/visual-design/assets/brand/"
 
 "$qt_bin/macdeployqt" "$build/app/Moonlight.app" \
-  "-executable=$stage/MacOS/AuroraQtShell" "-qmldir=$source/app" \
-  "-qmldir=$preview/desktop/qt-shell" -appstore-compliant
+  "-executable=$stage/MacOS/Aurora" "-qmldir=$source/app" \
+  "-qmldir=$ui/desktop/app/qml" -appstore-compliant
 expected_arch="$(uname -m)"
 if [[ "$expected_arch" == "$native_arch" ]]; then
   [[ "$("$stage/MacOS/Moonlight" --aurora-runtime-info)" == aurora-stream/1 ]] ||
@@ -95,7 +96,7 @@ fi
 # Keep @executable_path/../Frameworks and the Qt plug-in paths from macdeployqt.
 # The upstream build bundle is a staging directory. Aurora gets only the runtime files.
 /usr/bin/ditto "$stage/MacOS/Moonlight" "$destination/MacOS/AuroraStream"
-/usr/bin/ditto "$stage/MacOS/AuroraQtShell" "$destination/MacOS/AuroraQtShell"
+/usr/bin/ditto "$stage/MacOS/Aurora" "$destination/MacOS/Aurora"
 for directory in Frameworks PlugIns Resources; do
   if [[ -d "$stage/$directory" ]]; then
     /usr/bin/ditto "$stage/$directory" "$destination/$directory"
@@ -103,8 +104,8 @@ for directory in Frameworks PlugIns Resources; do
 done
 if [[ "$expected_arch" == "$native_arch" ]]; then
   /usr/bin/env -u QT_PLUGIN_PATH -u QT_QPA_PLATFORM_PLUGIN_PATH -u QML2_IMPORT_PATH -u QML_IMPORT_PATH \
-    QT_QPA_PLATFORM=cocoa "$destination/MacOS/AuroraQtShell" --check-native \
-    "$destination/Resources/QtPreview/desktop/qt-shell/bridge/Live.qml"
+    QT_QPA_PLATFORM=cocoa "$destination/MacOS/Aurora" --check-native \
+    "$destination/Resources/ui/desktop/app/qml/Main.qml"
 fi
 
 mkdir -p "$destination/Resources"

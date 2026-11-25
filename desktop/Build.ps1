@@ -49,13 +49,6 @@ if ($Setup) {
         throw 'Inno Setup compiler not found. Pass -InnoSetupCompiler with the path to ISCC.exe.'
     }
     $InnoSetupCompiler = (Resolve-Path -LiteralPath $InnoSetupCompiler).Path
-
-    # The native launcher has an embedded manifest and icon but no PE version resource.
-    $launcherProject = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'qt-shell/CMakeLists.txt') -Raw
-    if ($launcherProject -notmatch '(?m)^\s*project\(\s*AuroraQtShell\s+VERSION\s+(?<version>[0-9]+(?:\.[0-9]+){1,3})(?=\s|\))') {
-        throw 'Could not read the AuroraQtShell project version for Inno Setup.'
-    }
-    $auroraVersion = $Matches.version
 }
 
 $gamepadInstallerName = 'ViGEmBus_1.22.0_x64_x86_arm64.exe'
@@ -93,11 +86,18 @@ if ((Test-Path -LiteralPath $output) -or (Test-Path -LiteralPath ($output + '-se
 }
 # Keep the build path short for MSVC's generated Qt object paths.
 $build = Join-Path $PSScriptRoot ('obj/w-' + [Guid]::NewGuid().ToString('N').Substring(0, 8))
-$nativePackage = Join-Path $PSScriptRoot 'native-package'
-& $cmake -S $nativePackage -B $build -G 'NMake Makefiles' '-DCMAKE_BUILD_TYPE=Release' `
+& $cmake -S $PSScriptRoot -B $build -G 'NMake Makefiles' '-DCMAKE_BUILD_TYPE=Release' `
     "-DCMAKE_PREFIX_PATH=$qtPrefix" "-DQT_DIR=$qtPackage" "-DQt${qtMajor}_DIR=$qtPackage"
 if ($LASTEXITCODE -ne 0) { throw 'Configuring the native Aurora launcher failed.' }
-& $cmake --build $build --config Release --target AuroraQtShell
+if ($Setup) {
+    $cache = Get-Content -LiteralPath (Join-Path $build 'CMakeCache.txt') -Raw
+    if ($cache -notmatch '(?m)^CMAKE_PROJECT_VERSION:[^=]+=(?<version>[0-9]+(?:\.[0-9]+){1,3})\r?$') {
+        throw 'Could not read the Aurora project version for Inno Setup.'
+    }
+    $auroraVersion = $Matches.version
+}
+
+& $cmake --build $build --config Release --target Aurora
 if ($LASTEXITCODE -ne 0) { throw 'Building the native Aurora launcher failed.' }
 
 $assembler = Join-Path $PSScriptRoot 'Build-NativeDesktop.py'
