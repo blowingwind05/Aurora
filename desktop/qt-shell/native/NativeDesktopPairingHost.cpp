@@ -31,26 +31,62 @@ bool samePending(const Aurora::Sunshine::PendingPairing &a, const Aurora::Sunshi
     return a.id == b.id && a.name == b.name && a.address == b.address &&
         a.sourceIpv4 == b.sourceIpv4 && a.sourcePort == b.sourcePort;
 }
+
+template <class Host>
+void startPairingHostWhenReady(Host &listener, QElapsedTimer &retry, bool forceRetry)
+{
+    using Phase = typename Host::Phase;
+    if (listener.phase() == Phase::Failed && (forceRetry || retry.hasExpired(15000)))
+        listener.stop();
+    if (listener.phase() == Phase::Stopped) {
+        retry.start();
+        listener.start();
+    }
+}
 }
 
 void NativeDesktop::initializePairingHost()
 {
-    if (!host || !tailnet || !tailnet->isAvailable())
+    if (!host)
         return;
-    embeddedPairingHost = std::make_unique<EmbeddedPairingHost>(*tailnet, *host, [this] {
-        return pairingHostContext;
-    });
-    connect(embeddedPairingHost.get(), &EmbeddedPairingHost::stateChanged, this,
-            &NativeDesktop::publishHostState, Qt::QueuedConnection);
+    if (tailnet && tailnet->isAvailable()) {
+        embeddedPairingHost = std::make_unique<EmbeddedPairingHost>(*tailnet, *host, [this] {
+            return embeddedSelected ? pairingHostContext : std::nullopt;
+        });
+        connect(embeddedPairingHost.get(), &EmbeddedPairingHost::stateChanged, this,
+                &NativeDesktop::publishHostState, Qt::QueuedConnection);
+    }
+#ifdef Q_OS_WIN
+    if (hasSystemRuntime) {
+        using Aurora::Pairing::SystemPairingContext;
+        using Aurora::Pairing::SystemPairingCoordinator;
+        systemPairingHost = std::make_unique<SystemPairingCoordinator>(*host, [this]() -> std::optional<SystemPairingContext> {
+            if (embeddedSelected || !pairingHostContext || pairingHostContext->scope.provider != Provider::System)
+                return std::nullopt;
+            const auto &context = *pairingHostContext;
+            return SystemPairingContext{context.enrollment, context.scope, context.account, context.localAddress,
+                                        context.accountEpoch, context.sunshineSession};
+        });
+        connect(systemPairingHost.get(), &SystemPairingCoordinator::stateChanged, this,
+                &NativeDesktop::publishHostState, Qt::QueuedConnection);
+    }
+#endif
 }
 
 void NativeDesktop::refreshPairingHost(bool confirmed)
 {
-    if (!embeddedPairingHost)
+    const bool useEmbedded = embeddedSelected && bool(embeddedPairingHost);
+#ifdef Q_OS_WIN
+    const bool useSystem = !embeddedSelected && bool(systemPairingHost);
+#else
+    constexpr bool useSystem = false;
+#endif
+    if (!useEmbedded && !useSystem)
         return;
     const auto state = host->state();
-    if (exitAfterSession || !embeddedSelected || tailnetStatus.state != BackendState::Connected ||
-        !tailnetStatus.account || tailnetStatus.localAddress.protocol() != QAbstractSocket::IPv4Protocol ||
+    if (exitAfterSession || tailnetStatus.state != BackendState::Connected || !tailnetStatus.account ||
+        tailnetStatus.localAddress.isNull() ||
+        (useEmbedded && tailnetStatus.localAddress.protocol() != QAbstractSocket::IPv4Protocol) ||
         !hasValidHostIdentity(state)) {
         retirePairingHost();
         return;
@@ -58,11 +94,11 @@ void NativeDesktop::refreshPairingHost(bool confirmed)
 
     const auto &account = *tailnetStatus.account;
     EmbeddedHostContext next;
-    next.scope = {Provider::Embedded, account.ownerId, account.nodeId, state.adminIdentity.port,
+    next.scope = {useEmbedded ? Provider::Embedded : Provider::System, account.ownerId, account.nodeId, state.adminIdentity.port,
                   state.adminIdentity.certificateSha256};
     next.account = account;
     next.localAddress = tailnetStatus.localAddress;
-    next.accountEpoch = quint64(accountRevision);
+    next.accountEpoch = quint64(deviceEpoch);
     next.helperGeneration = tailnetGeneration;
     next.sunshineSession = state.settingsSession;
     const bool same = pairingHostContext && pairingHostContext->accountEpoch == next.accountEpoch &&
@@ -72,19 +108,22 @@ void NativeDesktop::refreshPairingHost(bool confirmed)
     next.enrollment = same && !confirmed ? pairingHostContext->enrollment
         : Aurora::Pairing::enrollLocalHost(directory, next.scope, confirmed);
     pairingHostContext = std::move(next);
-    embeddedPairingHost->contextChanged();
+    if (embeddedPairingHost)
+        embeddedPairingHost->contextChanged();
+#ifdef Q_OS_WIN
+    if (systemPairingHost)
+        systemPairingHost->contextChanged();
+#endif
 
     if (pairingHostContext->enrollment != EnrollmentResult::Approved || tailnetBusy || pendingAdvertisement ||
         (connection && !connection->launched))
         return;
-    using Phase = EmbeddedPairingHost::Phase;
-    const auto phase = embeddedPairingHost->phase();
-    if (phase == Phase::Failed && (!same || confirmed || pairingHostRetry.hasExpired(15000)))
-        embeddedPairingHost->stop();
-    if (embeddedPairingHost->phase() == Phase::Stopped) {
-        pairingHostRetry.start();
-        embeddedPairingHost->start();
-    }
+    if (useEmbedded)
+        startPairingHostWhenReady(*embeddedPairingHost, pairingHostRetry, !same || confirmed);
+#ifdef Q_OS_WIN
+    if (useSystem)
+        startPairingHostWhenReady(*systemPairingHost, pairingHostRetry, !same || confirmed);
+#endif
 }
 
 void NativeDesktop::retirePairingHost()
@@ -92,6 +131,10 @@ void NativeDesktop::retirePairingHost()
     pairingHostContext.reset();
     if (embeddedPairingHost && embeddedPairingHost->phase() != EmbeddedPairingHost::Phase::Stopped)
         embeddedPairingHost->stop();
+#ifdef Q_OS_WIN
+    if (systemPairingHost && systemPairingHost->phase() != Aurora::Pairing::SystemPairingCoordinator::Phase::Stopped)
+        systemPairingHost->stop();
+#endif
 }
 
 QString NativeDesktop::pairingHostConfirmation() const
@@ -111,7 +154,11 @@ QString NativeDesktop::pairingHostFeedback() const
     case EnrollmentResult::Unavailable:
         return tr("暂时无法读取本机自动配对授权。");
     case EnrollmentResult::Approved:
-        return embeddedPairingHost->error();
+#ifdef Q_OS_WIN
+        if (pairingHostContext->scope.provider == Provider::System)
+            return systemPairingHost ? systemPairingHost->error() : QString{};
+#endif
+        return embeddedPairingHost ? embeddedPairingHost->error() : QString{};
     }
     return {};
 }

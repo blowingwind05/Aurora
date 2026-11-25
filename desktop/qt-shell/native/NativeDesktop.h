@@ -16,6 +16,7 @@
 #include "wallpaper/host/HostWallpaper.h"
 #include "wallpaper/client/WallpaperClient.h"
 #ifdef Q_OS_WIN
+#include "pairing/systemhost/SystemPairingCoordinator.h"
 #include "tailscale/system/SystemPairingNc.h"
 #include "tailscale/system/SystemTailscaleClient.h"
 #endif
@@ -173,6 +174,7 @@ private:
     std::unique_ptr<Aurora::Pairing::EmbeddedPairingHost> embeddedPairingHost;
     QElapsedTimer pairingHostRetry;
 #ifdef Q_OS_WIN
+    std::unique_ptr<Aurora::Pairing::SystemPairingCoordinator> systemPairingHost;
     std::unique_ptr<aurora::tailscale::system::SystemTailscaleClient> systemTailnet;
     QVector<aurora::tailscale::system::Profile> profiles;
     quint64 profilesGeneration = 0;

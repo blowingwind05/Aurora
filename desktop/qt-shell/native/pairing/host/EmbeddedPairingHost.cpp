@@ -1,17 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "EmbeddedPairingHost.h"
+#include "HostPairingOffer.h"
 #include "LifecycleController.h"
 #include "PairingWire.h"
 
 #include <QNetworkProxy>
-#include <QRandomGenerator>
 #include <QTcpSocket>
 #include <QThread>
 
-#include <algorithm>
 #include <atomic>
 #include <chrono>
-#include <cstring>
 #include <utility>
 
 namespace Aurora::Pairing {
@@ -75,65 +73,6 @@ const Peer *uniquePeer(const Status &status, const QHostAddress &source)
     return match;
 }
 
-std::optional<PendingPairing> singlePending(const QList<PendingPairing> &rows, const QHostAddress &source,
-                                            const QByteArray &marker)
-{
-    const auto name = QStringLiteral("aurora-") + QString::fromLatin1(marker);
-    const PendingPairing *match = nullptr;
-    for (const auto &row : rows) {
-        if (row.name != name || row.sourceIpv4 != source)
-            continue;
-        if (match)
-            return std::nullopt;
-        match = &row;
-    }
-    if (!match || !match->sourcePort || *match->sourcePort == 0)
-        return std::nullopt;
-    // Sunshine approves by ID alone, so the chosen ID must identify only this row.
-    if (std::count_if(rows.cbegin(), rows.cend(), [match](const PendingPairing &row) { return row.id == match->id; }) != 1)
-        return std::nullopt;
-    return *match;
-}
-
-bool samePending(const PendingPairing &a, const PendingPairing &b)
-{
-    return a.id == b.id && a.name == b.name && a.address == b.address &&
-        a.sourceIpv4 == b.sourceIpv4 && a.sourcePort == b.sourcePort;
-}
-
-QString displayName(const QString &peerName)
-{
-    QString name;
-    for (const auto ch : peerName) {
-        if (ch != QLatin1Char('#') && ch.category() != QChar::Other_Control)
-            name.append(ch);
-        if (name.size() == 24)
-            break;
-    }
-    if (!name.isEmpty() && name.at(name.size() - 1).isHighSurrogate())
-        name.chop(1);
-    return name.trimmed().isEmpty() ? QStringLiteral("Aurora") : name;
-}
-
-QByteArray randomBytes(int size)
-{
-    QByteArray bytes(size, '\0');
-    for (int i = 0; i < size; i += int(sizeof(quint32))) {
-        const auto word = QRandomGenerator::system()->generate();
-        std::memcpy(bytes.data() + i, &word, size_t(std::min(size - i, int(sizeof(word)))));
-    }
-    return bytes;
-}
-
-QByteArray newPin()
-{
-    quint32 value;
-    do {
-        value = QRandomGenerator::system()->generate();
-    } while (value >= 4294960000u);
-    return QByteArray::number(value % 10000).rightJustified(4, '0');
-}
-
 template <typename Callback>
 void postTo(const QPointer<EmbeddedPairingHost> &host, Callback callback)
 {
@@ -173,7 +112,7 @@ struct EmbeddedPairingHost::Attempt final : QObject
     enum class Step { Hello, Admitting, Polling, Rechecking, Confirming, Proving, Approving };
 
     Attempt(QTcpSocket *connection, EmbeddedPairingHost *owner)
-        : QObject(owner), socket(connection), challenge(randomBytes(BridgeKeySize))
+        : QObject(owner), socket(connection), challenge(HostOffer::randomBytes(BridgeKeySize))
     {
         socket->setParent(this);
         elapsed.start();
@@ -408,7 +347,7 @@ void EmbeddedPairingHost::checkSunshine()
                 host.fail(QStringLiteral("无法打开本机自动配对入口。"));
                 return;
             }
-            host.key_ = randomBytes(BridgeKeySize);
+            host.key_ = HostOffer::randomBytes(BridgeKeySize);
             host.setState(Phase::Opening);
         });
     });
@@ -553,12 +492,12 @@ void EmbeddedPairingHost::statusFinished(quint64 generation, const aurora::tails
         return;
     }
 
-    attempt->label = displayName(peer->name);
+    attempt->label = HostOffer::displayName(peer->name);
     if (attempt->step == Attempt::Step::Admitting) {
         attempt->peerId = peer->nodeId;
-        attempt->marker = randomBytes(16).toHex();
-        attempt->pin = newPin();
-        const auto offer = QByteArray(1, '\1') + attempt->marker + attempt->pin;
+        attempt->marker = HostOffer::randomBytes(16).toHex();
+        attempt->pin = HostOffer::newPin();
+        const auto offer = HostOffer::frame(attempt->marker, attempt->pin);
         if (attempt->socket->write(offer) != offer.size()) {
             finish(attempt);
             return;
@@ -592,7 +531,11 @@ void EmbeddedPairingHost::pendingFinished(Attempt *attempt, HostSunshine::Admin:
         finish(attempt);
         return;
     }
-    const auto found = singlePending(result.pairings, attempt->sunshineSource, attempt->marker);
+    auto found = HostOffer::singlePending(result.pairings, attempt->marker, [attempt](const PendingPairing &row) {
+        return row.sourceIpv4 == attempt->sunshineSource;
+    });
+    if (found && (!found->sourcePort || !*found->sourcePort))
+        found.reset();
     if (attempt->step == Attempt::Step::Polling) {
         if (!found) {
             attempt->nextRead = attempt->elapsed.elapsed() + pendingPollMs;
@@ -602,7 +545,7 @@ void EmbeddedPairingHost::pendingFinished(Attempt *attempt, HostSunshine::Admin:
         attempt->step = Attempt::Step::Rechecking;
         requestStatus(attempt);
     } else if (attempt->step == Attempt::Step::Confirming) {
-        if (!found || !samePending(*attempt->selected, *found)) {
+        if (!found || !HostOffer::samePending(*attempt->selected, *found)) {
             finish(attempt);
             return;
         }

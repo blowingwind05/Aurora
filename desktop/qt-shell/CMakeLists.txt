@@ -51,7 +51,8 @@ add_subdirectory(native/wallpaper/host)
 add_subdirectory(native/wallpaper/client)
 if(WIN32)
     add_subdirectory(native/tailscale/system)
-    target_link_libraries(AuroraQtShell PRIVATE AuroraSystemTailscale)
+    add_subdirectory(native/pairing/systemhost)
+    target_link_libraries(AuroraQtShell PRIVATE AuroraSystemTailscale Aurora::SystemPairingCoordinator)
 endif()
 target_link_libraries(AuroraQtShell PRIVATE Qt${QT_VERSION_MAJOR}::Quick Qt${QT_VERSION_MAJOR}::QuickControls2
     Qt${QT_VERSION_MAJOR}::Network Qt${QT_VERSION_MAJOR}::Widgets
