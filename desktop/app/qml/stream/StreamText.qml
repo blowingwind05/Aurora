@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 import QtQuick 2.15
-import ".." as Aurora
+import "../common" as Aurora
 
 Text {
     color: Aurora.AuroraTheme.ink

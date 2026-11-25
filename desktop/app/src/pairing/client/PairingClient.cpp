@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "PairingClient.h"
-#include "MoonlightPin.h"
 #include "../PairingWire.h"
-#include "../../stream/MoonlightProcess.h"
+#include "../../adaptors/moonlight/MoonlightPin.h"
+#include "../../adaptors/moonlight/MoonlightProcess.h"
 
 #include <QDeadlineTimer>
+#include <QCryptographicHash>
 #include <QIODevice>
 #include <QTcpSocket>
 #include <QTimer>
@@ -44,7 +45,8 @@ bool stdioDevice(QIODevice *device, QThread *thread)
 
 struct Coordinator::Attempt : QObject
 {
-    enum class Phase { Challenge, Writing, Offer, Capability, Pairing, Trust, Stopping };
+    enum class Phase { Challenge, Writing, Offer, Capability, Pairing, Trust,
+                       SigningGrant, WritingGrant, GrantReply, Stopping };
 
     Attempt(Coordinator *owner, quint64 id, quint64 revision, const Request &request,
             QIODevice *reader, QIODevice *writer, QTcpSocket *socket, QByteArray key, Timeouts timeouts)
@@ -73,7 +75,9 @@ struct Coordinator::Attempt : QObject
             connect(writer, &QObject::destroyed, this, [this] { transportClosed(); });
         }
         if (socket) {
-            socket->setReadBufferSize(BridgeKeySize + OfferSize + 1);
+            const auto replySize = request.kind == RequestKind::HostRoutes ? HostRoutesFrameSize :
+                request.kind == RequestKind::ClientGrant ? GrantChallengeFrameSize : OfferSize;
+            socket->setReadBufferSize(BridgeKeySize + replySize + 1);
             connect(socket, &QTcpSocket::disconnected, this, [this] { transportClosed(); }, Qt::QueuedConnection);
             connect(socket, &QTcpSocket::errorOccurred, this, [this](QAbstractSocket::SocketError error) {
                 if (error != QAbstractSocket::RemoteHostClosedError)
@@ -81,7 +85,7 @@ struct Coordinator::Attempt : QObject
             }, Qt::QueuedConnection);
             armStage(timeouts.bridgeMs, Status::BridgeTimeout);
         } else {
-            outgoing = requestFrame();
+            outgoing = requestFrame(request.kind);
         }
 
         QTimer::singleShot(0, this, [this] {
@@ -123,12 +127,13 @@ struct Coordinator::Attempt : QObject
 
     bool receivingOffer() const
     {
-        return phase == Phase::Challenge || phase == Phase::Writing || phase == Phase::Offer;
+        return phase == Phase::Challenge || phase == Phase::Writing || phase == Phase::Offer ||
+            phase == Phase::WritingGrant || phase == Phase::GrantReply;
     }
 
     void transportClosed()
     {
-        if (phase == Phase::Capability) {
+        if (phase == Phase::Capability || phase == Phase::SigningGrant) {
             stop(Status::TransportError);
             return;
         }
@@ -142,7 +147,8 @@ struct Coordinator::Attempt : QObject
 
     void sendBytes()
     {
-        if (phase != Phase::Writing || timedOut())
+        const bool writingGrant = phase == Phase::WritingGrant;
+        if ((!writingGrant && phase != Phase::Writing) || timedOut())
             return;
         if (!writer || !writer->isWritable()) {
             stop(Status::TransportError);
@@ -162,7 +168,7 @@ struct Coordinator::Attempt : QObject
         if (socket)
             socket->flush();
         clearSecret(outgoing);
-        phase = Phase::Offer;
+        phase = writingGrant ? Phase::GrantReply : Phase::Offer;
         armStage(timeouts.offerMs, Status::OfferTimeout);
         readFrames();
     }
@@ -186,12 +192,12 @@ struct Coordinator::Attempt : QObject
 
     void readFrames()
     {
-        if (phase == Phase::Capability || phase == Phase::Pairing || phase == Phase::Trust) {
+        if (phase == Phase::Capability || phase == Phase::Pairing || phase == Phase::Trust || phase == Phase::SigningGrant) {
             if (reader && reader->bytesAvailable() > 0)
                 stop(Status::InvalidOffer);
             return;
         }
-        if ((phase != Phase::Challenge && phase != Phase::Offer) || timedOut())
+        if ((phase != Phase::Challenge && phase != Phase::Offer && phase != Phase::GrantReply) || timedOut())
             return;
 
         if (phase == Phase::Challenge) {
@@ -204,7 +210,7 @@ struct Coordinator::Attempt : QObject
                 stop(Status::TransportError);
                 return;
             }
-            outgoing += requestFrame();
+            outgoing += requestFrame(request.kind);
             phase = Phase::Writing;
             sendBytes();
             return;
@@ -212,6 +218,76 @@ struct Coordinator::Attempt : QObject
 
         if (frame.isEmpty() && !readTo(1))
             return;
+        if (request.kind == RequestKind::ClientGrant) {
+            if (phase == Phase::GrantReply || frame.at(0) != '\4') {
+                const auto reply = parseGrantReply(frame);
+                if (reader->bytesAvailable() || !reply ||
+                    (*reply == GrantReply::Accepted && phase != Phase::GrantReply)) {
+                    stop(Status::InvalidOffer);
+                } else if (*reply == GrantReply::Accepted) {
+                    stop(Status::ClientGranted);
+                } else {
+                    stop(*reply == GrantReply::Unsupported ? Status::GrantUnsupported : Status::Rejected);
+                }
+                return;
+            }
+            if (!readTo(GrantChallengeFrameSize))
+                return;
+            const auto offer = parseGrantChallenge(frame);
+            if (!offer || reader->bytesAvailable()) {
+                stop(Status::InvalidOffer);
+                return;
+            }
+            pin = offer->routes.certificateSha256;
+            const auto &expected = request.leasedRoute.certificateSha256;
+            if (!expected.isEmpty() && expected != pin) {
+                stop(Status::TrustFailed);
+                return;
+            }
+            const auto command = Stream::makeClientProofCommand(request.moonlightProgram, offer->challenge,
+                pin, Stream::currentPlatform(), request.environment);
+            if (!command.command) {
+                stop(Status::RuntimeFailed);
+                return;
+            }
+            publicIpv6 = offer->routes.publicIpv6;
+            grantInstance = offer->routes.grantInstance;
+            clearSecret(frame);
+            phase = Phase::SigningGrant;
+            launch(*command.command);
+            return;
+        }
+        if (request.kind == RequestKind::HostRoutes) {
+            if (frame.at(0) == 0) {
+                stop(Status::Rejected);
+                return;
+            }
+            if (!readTo(HostRoutesFrameSize))
+                return;
+            const auto routes = parseHostRoutesFrame(frame);
+            if (!routes || reader->bytesAvailable()) {
+                stop(Status::InvalidOffer);
+                return;
+            }
+            pin = routes->certificateSha256;
+            publicIpv6 = routes->publicIpv6;
+            supportsClientGrant = routes->supportsClientGrant;
+            grantInstance = routes->grantInstance;
+            stop(Status::HostIdentityVerified);
+            return;
+        }
+        if (request.kind == RequestKind::HostIdentity) {
+            if (frame.at(0) == 0) {
+                stop(Status::Rejected);
+                return;
+            }
+            if (!readTo(HostIdentityFrameSize))
+                return;
+            pin = parseHostIdentityFrame(frame);
+            stop(pin.size() == HostCertificateSha256Size && !reader->bytesAvailable()
+                ? Status::HostIdentityVerified : Status::InvalidOffer);
+            return;
+        }
         if (frame.at(0) != 0 && !readTo(OfferSize))
             return;
 
@@ -286,9 +362,10 @@ struct Coordinator::Attempt : QObject
         if (!process)
             return true;
         const auto output = process->readAllStandardOutput();
-        if (phase != Phase::Capability)
+        if (phase != Phase::Capability && phase != Phase::SigningGrant)
             return true;
-        if (output.size() > MaxProbeOutput - probeOutput.size())
+        const int limit = phase == Phase::SigningGrant ? Stream::MaxClientProofOutputBytes : MaxProbeOutput;
+        if (output.size() > limit - probeOutput.size())
             return false;
         probeOutput += output;
         return true;
@@ -310,6 +387,24 @@ struct Coordinator::Attempt : QObject
             return;
         }
 
+        if (phase == Phase::SigningGrant) {
+            const auto proof = Stream::parseClientProofOutput(probeOutput);
+            probeOutput.clear();
+            if (!proof) {
+                stop(Status::RuntimeFailed);
+                return;
+            }
+            outgoing = grantProofFrame({proof->certificate, proof->signature});
+            if (outgoing.isEmpty()) {
+                stop(Status::RuntimeFailed);
+                return;
+            }
+            clientCertificateSha256 = QCryptographicHash::hash(proof->certificate, QCryptographicHash::Sha256);
+            phase = Phase::WritingGrant;
+            sent = 0;
+            sendBytes();
+            return;
+        }
         if (phase == Phase::Capability) {
             if (!Stream::probeSucceeded(capabilityProbe(), exitCode, probeOutput)) {
                 stop(Status::RuntimeFailed);
@@ -338,7 +433,7 @@ struct Coordinator::Attempt : QObject
                 stop(Status::TrustFailed);
                 return;
             }
-            pin = Detail::readPin(*built.command, request.verifiedHost.id);
+            pin = Stream::readPin(*built.command, request.verifiedHost.id);
             if (timedOut())
                 return;
             if (pin.size() != 32) {
@@ -390,7 +485,12 @@ struct Coordinator::Attempt : QObject
 
     void finish()
     {
-        owner->complete(this, {terminal, terminal == Status::Paired ? pin : QByteArray{}});
+        const bool verified = terminal == Status::Paired || terminal == Status::HostIdentityVerified ||
+            terminal == Status::ClientGranted;
+        owner->complete(this, {terminal, verified ? pin : QByteArray{}, verified ? publicIpv6 : QList<QHostAddress>{},
+            terminal == Status::ClientGranted || (verified && supportsClientGrant),
+            verified ? grantInstance : QByteArray{},
+            terminal == Status::ClientGranted ? clientCertificateSha256 : QByteArray{}});
     }
 
     const quint64 id;
@@ -413,6 +513,10 @@ struct Coordinator::Attempt : QObject
     QByteArray outgoing;
     qint64 sent = 0;
     QByteArray pin;
+    QList<QHostAddress> publicIpv6;
+    bool supportsClientGrant = false;
+    QByteArray grantInstance;
+    QByteArray clientCertificateSha256;
     QByteArray probeOutput;
     Offer pendingOffer;
     Stream::MoonlightProcess *process = nullptr;
@@ -458,10 +562,20 @@ StartError Coordinator::validate(const Discovery::NetworkSnapshot &network, cons
     if (!peer || peer->id != request.peerId)
         return StartError::Unauthorized;
 
+    if (!request.leaseLifetime || request.leaseLifetime->thread() != thread())
+        return StartError::InvalidRoute;
+    if (request.kind == RequestKind::ClientGrant) {
+        if (!request.leasedRoute.certificateSha256.isEmpty() &&
+            request.leasedRoute.certificateSha256.size() != HostCertificateSha256Size)
+            return StartError::InvalidRoute;
+        return Stream::isBundledMoonlight(request.moonlightProgram) ? StartError::None : StartError::InvalidRuntime;
+    }
+    if (request.kind != RequestKind::Pair)
+        return StartError::None;
+
     const auto &host = request.verifiedHost;
     const auto &route = request.leasedRoute;
-    if (!request.leaseLifetime || request.leaseLifetime->thread() != thread() ||
-        host.endpoint.port != Discovery::BundledSunshinePort || host.viaEmbeddedTailnet != embedded ||
+    if (host.endpoint.port != Discovery::BundledSunshinePort || host.viaEmbeddedTailnet != embedded ||
         route.viaEmbeddedTailnet != embedded || host.id != route.hostId ||
         host.id.trimmed().isEmpty() || host.id.size() > 128)
         return StartError::InvalidRoute;
@@ -512,7 +626,12 @@ StartResult Coordinator::startStdio(const Discovery::NetworkSnapshot &network, c
 StartResult Coordinator::start(const Request &request, QIODevice *reader, QIODevice *writer,
                                QTcpSocket *socket, QByteArray bridgeKey)
 {
-    active_ = new Attempt(this, ++nextRequest_, revision_, request, reader, writer, socket, std::move(bridgeKey), timeouts_);
+    auto timeout = timeouts_;
+    if (request.kind == RequestKind::HostRoutes) {
+        timeout.offerMs = std::min(timeout.offerMs, 2200);
+        timeout.overallMs = std::min(timeout.overallMs, 5000);
+    }
+    active_ = new Attempt(this, ++nextRequest_, revision_, request, reader, writer, socket, std::move(bridgeKey), timeout);
     return {active_->id, StartError::None};
 }
 

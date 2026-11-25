@@ -6,6 +6,7 @@
 
 #include <QNetworkProxy>
 #include <QTcpSocket>
+#include <QNetworkInterface>
 #include <QThread>
 
 #include <atomic>
@@ -109,7 +110,7 @@ HostSunshine lifecycleSunshine(LifecycleController &controller)
 
 struct EmbeddedPairingHost::Attempt final : QObject
 {
-    enum class Step { Hello, Admitting, Polling, Rechecking, Confirming, Proving, Approving };
+    enum class Step { Hello, Admitting, Polling, Rechecking, Confirming, GrantProof, Proving, Approving };
 
     Attempt(QTcpSocket *connection, EmbeddedPairingHost *owner)
         : QObject(owner), socket(connection), challenge(HostOffer::randomBytes(BridgeKeySize))
@@ -121,6 +122,7 @@ struct EmbeddedPairingHost::Attempt final : QObject
     QTcpSocket *socket;
     QElapsedTimer elapsed;
     Step step = Step::Hello;
+    RequestKind request = RequestKind::Pair;
     QByteArray challenge;
     QHostAddress peer;
     QHostAddress sunshineSource;
@@ -128,6 +130,8 @@ struct EmbeddedPairingHost::Attempt final : QObject
     QString label;
     QByteArray marker;
     QByteArray pin;
+    QByteArray grantChallenge;
+    std::optional<GrantProof> grant;
     std::optional<PendingPairing> selected;
     quint64 statusGeneration = 0;
     quint64 sourceRequest = 0;
@@ -226,7 +230,8 @@ bool EmbeddedPairingHost::listening() const
 bool EmbeddedPairingHost::active(const Attempt *attempt) const
 {
     return attempt && pairing_ == attempt && listening() &&
-        attempt->socket->state() == QAbstractSocket::ConnectedState && !attempt->socket->bytesAvailable() &&
+        attempt->socket->state() == QAbstractSocket::ConnectedState &&
+        (attempt->step == Attempt::Step::GrantProof || !attempt->socket->bytesAvailable()) &&
         attempt->elapsed.elapsed() < attemptTimeoutMs;
 }
 
@@ -343,6 +348,7 @@ void EmbeddedPairingHost::checkSunshine()
                 host.fail(QStringLiteral("内置 Sunshine 未提供自动配对所需的待确认请求。"));
                 return;
             }
+            host.supportsClientGrant_ = result.supportsClientGrant;
             if (!host.server_.listen(QHostAddress::LocalHost, 0)) {
                 host.fail(QStringLiteral("无法打开本机自动配对入口。"));
                 return;
@@ -413,6 +419,32 @@ void EmbeddedPairingHost::receive(Attempt *attempt)
 {
     if (!attempts_.contains(attempt))
         return;
+    if (attempt->step == Attempt::Step::GrantProof) {
+        if (!active(attempt)) {
+            finish(attempt);
+            return;
+        }
+        auto *channel = attempt->socket;
+        const auto header = channel->peek(GrantProofHeaderSize);
+        if (header.size() != GrantProofHeaderSize)
+            return;
+        const int size = grantProofFrameSize(header);
+        if (!size || channel->bytesAvailable() > size) {
+            finish(attempt, true);
+            return;
+        }
+        if (channel->bytesAvailable() < size)
+            return;
+        attempt->grant = parseGrantProof(channel->read(size));
+        if (!attempt->grant) {
+            finish(attempt, true);
+            return;
+        }
+        attempt->step = Attempt::Step::Proving;
+        channel->setReadBufferSize(1);
+        verifySource(attempt);
+        return;
+    }
     if (attempt->step != Attempt::Step::Hello || !listening() ||
         attempt->elapsed.elapsed() >= helloTimeoutMs) {
         finish(attempt);
@@ -429,8 +461,7 @@ void EmbeddedPairingHost::receive(Attempt *attempt)
     }
 
     const int proofSize = 1 + (family == 4 ? 4 : 16) + 4 + BridgeKeySize;
-    const auto request = requestFrame();
-    const auto length = proofSize + request.size();
+    const auto length = proofSize + requestFrame().size();
     if (socket->bytesAvailable() < length)
         return;
     if (socket->bytesAvailable() != length) {
@@ -440,7 +471,8 @@ void EmbeddedPairingHost::receive(Attempt *attempt)
     const auto hello = socket->read(length);
     const auto source = verifyEmbeddedSources(hello.left(proofSize), key_, attempt->challenge);
     attempt->challenge.fill('\0');
-    if (!source || hello.mid(proofSize) != request || !tailnetIpv4(source->peer) ||
+    const auto request = parseRequestFrame(hello.mid(proofSize));
+    if (!source || !request || !tailnetIpv4(source->peer) ||
         source->sunshineSource != QHostAddress(QHostAddress::LocalHost) || source->peer == context_->localAddress) {
         finish(attempt);
         return;
@@ -450,6 +482,7 @@ void EmbeddedPairingHost::receive(Attempt *attempt)
         return;
     }
     pairing_ = attempt;
+    attempt->request = *request;
     attempt->peer = source->peer;
     attempt->sunshineSource = source->sunshineSource;
     attempt->step = Attempt::Step::Admitting;
@@ -495,6 +528,38 @@ void EmbeddedPairingHost::statusFinished(quint64 generation, const aurora::tails
     attempt->label = HostOffer::displayName(peer->name);
     if (attempt->step == Attempt::Step::Admitting) {
         attempt->peerId = peer->nodeId;
+        if (attempt->request == RequestKind::ClientGrant) {
+            if (!supportsClientGrant_) {
+                finishWithReply(attempt, grantReplyFrame(GrantReply::Unsupported));
+                return;
+            }
+            const auto offer = grantChallenge(HostOffer::randomBytes(ClientProof::DigestSize),
+                context_->scope.certificateSha256, context_->account.ownerId, context_->account.tailnetId,
+                context_->account.nodeId, peer->nodeId, QNetworkInterface::allAddresses(),
+                clientGrantInstance(context_->sunshineSession));
+            if (offer.isEmpty()) {
+                finish(attempt, true);
+                return;
+            }
+            attempt->grantChallenge = offer.mid(1, ClientProof::ChallengeSize);
+            attempt->step = Attempt::Step::GrantProof;
+            attempt->socket->setReadBufferSize(MaxGrantProofFrameSize + 1);
+            if (attempt->socket->write(offer) != offer.size())
+                finish(attempt);
+            return;
+        }
+        if (attempt->request != RequestKind::Pair) {
+            const auto &pin = context_->scope.certificateSha256;
+            finishWithReply(attempt, attempt->request == RequestKind::HostRoutes
+                ? hostRoutesFrame(pin, QNetworkInterface::allAddresses(), supportsClientGrant_,
+                    clientGrantInstance(context_->sunshineSession))
+                : hostIdentityFrame(pin));
+            return;
+        }
+        if (supportsClientGrant_) {
+            finish(attempt, true);
+            return;
+        }
         attempt->marker = HostOffer::randomBytes(16).toHex();
         attempt->pin = HostOffer::newPin();
         const auto offer = HostOffer::frame(attempt->marker, attempt->pin);
@@ -557,8 +622,9 @@ void EmbeddedPairingHost::pendingFinished(Attempt *attempt, HostSunshine::Admin:
 void EmbeddedPairingHost::verifySource(Attempt *attempt)
 {
     attempt->sourceGeneration = rpcGeneration_;
+    const int sourcePort = attempt->grant ? 0 : *attempt->selected->sourcePort;
     attempt->sourceRequest = client_->requestPairSource(rpcGeneration_, context_->account, attempt->peerId,
-                                                       attempt->peer, *attempt->selected->sourcePort);
+                                                       attempt->peer, sourcePort);
 }
 
 void EmbeddedPairingHost::sourceFinished(quint64 generation, quint64 request, const aurora::tailscale::PairSourceResult &result)
@@ -586,16 +652,28 @@ void EmbeddedPairingHost::approve(Attempt *attempt)
     const QPointer<Attempt> waiting(attempt);
     const auto expires = std::chrono::steady_clock::now() +
         std::chrono::milliseconds(attemptTimeoutMs - attempt->elapsed.elapsed());
-    const bool submitted = sunshine_.approve(context_->sunshineSession,
-        HostSunshine::Approval::authorized(attempt->selected->id, QString::fromLatin1(attempt->pin), attempt->label),
-        [self, waiting, id](HostSunshine::Admin::ApprovalResult) {
-            postTo(self, [waiting, id](EmbeddedPairingHost &host) {
+    const bool granting = attempt->grant.has_value();
+    auto approval = granting
+        ? HostSunshine::Approval::clientGrant(attempt->label, std::move(attempt->grantChallenge),
+            std::move(attempt->grant->certificate), std::move(attempt->grant->signature))
+        : HostSunshine::Approval::authorized(attempt->selected->id, QString::fromLatin1(attempt->pin), attempt->label);
+    const bool submitted = sunshine_.approve(context_->sunshineSession, std::move(approval),
+        [self, waiting, id, granting](HostSunshine::Admin::ApprovalResult result) {
+            postTo(self, [waiting, id, granting, result](EmbeddedPairingHost &host) {
                 if (host.pendingApproval_ != id)
                     return;
                 host.pendingApproval_ = 0;
                 host.approvalSession_.clear();
-                if (waiting && host.pairing_ == waiting)
+                if (!waiting || host.pairing_ != waiting)
+                    return;
+                if (!granting || !host.active(waiting)) {
                     host.finish(waiting);
+                    return;
+                }
+                const auto reply = result ? GrantReply::Accepted :
+                    result.error == HostSunshine::Admin::Error::HttpStatus && result.httpStatus == 404
+                    ? GrantReply::Unsupported : GrantReply::Rejected;
+                host.finishWithReply(waiting, grantReplyFrame(reply));
             });
         }, [guard = attempt->approvalGuard, expires] {
             return guard->load() && std::chrono::steady_clock::now() < expires;
@@ -610,6 +688,11 @@ void EmbeddedPairingHost::approve(Attempt *attempt)
 
 void EmbeddedPairingHost::finish(Attempt *attempt, bool reject)
 {
+    finishWithReply(attempt, reject ? QByteArray(1, '\0') : QByteArray{});
+}
+
+void EmbeddedPairingHost::finishWithReply(Attempt *attempt, const QByteArray &reply)
+{
     if (!attempts_.remove(attempt))
         return;
     if (attempt->approvalGuard)
@@ -623,7 +706,7 @@ void EmbeddedPairingHost::finish(Attempt *attempt, bool reject)
 
     auto *socket = attempt->socket;
     disconnect(socket, nullptr, this, nullptr);
-    if (reject && socket->state() == QAbstractSocket::ConnectedState && socket->write(QByteArray(1, '\0')) == 1) {
+    if (!reply.isEmpty() && socket->state() == QAbstractSocket::ConnectedState && socket->write(reply) == reply.size()) {
         connect(socket, &QAbstractSocket::disconnected, attempt, &QObject::deleteLater);
         QTimer::singleShot(1000, attempt, &QObject::deleteLater);
         socket->disconnectFromHost();

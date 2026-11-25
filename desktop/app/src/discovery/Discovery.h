@@ -31,6 +31,7 @@ struct StreamHost
     bool encoderProbePending = false;
     bool supportsPower = false;
     bool supportsSessionPrivacy = false;
+    bool publicIpv6 = false;
 };
 
 struct PresentDevice
@@ -93,6 +94,10 @@ const Device *findTailnetPeer(const NetworkSnapshot *network, const QHostAddress
 // saved must belong to the current owner and local node. This function performs no persistence.
 KnownIdentities resolveKnownIdentities(const QList<Device> &peers, const QList<PresentDevice> &present,
                                        const KnownIdentities &saved);
+
+// Returns address hints for the same authenticated node on the current LAN.
+QList<QHostAddress> nearbyHostAddresses(const NetworkSnapshot &network, const KnownIdentities &known,
+                                       const QString &peerId, const QList<PresentDevice> &lan);
 
 QList<Device> merge(const QList<Device> &peers, const LanSnapshot *lan, const TailnetSnapshot *tailnet,
                     const QLocale &locale = QLocale());

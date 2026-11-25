@@ -1,24 +1,20 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #pragma once
 
+#include "ControlAdapter.h"
 #include "MoonlightCommand.h"
 #include "ServerInfoClient.h"
 #include "StreamSurface.h"
 #include "EmbeddedStatusClient.h"
 
 #include <QQueue>
+#include <QElapsedTimer>
 #include <QUuid>
 #include <QVariantMap>
 
 #include <variant>
 
 namespace Aurora::Stream { class MoonlightProcess; }
-namespace Aurora::Stream::Control {
-class Adapter;
-enum class Operation;
-enum class PrivacyState;
-struct Result;
-}
 
 namespace Aurora::Session {
 
@@ -48,14 +44,15 @@ struct PreparedSession
     quint64 generation = 0;
     QString executable;
     Stream::Route route;
+    bool verifiesHostIdentity = false;
 };
 
-// The caller's successful check for the selected host in this prepared attempt.
-// For embedded routes, checkedRelay is the loopback endpoint used in that check.
-struct SessionPrivacyRoute
+// The selected host for this prepared attempt. A public route uses the authenticated
+// playback endpoint. Other routes carry the discovery check (and any checked relay).
+struct SessionControlRoute
 {
     Discovery::StreamHost selected;
-    Discovery::ServerInfo::CheckResult revalidated;
+    std::optional<Discovery::ServerInfo::CheckResult> revalidated;
     std::optional<Discovery::Endpoint> checkedRelay;
 };
 
@@ -65,7 +62,15 @@ struct SessionAuthorization
 {
     QUuid attempt;
     quint64 generation;
-    std::optional<SessionPrivacyRoute> privacy;
+    std::optional<SessionControlRoute> controls;
+    QByteArray certificateSha256;
+    bool resumeOnly = false;
+};
+
+struct SessionPlaybackSettings
+{
+    std::function<QStringList(Stream::PreferenceDefaults)> preferenceArguments;
+    QJsonObject sessionPreferences;
 };
 
 struct SessionView
@@ -79,7 +84,7 @@ struct SessionView
 };
 
 enum class SessionEnd { Exited, Cancelled, InvalidCandidate, RuntimeUnavailable, RuntimeProbeFailed,
-                        RelayUnavailable, RelayLost, AttachmentFailed, SurfaceLost,
+                        RelayUnavailable, RelayLost, TransportLost, RouteSwitched, AttachmentFailed, SurfaceLost,
                         InvalidLaunch, WorkerStartFailed, WorkerCrashed };
 
 struct SessionResult
@@ -89,6 +94,7 @@ struct SessionResult
     bool forced = false;
     Stream::CommandError commandError = Stream::CommandError::None;
     aurora::tailscale::StatusError relayError = aurora::tailscale::StatusError::None;
+    bool canResumeAfterLoss = false;
 };
 
 // One attempt at a time, on the GUI thread shared with the tailnet client.
@@ -102,6 +108,9 @@ class SessionSupervisor final : public QObject
     Q_PROPERTY(bool networkPoor READ networkPoor NOTIFY connectionChanged)
     Q_PROPERTY(QVariant privacyScreen READ privacyScreen NOTIFY privacyScreenChanged)
     Q_PROPERTY(QString privacyScreenMessage READ privacyScreenMessage NOTIFY privacyScreenChanged)
+    Q_PROPERTY(QVariantMap videoSettings READ videoSettings NOTIFY videoSettingsChanged)
+    Q_PROPERTY(bool videoSettingsPending READ videoSettingsPending NOTIFY videoSettingsChanged)
+    Q_PROPERTY(QString videoSettingsMessage READ videoSettingsMessage NOTIFY videoSettingsChanged)
 
 public:
     enum class Phase { Idle, Probing, OpeningRelay, AwaitingAuthorization, Starting,
@@ -117,29 +126,51 @@ public:
     // A grant is accepted once, and only for the current prepared attempt.
     bool start(const SessionAuthorization &authorization, SessionView view = {});
     bool cancel(const QUuid &attempt);
+    bool canChangeRoute() const;
+    bool requestRouteSwitch(const QUuid &attempt);
 
     Phase phase() const { return phase_; }
-    bool videoReady() const { return surface_.videoReady(); }
+    bool videoReady() const
+    {
+        return platform_ == Stream::RuntimePlatform::MacOS ? phase_ == Phase::Streaming :
+            surface_.videoReady() && (!videoSettingsPending() || phase_ == Phase::Streaming);
+    }
     bool fullScreen() const;
     QVariantMap connectionMetrics() const { return metrics_; }
     bool networkPoor() const { return networkPoor_; }
+    qint64 networkPoorDurationMs() const
+    {
+        return networkPoorSince_.isValid() ? networkPoorSince_.elapsed() : 0;
+    }
     QVariant privacyScreen() const;
     QString privacyScreenMessage() const;
+    QVariantMap videoSettings() const;
+    bool videoSettingsPending() const { return videoChange_.has_value(); }
+    QString videoSettingsMessage() const { return videoMessage_; }
+    // True accepts an asynchronous change. Completion follows encoder confirmation or video attachment.
+    bool reconfigureVideo(SessionPlaybackSettings settings);
 
     Q_INVOKABLE void setViewport(const QRect &viewport, bool suppressed);
     Q_INVOKABLE void setFullScreen(bool enabled);
     Q_INVOKABLE void requestStop();
     Q_INVOKABLE void refreshPrivacyScreen();
     Q_INVOKABLE void setPrivacyScreen(bool enabled);
+    Q_INVOKABLE void setPrivacyMode(const QString &mode);
+    Q_INVOKABLE void requestVideoSetting(QString option, QString value);
+    Q_INVOKABLE void refreshVideoBitrate();
 
 signals:
     void prepared(const Aurora::Session::PreparedSession &session);
     void finished(const QUuid &attempt, quint64 generation, const Aurora::Session::SessionResult &result);
+    void routeSwitchDenied(const QUuid &attempt);
     void phaseChanged();
     void fullScreenChanged();
     void connectionChanged();
     void clientPixelSizeChanged(const QSize &size);
     void privacyScreenChanged();
+    void videoSettingsChanged();
+    void videoSettingsApplied(bool success);
+    void videoSettingRequested(QString option, QString value);
     // The preference owner validates the value and handles persistence.
     void preferenceChangeRequested(const QString &option, const QString &value);
 
@@ -147,11 +178,27 @@ protected:
     bool eventFilter(QObject *watched, QEvent *event) override;
 
 private:
+    enum class VideoStep { Draining, Applying, Discarding, Restoring, UpdatingBitrate };
+    struct VideoChange
+    {
+        SessionPlaybackSettings requested;
+        VideoStep step = VideoStep::Draining;
+    };
+
     void beginPreparation();
     void nextProbe();
     void resolveRoute();
     void publishPrepared();
     void launchPlayback();
+    void playbackReady();
+    void playbackFailed(SessionResult result);
+    void stopPlaybackWorker();
+    bool hasWindowsVideo() const;
+    bool canKeepApplication() const;
+    bool canRestartVideo() const;
+    void restartVideo(VideoStep step);
+    static SessionPlaybackSettings freezePlayback(SessionPlaybackSettings settings);
+    static bool quitsRemoteApp(const QStringList &arguments);
     void launchWorker(const Stream::Command &command, bool probing, bool bindSurface);
     void drainOutput();
     void handleLine(QByteArray line);
@@ -161,9 +208,16 @@ private:
     void finish(SessionResult result);
     void completeFinish();
     void setPhase(Phase phase);
-    bool matchesPrivacyRoute(const SessionPrivacyRoute &route) const;
+    bool matchesControlRoute(const SessionControlRoute &route) const;
+    bool canUseSessionControls() const;
+    bool canQueryPrivacy() const;
+    bool privacyAllowsPlaybackReplacement() const;
     void startPrivacy(Stream::Control::Operation operation);
     void privacyFinished(const QUuid &token, const Stream::Control::Result &result);
+    bool startVideoBitrate(Stream::Control::Operation operation, std::optional<Stream::BitrateChange> change = {});
+    void videoBitrateFinished(const QUuid &token, const Stream::Control::Result &result);
+    void resetVideoBitrate();
+    bool sessionControlBusy() const;
     void revokePrivacy();
 
     const QString executable_;
@@ -177,6 +231,11 @@ private:
     Stream::Probe currentProbe_ = Stream::Probe::Runtime;
     QByteArray output_;
     bool probing_ = false;
+    bool verifiesHostIdentity_ = false;
+    bool resumeOnly_ = false;
+    bool resumeAfterRelayStop_ = false;
+    enum class SwitchState { Unavailable, Ready, Requested };
+    SwitchState switchState_ = SwitchState::Unavailable;
     bool discardLine_ = false;
     bool forcedStop_ = false;
 
@@ -188,17 +247,27 @@ private:
     quint64 pendingOpen_ = 0;
     std::shared_ptr<aurora::tailscale::StreamLease> lease_;
     std::unique_ptr<Stream::Control::Adapter> privacyControl_;
-    std::optional<SessionPrivacyRoute> privacyRoute_;
+    std::optional<SessionControlRoute> controlRoute_;
+    bool pinnedControlAvailable_ = false;
     std::optional<Stream::Control::PrivacyState> privacyState_;
     QUuid privacyRequest_;
-    bool privacyChanging_ = false;
+    std::optional<Stream::Control::PrivacyState> privacyTarget_;
+    QString privacyFeedback_;
+    std::unique_ptr<Stream::Control::Adapter> bitrateControl_;
+    std::optional<Stream::Control::VideoBitrate> liveBitrate_;
+    bool bitrateCapabilityReported_ = false;
+    QUuid bitrateRequest_;
     std::optional<SessionResult> pendingFinish_;
     SessionView view_;
+    std::optional<VideoChange> videoChange_;
+    QJsonObject confirmedVideoSettings_;
+    QString videoMessage_;
     QMetaObject::Connection ownerStateChanged_;
     QMetaObject::Connection ownerDestroyed_;
     Qt::WindowState previousWindowState_ = Qt::WindowNoState;
     QVariantMap metrics_;
     bool networkPoor_ = false;
+    QElapsedTimer networkPoorSince_;
 };
 
 } // namespace Aurora::Session

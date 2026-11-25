@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #pragma once
 
+#include "../PairingWire.h"
 #include "../../discovery/Discovery.h"
-#include "../../stream/MoonlightCommand.h"
+#include "../../adaptors/moonlight/MoonlightCommand.h"
 
 #include <QObject>
 #include <QPointer>
@@ -34,6 +35,7 @@ struct Request
     QPointer<QObject> leaseLifetime;
     QString moonlightProgram;
     QProcessEnvironment environment = QProcessEnvironment::systemEnvironment();
+    RequestKind kind = RequestKind::Pair;
 };
 
 enum class StartError { None, Busy, Unauthorized, InvalidRoute, InvalidTransport, InvalidRuntime };
@@ -47,14 +49,18 @@ struct StartResult
 enum class Status {
     Paired, Cancelled, AuthorizationChanged, LeaseClosed, TransportError,
     BridgeTimeout, OfferTimeout, Timeout, Rejected, InvalidOffer,
-    RuntimeFailed, TrustMissing, TrustFailed
+    RuntimeFailed, TrustMissing, TrustFailed, HostIdentityVerified, ClientGranted, GrantUnsupported
 };
 
 struct Result
 {
     Status status;
-    // Set only after a successful post-pair pin read and Moonlight trust check.
+    // From the authenticated host identity reply or a verified post-pair certificate read.
     QByteArray pinnedSha256;
+    QList<QHostAddress> publicIpv6;
+    bool supportsClientGrant = false;
+    QByteArray grantInstance;
+    QByteArray clientCertificateSha256;
 };
 
 class Coordinator final : public QObject

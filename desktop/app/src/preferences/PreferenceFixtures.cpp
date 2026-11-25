@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "DesktopPreferences.h"
+#include "ProviderSelection.h"
 
 #include <QCoreApplication>
 #include <QDir>
@@ -43,6 +44,7 @@ void fresh(const QString &directory)
     CHECK(general.closeToTray());
     CHECK(general.sleepMode() == SleepMode::System);
     CHECK(!general.managedHostAllowed());
+    CHECK(!general.privacyUiAccessTest());
     CHECK(!general.startupInitialized());
     const auto values = stream.read();
     CHECK(values.overrides.isEmpty());
@@ -67,6 +69,7 @@ void fresh(const QString &directory)
     CHECK(general.setCloseToTray(false));
     CHECK(general.setSleepMode(SleepMode::OnAc));
     CHECK(general.setManagedHostAllowed(true));
+    CHECK(general.setPrivacyUiAccessTest(true));
     CHECK(stream.set("resolution", "3840x2160"));
     CHECK(stream.set("fps", "30"));
     CHECK(stream.read().value("bitrate") == "40000");
@@ -76,6 +79,10 @@ void fresh(const QString &directory)
     const GeneralPreferences reopened(directory);
     CHECK(!reopened.closeToTray() && reopened.managedHostAllowed() && reopened.startupInitialized());
     CHECK(reopened.sleepMode() == SleepMode::OnAc);
+    CHECK(reopened.privacyUiAccessTest());
+    CHECK(QFileInfo(QDir(directory).filePath("Sunshine/Bundled/config/privacy-uiaccess-test")).isFile());
+    CHECK(reopened.setPrivacyUiAccessTest(false));
+    CHECK(!GeneralPreferences(directory).privacyUiAccessTest());
     CHECK(readFile(QDir(directory).filePath("host-sleep-mode")) == "OnAc");
     CHECK(readFile(QDir(directory).filePath("exit-on-close")).isEmpty());
     CHECK(readFile(QDir(directory).filePath("allow-managed-host")).isEmpty());
@@ -333,6 +340,40 @@ void sessionControl(const QString &directory)
     CHECK(readFile(path) == before);
 }
 
+void deviceVideoSettings(const QString &directory)
+{
+    const StreamPreferences global(directory);
+    const auto first = StreamPreferences::forDevice(directory, "tailnet", 25, "HOST-A");
+    const auto second = StreamPreferences::forDevice(directory, "tailnet", 25, "host-b");
+    const auto sameDevice = StreamPreferences::forDevice(directory, "tailnet", 25, "host-a");
+    const auto anotherOwner = StreamPreferences::forDevice(directory, "tailnet", 26, "host-a");
+    const auto anotherTailnet = StreamPreferences::forDevice(directory, "other-tailnet", 25, "host-a");
+    CHECK(global.set("bitrate", "25000"));
+    CHECK(first.applySessionControlChange({"bitrate", "16000"}) == SessionControlSaveResult::Saved);
+    CHECK(sameDevice.read().value("bitrate") == "16000");
+    CHECK(second.read().overrides.isEmpty() && anotherOwner.read().overrides.isEmpty());
+    CHECK(anotherTailnet.read().overrides.isEmpty());
+    CHECK(global.read().withHostOverrides(first.read().overrides).value("bitrate") == "16000");
+    CHECK(global.read().withHostOverrides(second.read().overrides).value("bitrate") == "25000");
+    CHECK((SessionControlChange{"resolution", "host"}.isVideoSetting()));
+    CHECK(!(SessionControlChange{"fps", "not-a-number"}.isVideoSetting()));
+    CHECK(!(SessionControlChange{"audio-on-host", "on"}.isVideoSetting()));
+}
+
+void windowsProvider(const QString &)
+{
+    CHECK(selectWindowsProvider({}, true, true) == ProviderMode::System);
+    CHECK(selectWindowsProvider({}, false, true) == ProviderMode::Embedded);
+    CHECK(selectWindowsProvider({}, true, false) == ProviderMode::System);
+    CHECK(selectWindowsProvider({}, false, false) == ProviderMode::System);
+    CHECK(selectWindowsProvider(" \tEmbedded\r\n", true, true) == ProviderMode::Embedded);
+    CHECK(selectWindowsProvider("System", true, true) == ProviderMode::System);
+    CHECK(selectWindowsProvider("System", false, true) == ProviderMode::Embedded);
+    CHECK(selectWindowsProvider("Embedded", true, false) == ProviderMode::System);
+    CHECK(selectWindowsProvider("embedded", true, true) == ProviderMode::System);
+    CHECK(selectWindowsProvider(QChar(0xfeff) + QStringLiteral("Embedded\n"), true, true) == ProviderMode::Embedded);
+}
+
 } // namespace
 
 int main(int argc, char **argv)
@@ -340,7 +381,8 @@ int main(int argc, char **argv)
     QCoreApplication app(argc, argv);
     const QMap<QString, void (*)(const QString &)> fixtures{
         {"fresh", fresh}, {"migrated", migrated}, {"coexistence", coexistence}, {"failures", failures},
-        {"arguments", arguments}, {"session-control", sessionControl}
+        {"arguments", arguments}, {"session-control", sessionControl}, {"device-video", deviceVideoSettings},
+        {"windows-provider", windowsProvider}
     };
 
     try {

@@ -252,8 +252,10 @@ struct Attempt final : QObject
     QTimer timer;
     Phase phase = Phase::Proxy;
     ProxySource source;
+    RequestKind request = RequestKind::Pair;
     QString nodeId;
     bool revalidated = false;
+    bool grantReceived = false;
     Command *command = nullptr;
 
     bool exposed() const { return phase == Phase::Authorized || phase == Phase::Rechecking; }
@@ -427,13 +429,35 @@ struct SystemPairingHost::Private final : QObject
             const auto expected = requestFrame();
             if (socket->bytesAvailable() < expected.size())
                 return;
-            if (socket->read(expected.size()) != expected || socket->bytesAvailable()) {
+            const auto request = parseRequestFrame(socket->read(expected.size()));
+            if (!request || socket->bytesAvailable()) {
                 drop(id);
                 return;
             }
-            socket->setReadBufferSize(1);
+            attempt->request = *request;
+            socket->setReadBufferSize(*request == RequestKind::ClientGrant ? MaxGrantProofFrameSize + 1 : 1);
             attempt->timer.start(int(attempt->deadline.remainingTime()));
             checkPeer(id, *attempt, false);
+        } else if (attempt->phase == Attempt::Phase::Authorized &&
+                   attempt->request == RequestKind::ClientGrant && !attempt->grantReceived) {
+            const auto header = socket->peek(GrantProofHeaderSize);
+            if (header.size() != GrantProofHeaderSize)
+                return;
+            const int size = grantProofFrameSize(header);
+            if (!size || socket->bytesAvailable() > size) {
+                drop(id);
+                return;
+            }
+            if (socket->bytesAvailable() < size)
+                return;
+            const auto proof = parseGrantProof(socket->read(size));
+            if (!proof) {
+                drop(id);
+                return;
+            }
+            attempt->grantReceived = true;
+            socket->setReadBufferSize(1);
+            emit owner->clientProofReceived(host, generation, id, *proof);
         } else if (socket->bytesAvailable()) {
             drop(id);
         }
@@ -481,17 +505,19 @@ struct SystemPairingHost::Private final : QObject
             emit owner->revalidated(host, generation, id);
             return;
         }
-        if (!peer || offered) {
+        const bool grantsAccess = attempt.request == RequestKind::Pair || attempt.request == RequestKind::ClientGrant;
+        if (!peer || (grantsAccess && offered)) {
             attempt.phase = Attempt::Phase::Rejecting;
             attempt.timer.start(250);
             attempt.channel->write(QByteArray(1, '\0'));
             attempt.channel->disconnectFromHost();
             return;
         }
-        offered = id;
+        if (grantsAccess)
+            offered = id;
         attempt.nodeId = peer->nodeId;
         attempt.phase = Attempt::Phase::Authorized;
-        const SystemHostPeer info{peer->nodeId, peer->name, attempt.source.address};
+        const SystemHostPeer info{peer->nodeId, peer->name, attempt.source.address, attempt.request};
         emit owner->authenticated(host, generation, id, info, attempt.channel);
     }
 

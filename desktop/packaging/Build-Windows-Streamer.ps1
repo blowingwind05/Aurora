@@ -1,0 +1,115 @@
+#Requires -Version 7.3
+
+param(
+    [string] $Qmake = 'qmake',
+    [string] $SourceDirectory
+)
+
+$ErrorActionPreference = 'Stop'
+if (-not $IsWindows -or -not (Get-Command cl.exe -ErrorAction SilentlyContinue) -or
+    $env:VSCMD_ARG_TGT_ARCH -ne 'x64') {
+    throw 'Run from the Visual Studio x64 developer shell.'
+}
+$qt = (Get-Command $Qmake -CommandType Application).Source
+$qtBin = Split-Path $qt -Parent
+$deployQt = Join-Path $qtBin 'windeployqt.exe'
+if (-not (Test-Path -LiteralPath $deployQt)) { throw 'The selected Qt must provide windeployqt.' }
+$qtVersion = & $qt -query QT_VERSION
+if ($LASTEXITCODE -ne 0 -or $qtVersion -notmatch '^[56]\.') { throw 'Select a Qt 5 or Qt 6 qmake.' }
+$qtMajor = $qtVersion.Split('.')[0]
+if (-not $env:VCToolsRedistDir) { throw 'The MSVC x64 app-local runtime is required.' }
+$crt = Get-ChildItem -LiteralPath (Join-Path $env:VCToolsRedistDir 'x64') -Directory -Filter 'Microsoft.VC*.CRT' |
+    Select-Object -First 1
+if (-not $crt) { throw 'The MSVC x64 app-local runtime is required.' }
+
+$desktop = Split-Path -Parent $PSScriptRoot
+$desktopQml = Join-Path $desktop 'app/qml'
+if (-not (Test-Path -LiteralPath (Join-Path $desktopQml 'Main.qml') -PathType Leaf)) {
+    throw 'The Aurora desktop QML entry point is missing.'
+}
+$work = Join-Path $desktop ('obj/native-windows/' + [Guid]::NewGuid().ToString('N'))
+$build = Join-Path $work 'build'
+$deploy = Join-Path $work 'Streamer'
+$null = New-Item -ItemType Directory -Force -Path $build, $deploy
+$source = Join-Path $work 'source'
+$sourceTool = Join-Path $desktop 'upstream/Prepare-EngineSource.py'
+$sourceArgs = @('checkout', 'moonlight', 'windows', $source)
+if ($SourceDirectory) { $sourceArgs += @('--origin', $SourceDirectory) }
+& python $sourceTool @sourceArgs
+if ($LASTEXITCODE -ne 0) { throw 'Preparing the Moonlight fork failed.' }
+$entrySources = Get-ChildItem -LiteralPath (Join-Path $desktop 'runtime/stream') -File -Filter 'AuroraStream*'
+Copy-Item -LiteralPath @($entrySources.FullName) -Destination (Join-Path $source 'app')
+$connectionViews = Join-Path $desktop 'runtime/stream/qt-session'
+Copy-Item -LiteralPath $connectionViews -Destination (Join-Path $source 'app') -Recurse
+$connectionStage = Join-Path $desktop 'app/qml/stream/ConnectionStage.qml'
+Copy-Item -LiteralPath $connectionStage -Destination (Join-Path $source 'app/qt-session')
+$bitrateSource = Join-Path $desktop 'protocol/bitrate/ClientProtocol.h'
+Copy-Item -LiteralPath $bitrateSource -Destination (Join-Path $source 'app/backend/aurora-bitrate.h')
+$clientProofSource = Join-Path $desktop 'protocol/identity/ClientProof.h'
+Copy-Item -LiteralPath $clientProofSource -Destination (Join-Path $source 'app/backend/aurora-client-proof.h')
+Copy-Item -LiteralPath (Join-Path $desktop 'Assets/Aurora.ico') -Destination (Join-Path $source 'app/moonlight.ico') -Force
+
+$sourceIndex = Join-Path $desktop 'obj/upstream-sources/moonlight/windows-x64'
+& python $sourceTool index $sourceIndex $source | Out-Host
+if ($LASTEXITCODE -ne 0) { throw 'Publishing the Moonlight source index failed.' }
+
+$previousPath = $env:PATH
+$env:PATH = "$qtBin;$previousPath"
+try {
+    Push-Location -LiteralPath $build
+    try {
+        & $qt (Join-Path $source 'moonlight-qt.pro') 'CONFIG+=no_batch' 'DEFINES+=AURORA_STREAM_RUNTIME'
+        if ($LASTEXITCODE -ne 0) { throw 'qmake failed.' }
+        & (Join-Path $source 'scripts/jom.exe') -j ([Math]::Min(8, [Environment]::ProcessorCount)) release
+        if ($LASTEXITCODE -ne 0) { throw 'Compiling AuroraStream failed.' }
+    }
+    finally { Pop-Location }
+
+    $executable = Join-Path $deploy 'AuroraStream.exe'
+    Copy-Item -LiteralPath (Join-Path $build 'app/release/AuroraStream.exe') -Destination $executable
+    Get-ChildItem -LiteralPath (Join-Path $source 'libs/windows/lib/x64') -File -Filter '*.dll' -Exclude 'discord-rpc.dll' |
+        Copy-Item -Destination $deploy
+    Copy-Item -LiteralPath (Join-Path $build 'AntiHooking/release/AntiHooking.dll'),
+        (Join-Path $source 'app/SDL_GameControllerDB/gamecontrollerdb.txt') -Destination $deploy
+    if ($qtMajor -eq '5') {
+        Copy-Item -LiteralPath (Join-Path $source 'app/qt_qt5.conf') -Destination (Join-Path $deploy 'qt.conf')
+    }
+    # Deploy both QML trees' imports and Widgets for the Aurora desktop launcher.
+    & $deployQt --release --widgets --quick --qmldir (Join-Path $source 'app/qt-session') --qmldir $desktopQml `
+        --dir $deploy --no-opengl-sw --no-sql --no-compiler-runtime $executable
+    if ($LASTEXITCODE -ne 0) { throw 'Deploying Qt failed.' }
+    Get-ChildItem -LiteralPath $crt.FullName -File -Filter '*.dll' | Copy-Item -Destination $deploy
+    $launch = [Diagnostics.ProcessStartInfo]::new($executable)
+    $launch.UseShellExecute = $false
+    $launch.RedirectStandardOutput = $true
+    $launch.CreateNoWindow = $true
+    $launch.ArgumentList.Add('--aurora-runtime-info')
+    $probe = [Diagnostics.Process]::Start($launch)
+    try {
+        if (-not $probe.WaitForExit(8000)) {
+            $probe.Kill()
+            throw 'Checking the Aurora streaming entry point timed out.'
+        }
+        if ($probe.ExitCode -ne 0 -or $probe.StandardOutput.ReadToEnd().Trim() -cne 'aurora-stream/1') {
+            throw 'The Aurora streaming entry point is missing.'
+        }
+    }
+    finally { $probe.Dispose() }
+}
+finally { $env:PATH = $previousPath }
+
+$notices = Join-Path $deploy 'licenses'
+$null = New-Item -ItemType Directory -Path $notices
+Copy-Item -LiteralPath $connectionViews -Destination $notices -Recurse
+Copy-Item -LiteralPath $connectionStage -Destination (Join-Path $notices 'qt-session')
+Copy-Item -LiteralPath (Join-Path $source 'LICENSE') -Destination (Join-Path $notices 'Moonlight-Qt.txt')
+Copy-Item -LiteralPath (@($entrySources.FullName) + $bitrateSource + $clientProofSource) -Destination $notices
+Copy-Item -LiteralPath (Join-Path $source 'AURORA-SOURCE.txt') -Destination (Join-Path $notices 'SOURCE.txt')
+Get-ChildItem -LiteralPath $source -Recurse -File -Include 'LICENSE*', 'COPYING*', 'NOTICE*' | ForEach-Object {
+    $relative = [IO.Path]::GetRelativePath($source, $_.FullName)
+    $target = Join-Path $notices $relative
+    $null = New-Item -ItemType Directory -Force -Path (Split-Path -Parent $target)
+    Copy-Item -LiteralPath $_.FullName -Destination $target
+}
+Get-ChildItem -Path (Join-Path $qtBin '../LICENSE*') -ErrorAction SilentlyContinue | Copy-Item -Destination $notices -Recurse
+Get-Item -LiteralPath $deploy

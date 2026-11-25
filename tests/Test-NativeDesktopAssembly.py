@@ -15,7 +15,8 @@ import unittest
 
 sys.dont_write_bytecode = True
 DESKTOP = Path(__file__).resolve().parents[1] / "desktop"
-spec = importlib.util.spec_from_file_location("native_assembly", DESKTOP / "Build-NativeDesktop.py")
+PACKAGING = DESKTOP / "packaging"
+spec = importlib.util.spec_from_file_location("native_assembly", PACKAGING / "Build-NativeDesktop.py")
 assembly = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(assembly)
 
@@ -58,7 +59,7 @@ def windows_inputs(root):
     put(sunshine, "AuroraHost.exe", pe())
     put(sunshine, "zlib1.dll")
     put(sunshine, "assets/apps.json")
-    put(sunshine, "assets/web/index.html")
+    put(sunshine, "assets/box.png")
     put(tailscale, "AuroraTailnet.exe", pe())
     for directory in (streamer, sunshine, tailscale):
         put(directory, "licenses/SOURCE.txt")
@@ -76,6 +77,8 @@ class AssemblyTest(unittest.TestCase):
         inputs = windows_inputs(self.root)
         assembly.assemble(output, lambda target: assembly.stage_windows(target, *inputs))
         self.assertTrue((output / "Aurora.exe").is_file())
+        self.assertTrue((output / "Components/Sunshine/assets/box.png").is_file())
+        self.assertFalse((output / "Components/Sunshine/assets/web").exists())
         self.assertTrue((output / "ui/desktop/app/qml/stream/NativeSessionWindow.qml").is_file())
         self.assertFalse((output / "ui/stale.txt").exists())
         streamer = output / "Components/Moonlight"
@@ -91,7 +94,7 @@ class AssemblyTest(unittest.TestCase):
             assembly.assemble(output, lambda _: self.fail("Existing output was passed to the stager"))
 
     def test_windows_package_rejects_incomplete_sunshine(self):
-        for relative in ("zlib1.dll", "assets/web/index.html"):
+        for relative in ("zlib1.dll", "assets/box.png"):
             with self.subTest(missing=relative):
                 root = self.root / Path(relative).name
                 inputs = windows_inputs(root)
@@ -124,7 +127,7 @@ class AssemblyTest(unittest.TestCase):
         for path in ("PlugIns/platforms/libqcocoa.dylib", "Resources/qml/QtQuick/qmldir",
                      "Resources/qt.conf", "Resources/AuroraStreamBrand.png", "Resources/Tailscale/licenses/SOURCE.txt",
                      "Resources/ThirdParty/Moonlight/SOURCE.txt", "Helpers/AuroraHost.app/Contents/Resources/assets/apps.json",
-                     "Helpers/AuroraHost.app/Contents/Resources/assets/web/index.html",
+                     "Helpers/AuroraHost.app/Contents/Resources/assets/box.png",
                      "Helpers/AuroraHost.app/Contents/Resources/licenses/SOURCE.txt"):
             put(contents, path)
         host_id = {"CFBundleIdentifier": "org.aurora-remote.desktop.host", "CFBundleExecutable": "AuroraHost"}
@@ -139,12 +142,23 @@ class AssemblyTest(unittest.TestCase):
         output = self.root / "Aurora.app"
         assembly.assemble(output, lambda bundle: assembly.stage_macos(bundle, launcher, donor, "arm64", mock_macdeployqt))
         result = output / "Contents"
-        self.assertEqual((result / "Info.plist").read_bytes(), (DESKTOP / "Info.plist").read_bytes())
+        self.assertEqual((result / "Info.plist").read_bytes(), (PACKAGING / "Info.plist").read_bytes())
         self.assertTrue((result / "Helpers/AuroraHost.app/Contents/MacOS/AuroraHost").is_file())
+        host_assets = result / "Helpers/AuroraHost.app/Contents/Resources/assets"
+        self.assertTrue((host_assets / "box.png").is_file())
+        self.assertFalse((host_assets / "web").exists())
         self.assertFalse((result / "MacOS/AuroraQtShell").exists())
         self.assertEqual((contents / "MacOS/Aurora").read_bytes(), b"obsolete managed launcher")
         if os.name != "nt":
             self.assertTrue((result / "Frameworks/QtCore.framework/QtCore").is_symlink())
+
+        missing = contents / "Helpers/AuroraHost.app/Contents/Resources/assets/box.png"
+        missing.unlink()
+        incomplete = self.root / "Incomplete Aurora.app"
+        with self.assertRaises(FileNotFoundError) as error:
+            assembly.assemble(incomplete, lambda bundle: assembly.stage_macos(bundle, launcher, donor, "arm64", mock_macdeployqt))
+        self.assertEqual(error.exception.args[0], missing)
+        self.assertFalse(incomplete.exists())
 
 
 if __name__ == "__main__":

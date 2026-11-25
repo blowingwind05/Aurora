@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "DesktopPreferences.h"
 
+#include <QCryptographicHash>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLockFile>
@@ -20,6 +22,7 @@ namespace {
 const auto ExitOnClose = QStringLiteral("exit-on-close");
 const auto HostSleepMode = QStringLiteral("host-sleep-mode");
 const auto AllowManagedHost = QStringLiteral("allow-managed-host");
+const auto PrivacyUiAccessTest = QStringLiteral("Sunshine/Bundled/config/privacy-uiaccess-test");
 const auto StartupInitialized = QStringLiteral("startup-initialized");
 const auto StreamFile = QStringLiteral("stream-preferences.json");
 const auto Bitrate = QStringLiteral("bitrate");
@@ -225,6 +228,16 @@ bool GeneralPreferences::setManagedHostAllowed(bool allowed) const
     return setMarker(preferencePath(directory_, AllowManagedHost), allowed);
 }
 
+bool GeneralPreferences::privacyUiAccessTest() const
+{
+    return QFileInfo(preferencePath(directory_, PrivacyUiAccessTest)).isFile();
+}
+
+bool GeneralPreferences::setPrivacyUiAccessTest(bool enabled) const
+{
+    return setMarker(preferencePath(directory_, PrivacyUiAccessTest), enabled);
+}
+
 bool GeneralPreferences::startupInitialized() const
 {
     return QFileInfo(preferencePath(directory_, StartupInitialized)).isFile();
@@ -330,9 +343,25 @@ bool SessionControlChange::isValid() const
     return sessionControlOptions().contains(option) && validStreamValue(option, value);
 }
 
+bool SessionControlChange::isVideoSetting() const
+{
+    return isValid() && (option == QLatin1String("resolution") || option == QLatin1String("fps") ||
+        option == Bitrate || option == QLatin1String("video-codec") || option == QLatin1String("hdr"));
+}
+
 StreamPreferences::StreamPreferences(const QString &directory)
     : path_(QDir::isAbsolutePath(directory) ? preferencePath(directory, StreamFile) : QString())
 {
+}
+
+StreamPreferences StreamPreferences::forDevice(const QString &directory, const QString &tailnetId, qint64 ownerId,
+                                                const QString &hostId)
+{
+    if (!QDir::isAbsolutePath(directory) || tailnetId.isEmpty() || ownerId <= 0 || hostId.isEmpty())
+        return StreamPreferences(QString{});
+    const QJsonArray identity{tailnetId, QString::number(ownerId), hostId.toCaseFolded()};
+    const auto key = QCryptographicHash::hash(QJsonDocument(identity).toJson(QJsonDocument::Compact), QCryptographicHash::Sha256);
+    return StreamPreferences(QDir(directory).filePath(QStringLiteral("Devices/") + QString::fromLatin1(key.toHex())));
 }
 
 StreamPreferenceSnapshot StreamPreferences::read() const

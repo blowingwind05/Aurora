@@ -1,7 +1,7 @@
 # Native stream session
 
 Link `aurora_native_session` from `add_subdirectory(native/session)`. Include
-`native/stream/control` after the stream, server-info, and Tailscale targets
+`src/adaptors/moonlight/control` after the stream, server-info, and Tailscale targets
 so the session target can link `Aurora::StreamControl`.
 `SessionSupervisor` embeds the bundled worker on Windows and launches the
 bundled native Moonlight window on macOS.
@@ -70,7 +70,7 @@ Continue using `cancel(attempt)` when the caller's account or access changes.
 `NativeSessionWindow.qml` binds `privacyScreen` and `privacyScreenMessage` to
 the existing chrome. The supervisor checks status when video becomes ready.
 Opening the control center refreshes status, and the toggle calls
-`setPrivacyScreen(bool)`. The displayed value is the worker's last confirmed
+`setPrivacyMode(QString)`. The displayed mode is the worker's last confirmed
 state. One status or change request runs at a time. Session stop, relay loss,
 or worker exit revokes privacy and reaps the control child before the session
 finishes and closes its relay. The macOS standalone Moonlight window owns

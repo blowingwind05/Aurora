@@ -2,7 +2,7 @@
 #pragma once
 
 #include "PresencePacket.h"
-#include "../tailscale/Status.h"
+#include "../adaptors/tailscale/Status.h"
 
 #include <QDeadlineTimer>
 #include <QHash>

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 import QtQuick 2.15
-import ".." as Aurora
+import "../common" as Aurora
 
 Column {
     id: center
@@ -155,7 +155,8 @@ Column {
             anchors.right: parent.right
             anchors.rightMargin: 8
             visible: center.page === "quality" || center.page === "audio"
-            text: qsTr("下次连接生效")
+            text: center.page === "quality" && center.session.videoSettingsApplyDuringSession ? qsTr("部分调整需要短暂重连")
+                : qsTr("下次连接生效")
             color: Aurora.AuroraTheme.muted
             font.pixelSize: 11
         }
@@ -175,6 +176,16 @@ Column {
         id: qualityPage
         Column {
             spacing: 10
+            Text {
+                width: parent.width
+                visible: text.length > 0
+                text: center.session.videoSettingsMessage
+                textFormat: Text.PlainText
+                wrapMode: Text.Wrap
+                color: Aurora.AuroraTheme.muted
+                font.family: Aurora.AuroraTheme.font
+                font.pixelSize: 12
+            }
             StreamChoices {
                 width: parent.width
                 objectName: "resolution"
@@ -192,6 +203,7 @@ Column {
             StreamBitrate {
                 width: parent.width
                 setting: center.session.preferences.bitrate || null
+                liveLimit: center.session.liveVideoBitrateLimit
                 onRequested: function(kbps) { center.session.bitrateRequested(kbps) }
             }
             StreamChoices {
@@ -291,17 +303,28 @@ Column {
         id: safetyPage
         Column {
             spacing: 5
-            StreamToggle {
+            StreamChoices {
+                readonly property var privacy: center.session.privacyScreen
+                readonly property var modeOptions: [
+                    {value: "off", label: qsTr("关闭")},
+                    {value: "display-off", label: qsTr("关闭显示器")},
+                    {value: "screensaver", label: qsTr("隐私屏保")}
+                ]
+
                 width: parent.width
                 objectName: "privacyScreen"
-                text: qsTr("隐私屏保")
-                setting: center.session.privacyScreen
-                onChangeRequested: function(enabled) { center.session.privacyScreenRequested(enabled) }
+                label: qsTr("隐私保护")
+                setting: ({
+                    value: privacy ? privacy.mode : undefined,
+                    writable: privacy ? privacy.writable : false,
+                    options: modeOptions
+                })
+                onRequested: function(mode) { center.session.privacyModeRequested(mode) }
             }
             StreamText {
                 width: parent.width
                 text: center.session.privacyScreenMessage
-                    || (center.session.privacyScreen ? "" : qsTr("远端尚未提供隐私屏保能力"))
+                    || (center.session.privacyScreen ? "" : qsTr("被控端未提供隐私保护"))
                 visible: text.length > 0
                 wrapMode: Text.Wrap
                 color: Aurora.AuroraTheme.muted

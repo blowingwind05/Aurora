@@ -1,51 +1,28 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "NativeDesktop.h"
+#include "adaptors/moonlight/MoonlightPin.h"
 #include "pairing/PairingWire.h"
 
-#include <QNetworkProxy>
-#include <QRandomGenerator>
-#include <QTcpSocket>
-
 #include <algorithm>
-#include <array>
 #include <utility>
 
 namespace {
 using Aurora::Discovery::StreamHost;
-using Aurora::Pairing::BridgeKeySize;
-using Aurora::Pairing::Client::Coordinator;
-using aurora::tailscale::EmbeddedStatusClient;
-using aurora::tailscale::StatusError;
+using Aurora::Pairing::RequestKind;
+using Aurora::Pairing::Client::TailnetExchange;
+using GrantStatus = Aurora::Pairing::Client::Status;
 
-QByteArray newBridgeKey()
-{
-    std::array<quint32, BridgeKeySize / sizeof(quint32)> words;
-    QRandomGenerator::system()->fillRange(words.data(), words.size());
-    return QByteArray(reinterpret_cast<const char *>(words.data()), BridgeKeySize);
-}
+constexpr int grantRenewalMs = 3 * 60 * 1000 + 30000;
+constexpr int grantRetryMs = 5000;
+
 }
 
 void NativeDesktop::initializePairingClient()
 {
-    pairingClient = std::make_unique<Coordinator>();
-    connect(pairingClient.get(), &Coordinator::finished, this, &NativeDesktop::pairingFinished);
-    connect(tailnet.get(), &EmbeddedStatusClient::pairOpenFinished, this, &NativeDesktop::receivePairingLease);
-    pairingConnectRetry.setInterval(120);
-    connect(&pairingConnectRetry, &QTimer::timeout, this, &NativeDesktop::requestEmbeddedPairing);
-#ifdef Q_OS_WIN
-    using aurora::tailscale::system::SystemPairingNc;
-    systemPairing = std::make_unique<SystemPairingNc>();
-    connect(systemPairing.get(), &SystemPairingNc::ready, this, &NativeDesktop::startSystemPairingExchange);
-    connect(systemPairing.get(), &SystemPairingNc::finished, this, [this](quint64 request, const auto &) {
-        if (!pairingAttempt || pairingAttempt->systemRequest != request)
-            return;
-        pairingAttempt->systemRequest = 0;
-        if (!pairingAttempt->exchange)
-            cancelConnection(tr("系统 Tailscale 无法打开自动配对通道。"));
-        // The host can close the control channel after approving the PIN.
-        // Once the exchange starts, its protocol and trust checks own the result.
-    });
-#endif
+    pairingClient = std::make_unique<TailnetExchange>(tailnet.get());
+    connect(pairingClient.get(), &TailnetExchange::finished, this, &NativeDesktop::pairingFinished);
+    clientGrantRenewal.setSingleShot(true);
+    connect(&clientGrantRenewal, &QTimer::timeout, this, &NativeDesktop::renewClientGrant);
 }
 
 bool NativeDesktop::canPairOverRoute(const StreamHost &route) const
@@ -58,7 +35,8 @@ bool NativeDesktop::canPairOverRoute(const StreamHost &route) const
 
 bool NativeDesktop::beginPairing()
 {
-    if (!ownsConnection() || connection->pairingAttempted ||
+    if (!ownsConnection() || connection->pairingAttempted || connection->clientGrantRequired ||
+        clientGrantCache.knowsPeer(connection->peerId) ||
         tailnetConfirmation || tailnetVerification || !connection->selected || !connection->prepared)
         return false;
 
@@ -74,109 +52,100 @@ bool NativeDesktop::beginPairing()
     const auto &prepared = *connection->prepared;
     if (prepared.generation != tailnetGeneration || prepared.route.viaEmbeddedTailnet != connection->embedded)
         return false;
-#ifndef Q_OS_WIN
-    if (!connection->embedded)
+    return beginTailscaleExchange(connection->selected->endpoint.address, RequestKind::Pair);
+}
+
+bool NativeDesktop::beginHostIdentity(RequestKind kind)
+{
+    if (!ownsConnection() || tailnetConfirmation || tailnetVerification)
         return false;
-#endif
-    connection->pairingAttempted = true;
-    pairingAttempt.emplace(PairingAttempt{prepared.generation, connection->embedded ? newBridgeKey() : QByteArray{}});
-    pairingClient->setAuthorization(prepared.generation, true);
-    reportConnection(tr("正在与被控端自动配对…"), false);
-    if (connection->embedded) {
-        pairingConnectRetry.start();
-        requestEmbeddedPairing();
+    if (kind == RequestKind::HostRoutes && !connection->lookingForPublicFallback && connection->prepared &&
+        connection->prepared->verifiesHostIdentity && (!connection->clientGranted || connection->recoveringRoute) &&
+        (connection->clientGrantRequired || clientGrantCache.knowsPeer(connection->peerId)) &&
+        (connection->recoveringRoute || !clientGrantCache.hasRecentGrant(connection->peerId))) {
+        kind = RequestKind::ClientGrant;
     }
-#ifdef Q_OS_WIN
-    else {
-        systemPairing->setAuthorization(prepared.generation, connection->account);
-        pairingAttempt->systemRequest = systemPairing->start({prepared.generation, connection->account,
-            connection->peerId, connection->selected->endpoint.address});
-        if (!pairingAttempt->systemRequest)
-            cancelConnection(tr("无法启动系统 Tailscale 自动配对。"));
+    const bool discoveryOnly = (kind == RequestKind::HostRoutes && connection->lookingForPublicFallback) ||
+        (kind != RequestKind::Pair && connection->recoveringRoute);
+    if (!discoveryOnly && (!connection->prepared || connection->prepared->generation != tailnetGeneration ||
+                           !connection->prepared->verifiesHostIdentity))
+        return false;
+
+    const auto &network = localPresence->network();
+    const auto peer = std::find_if(network.devices.cbegin(), network.devices.cend(),
+        [this](const auto &device) { return device.id == connection->peerId; });
+    if (peer == network.devices.cend())
+        return false;
+
+    const auto addresses = Aurora::Discovery::tailnetAddresses(*peer);
+    for (const auto &address : addresses) {
+        if ((!connection->embedded || address.protocol() == QAbstractSocket::IPv4Protocol) &&
+            Aurora::Discovery::findTailnetPeer(&network, address) == &*peer) {
+            return beginTailscaleExchange(address, kind);
+        }
     }
-#endif
+    return false;
+}
+
+void NativeDesktop::renewClientGrant()
+{
+    if (!ownsConnection() || !connection->clientGranted ||
+        sessionSupervisor->phase() != Aurora::Session::SessionSupervisor::Phase::Streaming)
+        return;
+    if (connection->pendingRouteSwitch || !beginHostIdentity(RequestKind::ClientGrant))
+        scheduleClientGrantRenewal(grantRetryMs);
+}
+
+void NativeDesktop::scheduleClientGrantRenewal(int delayMs)
+{
+    if (!connection)
+        return;
+    connection->clientGrantDue.setRemainingTime(delayMs);
+    clientGrantRenewal.start(delayMs);
+}
+
+bool NativeDesktop::beginTailscaleExchange(const QHostAddress &peerAddress, RequestKind kind)
+{
+    if (pairingAttempt || !ownsConnection() || !connection->selected)
+        return false;
+
+    const bool discoveryOnly = (kind == RequestKind::HostRoutes && connection->lookingForPublicFallback) ||
+        (kind != RequestKind::Pair && connection->recoveringRoute);
+    if (!discoveryOnly && !connection->prepared)
+        return false;
+    const auto generation = discoveryOnly ? tailnetGeneration : connection->prepared->generation;
+
+    Aurora::Pairing::Client::Request request;
+    request.epoch = generation;
+    request.peerId = connection->peerId;
+    request.verifiedHost = *connection->selected;
+    request.verifiedHost.endpoint.address = peerAddress;
+    request.leaseLifetime = sessionSupervisor.get();
+    request.kind = kind;
+    if (connection->prepared) {
+        request.leasedRoute = connection->prepared->route;
+        request.moonlightProgram = connection->prepared->executable;
+        if (kind == RequestKind::ClientGrant) {
+            request.leasedRoute.certificateSha256 = connection->certificateSha256.isEmpty()
+                ? clientGrantCache.hostFingerprint(connection->peerId) : connection->certificateSha256;
+        }
+    }
+
+    const auto exchange = pairingClient->start(std::move(request), localPresence->network(),
+        connection->account, connection->embedded,
+        [this, generation] { return ownsConnection() && tailnetGeneration == generation; });
+    if (!exchange)
+        return false;
+
+    if (kind == RequestKind::Pair)
+        connection->pairingAttempted = true;
+    const bool renewal = kind == RequestKind::ClientGrant &&
+        sessionSupervisor->phase() == Aurora::Session::SessionSupervisor::Phase::Streaming;
+    pairingAttempt.emplace(PairingAttempt{generation, kind, exchange, {}, renewal});
+    if (!renewal)
+        reportConnection(kind == RequestKind::Pair ? tr("正在与被控端自动配对…") : tr("正在核对被控端证书…"), false);
     return true;
 }
-
-void NativeDesktop::requestEmbeddedPairing()
-{
-    if (!pairingAttempt)
-        return;
-    if (!ownsConnection() || pairingAttempt->generation != tailnetGeneration) {
-        cancelConnection(tr("Tailscale 账号或设备已变化，配对已停止。"));
-        return;
-    }
-    if (pairingAttempt->connectDeadline.hasExpired()) {
-        cancelConnection(tr("无法建立自动配对连接。请检查被控端 Aurora 是否允许同账号设备连接。"));
-        return;
-    }
-    if (!pairingAttempt->allocation && !pairingAttempt->lease) {
-        pairingAttempt->allocation = tailnet->requestPairOpen(pairingAttempt->generation, connection->peerId,
-            connection->selected->endpoint.address, pairingAttempt->key);
-    }
-}
-
-void NativeDesktop::receivePairingLease(quint64 generation, quint64 request,
-                                       const aurora::tailscale::PairingLeaseResult &result)
-{
-    if (!pairingAttempt || request != pairingAttempt->allocation)
-        return;
-    pairingAttempt->allocation = 0;
-    if (!ownsConnection() || generation != pairingAttempt->generation || generation != tailnetGeneration ||
-        result.error != StatusError::None || !result.lease || !result.lease->isValid() || !result.lease->localPort()) {
-        cancelConnection(tr("对端 Aurora 暂时无法自动配对。"));
-        return;
-    }
-    pairingAttempt->lease = result.lease;
-    auto *socket = new QTcpSocket(this);
-    pairingAttempt->socket = socket;
-    socket->setProxy(QNetworkProxy::NoProxy);
-    connect(socket, &QTcpSocket::connected, this, &NativeDesktop::startPairingExchange);
-    connect(socket, &QTcpSocket::errorOccurred, this, [this, socket](QAbstractSocket::SocketError) {
-        if (pairingAttempt && pairingAttempt->socket == socket && !pairingAttempt->exchange)
-            cancelConnection(tr("无法连接自动配对通道。"));
-    });
-    socket->connectToHost(result.lease->address(), *result.lease->localPort());
-}
-
-void NativeDesktop::startPairingExchange()
-{
-    if (!pairingAttempt || !ownsConnection() || !pairingAttempt->lease || !pairingAttempt->lease->isValid() ||
-        pairingAttempt->generation != tailnetGeneration || pairingAttempt->connectDeadline.hasExpired()) {
-        cancelConnection(tr("自动配对连接已失效。"));
-        return;
-    }
-    const auto &prepared = *connection->prepared;
-    const Aurora::Pairing::Client::Request request{prepared.generation, connection->peerId, *connection->selected,
-                                                   prepared.route, sessionSupervisor.get(), prepared.executable};
-    const auto started = pairingClient->startLoopback(localPresence->network(), request, pairingAttempt->socket,
-        *pairingAttempt->lease->localPort(), std::exchange(pairingAttempt->key, {}));
-    pairingAttempt->exchange = started.request;
-    if (!started.request) {
-        cancelConnection(tr("无法验证自动配对通道或内置串流组件。"));
-        return;
-    }
-    pairingConnectRetry.stop();
-}
-
-#ifdef Q_OS_WIN
-void NativeDesktop::startSystemPairingExchange(quint64 id, QIODevice *channel)
-{
-    if (!pairingAttempt || id != pairingAttempt->systemRequest)
-        return;
-    if (!ownsConnection() || connection->embedded || pairingAttempt->generation != tailnetGeneration) {
-        cancelConnection(tr("系统 Tailscale 账号或设备已变化，配对已停止。"));
-        return;
-    }
-    const auto &prepared = *connection->prepared;
-    const Aurora::Pairing::Client::Request request{prepared.generation, connection->peerId, *connection->selected,
-                                                   prepared.route, sessionSupervisor.get(), prepared.executable};
-    const auto started = pairingClient->startStdio(localPresence->network(), request, channel, channel);
-    pairingAttempt->exchange = started.request;
-    if (!started.request)
-        cancelConnection(tr("无法验证系统 Tailscale 配对通道。"));
-}
-#endif
 
 void NativeDesktop::pairingFinished(quint64 request, const Aurora::Pairing::Client::Result &result)
 {
@@ -184,17 +153,118 @@ void NativeDesktop::pairingFinished(quint64 request, const Aurora::Pairing::Clie
         return;
     pairingAttempt->exchange = 0;
     const auto cancellation = pairingAttempt->cancellation;
-    const bool ready = result.status == Aurora::Pairing::Client::Status::Paired &&
-        ownsConnection() && (!connection->embedded || (pairingAttempt->lease && pairingAttempt->lease->isValid())) &&
-        pairingAttempt->generation == tailnetGeneration;
-    releasePairingTransport();
+    const auto kind = pairingAttempt->kind;
+    const bool renewal = pairingAttempt->renewingGrant;
+    const auto interrupted = std::move(pairingAttempt->interruptedPlayback);
+    const bool current = ownsConnection() && pairingAttempt->generation == tailnetGeneration &&
+        result.status != GrantStatus::AuthorizationChanged && result.status != GrantStatus::LeaseClosed;
+    pairingAttempt.reset();
     if (cancellation) {
         cancelConnection(*cancellation);
         if (exitAfterSession)
             requestExit();
         return;
     }
-    if (!ready) {
+    if (!current) {
+        cancelConnection(tr("Tailscale 账号或设备已变化，连接已停止。"));
+        return;
+    }
+    if (interrupted) {
+        sessionFinished(connection->attempt, tailnetGeneration, *interrupted);
+        return;
+    }
+    if (renewal) {
+        const bool granted = result.status == GrantStatus::ClientGranted && result.pinnedSha256 == connection->certificateSha256;
+        scheduleClientGrantRenewal(granted ? grantRenewalMs : grantRetryMs);
+        if (granted) {
+            clientGrantCache.remember(connection->peerId, result.pinnedSha256, result.grantInstance,
+                result.clientCertificateSha256, connection->clientGrantDue);
+        } else if (result.status == GrantStatus::Rejected) {
+            clientGrantCache.forgetGrant(connection->peerId);
+        }
+        updateRouteQuality();
+        return;
+    }
+    if (kind != RequestKind::Pair) {
+        const bool grant = kind == RequestKind::ClientGrant;
+        if (result.status != (grant ? GrantStatus::ClientGranted : GrantStatus::HostIdentityVerified) ||
+            result.pinnedSha256.size() != Aurora::Pairing::HostCertificateSha256Size) {
+            if (grant) {
+                cancelConnection(tr("被控端未授予当前设备串流权限。"));
+                return;
+            }
+            if (connection->recoveringRoute) {
+                if (kind == RequestKind::HostRoutes && beginHostIdentity(RequestKind::HostIdentity))
+                    return;
+                cancelConnection(tr("无法通过 Tailscale 重新确认被控端，串流未恢复。"));
+                return;
+            }
+            if (connection->lookingForPublicFallback) {
+                cancelConnection(tr("Tailscale 串流路径不可用，未取得已验证的公网 IPv6 候选。"));
+                return;
+            }
+            if (kind == RequestKind::HostRoutes) {
+                if (canPairOverRoute(*connection->selected)) {
+                    verifyMoonlightTrust();
+                    return;
+                }
+                if (beginHostIdentity(RequestKind::HostIdentity))
+                    return;
+            }
+            failRoute(tr("无法通过 Tailscale 确认被控端证书。"), true);
+            return;
+        }
+        if (!connection->resumeCertificateSha256.isEmpty() &&
+            connection->resumeCertificateSha256 != result.pinnedSha256) {
+            failRoute(tr("被控端证书已变化，无法恢复串流。"), false);
+            return;
+        }
+        connection->certificateSha256 = result.pinnedSha256;
+        if (result.supportsClientGrant) {
+            connection->clientGrantRequired = true;
+            clientGrantCache.noteSupport(connection->peerId, result.pinnedSha256);
+        }
+        if (grant) {
+            connection->clientGranted = true;
+            scheduleClientGrantRenewal(grantRenewalMs);
+            clientGrantCache.remember(connection->peerId, result.pinnedSha256, result.grantInstance,
+                result.clientCertificateSha256, connection->clientGrantDue);
+        } else if (result.supportsClientGrant && connection->prepared && !connection->clientGranted) {
+            const auto renewal = clientGrantCache.reuse(connection->peerId, result.pinnedSha256, result.grantInstance,
+                Aurora::Stream::readClientFingerprint(connection->prepared->executable));
+            if (renewal) {
+                connection->clientGranted = true;
+                connection->clientGrantDue = *renewal;
+            }
+        }
+        if (kind == RequestKind::HostRoutes || grant) {
+            connection->requestedHostRoutes = true;
+            connection->publicCertificateSha256 = result.pinnedSha256;
+            connection->publicRoutes.clear();
+            for (const auto &address : result.publicIpv6) {
+                if (address != connection->selected->endpoint.address) {
+                    connection->publicRoutes.append({{address, Aurora::Discovery::BundledSunshinePort},
+                        connection->selected->id, connection->selected->name, false, false, false, false, true});
+                }
+            }
+        }
+        if (connection->recoveringRoute) {
+            beginRecoveryRouteQuality();
+        } else if (connection->lookingForPublicFallback) {
+            connection->lookingForPublicFallback = false;
+            for (const auto &route : connection->publicRoutes)
+                connection->routes.enqueue(route);
+            if (connection->routes.isEmpty()) {
+                cancelConnection(tr("未发现已认证的公网 IPv6 候选。"));
+                return;
+            }
+            prepareNextRoute();
+        } else {
+            verifyMoonlightTrust();
+        }
+        return;
+    }
+    if (result.status != Aurora::Pairing::Client::Status::Paired) {
         cancelConnection(tr("未完成自动配对。请检查被控端是否运行 Aurora 并允许同账号设备连接。"));
         return;
     }
@@ -205,26 +275,4 @@ void NativeDesktop::pairingFinished(quint64 request, const Aurora::Pairing::Clie
         return;
     }
     launchPreparedSession();
-}
-
-void NativeDesktop::releasePairingTransport()
-{
-    if (!pairingAttempt)
-        return;
-    auto attempt = std::exchange(pairingAttempt, std::nullopt);
-    pairingConnectRetry.stop();
-    pairingClient->setAuthorization(attempt->generation, false);
-    if (attempt->allocation)
-        tailnet->cancelPairing(attempt->allocation);
-    if (attempt->socket) {
-        disconnect(attempt->socket, nullptr, this, nullptr);
-        attempt->socket->abort();
-        attempt->socket->deleteLater();
-    }
-    if (attempt->lease)
-        attempt->lease->close();
-#ifdef Q_OS_WIN
-    systemPairing->setAuthorization(attempt->generation, std::nullopt);
-#endif
-    attempt->key.fill('\0');
 }

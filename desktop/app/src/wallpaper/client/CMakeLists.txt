@@ -12,7 +12,7 @@ if(NOT TARGET aurora_native_discovery)
     add_subdirectory("../../discovery" "${CMAKE_CURRENT_BINARY_DIR}/discovery")
 endif()
 if(NOT TARGET aurora_native_stream)
-    add_subdirectory("../../stream" "${CMAKE_CURRENT_BINARY_DIR}/stream")
+    add_subdirectory("../../adaptors/moonlight" "${CMAKE_CURRENT_BINARY_DIR}/stream")
 endif()
 
 add_library(aurora_native_wallpaper_client STATIC WallpaperClient.cpp WallpaperClient.h)

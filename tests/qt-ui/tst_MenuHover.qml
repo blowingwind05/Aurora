@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 import QtQuick 2.15
 import QtTest 1.2
-import "../../desktop/app/qml" as Aurora
+import "../../desktop/app/qml/common" as Aurora
 
 Item {
     id: window

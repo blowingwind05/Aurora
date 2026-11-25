@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "NativeDesktop.h"
-#include "stream/control/ControlAdapter.h"
-#include "tailscale/ProviderSelection.h"
+#include "adaptors/moonlight/control/ControlAdapter.h"
+#include "preferences/ProviderSelection.h"
 
 #include <QApplication>
 #include <QClipboard>
@@ -10,6 +10,8 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QJsonArray>
+#include <QJsonDocument>
 #include <QJsonObject>
 #include <QSaveFile>
 #include <QTimer>
@@ -76,8 +78,8 @@ void NativeDesktop::start(bool packaged)
         initializeStartup();
     initializeTray();
     if (!directory.isEmpty()) {
-        accountAvatar = std::make_unique<aurora::tailscale::AvatarLoader>();
-        connect(accountAvatar.get(), &aurora::tailscale::AvatarLoader::dataUriChanged, this, [this] {
+        accountAvatar = std::make_unique<Aurora::Ui::AvatarLoader>();
+        connect(accountAvatar.get(), &Aurora::Ui::AvatarLoader::dataUriChanged, this, [this] {
             snapshot.insert(QStringLiteral("accountAvatar"), accountAvatar->dataUri());
             emit stateChanged(snapshot);
         });
@@ -103,8 +105,8 @@ void NativeDesktop::start(bool packaged)
         QFile chosenProvider(QDir(directory).filePath(QStringLiteral("tailnet-provider")));
         const auto preference = chosenProvider.open(QIODevice::ReadOnly)
             ? QString::fromLatin1(chosenProvider.read(16)) : QString();
-        embeddedSelected = aurora::tailscale::selectWindowsProvider(preference, hasSystemRuntime, tailnet->isAvailable()) ==
-            aurora::tailscale::ProviderMode::Embedded;
+        embeddedSelected = Aurora::Preferences::selectWindowsProvider(preference, hasSystemRuntime, tailnet->isAvailable()) ==
+            Aurora::Preferences::ProviderMode::Embedded;
         connect(systemTailnet.get(), &aurora::tailscale::system::SystemTailscaleClient::statusFinished,
                 this, &NativeDesktop::receiveTailnetStatus);
         connect(systemTailnet.get(), &aurora::tailscale::system::SystemTailscaleClient::profilesFinished,
@@ -555,6 +557,7 @@ void NativeDesktop::openTailnetLogin()
 
 void NativeDesktop::clearTailnetContext()
 {
+    clientGrantCache.clear();
     settleDevicePower();
     retirePairingHost();
     cancelConnection(tr("账号已变化，连接已停止。"));
@@ -871,15 +874,27 @@ void NativeDesktop::publishTailnetStatus(const aurora::tailscale::Status &status
 
 void NativeDesktop::refreshAccountAvatar(const aurora::tailscale::Status &status)
 {
-    if (accountAvatar) {
-        const bool visible = avatarVisible && snapshot.value(QStringLiteral("windowVisible")).toBool();
-        accountAvatar->setContext(quint64(accountRevision), status, visible);
+    if (!accountAvatar)
+        return;
+
+    std::optional<Aurora::Ui::AvatarLoader::Source> source;
+    const bool visible = avatarVisible && snapshot.value(QStringLiteral("windowVisible")).toBool();
+    if (visible && status.state == aurora::tailscale::BackendState::Connected && status.account
+        && status.account->ownerId > 0 && !status.account->nodeId.isEmpty() && !status.account->tailnetId.isEmpty()) {
+        const auto url = aurora::tailscale::vettedAvatarUrl(status.avatarUrl.toString(QUrl::FullyEncoded));
+        if (!url.isEmpty()) {
+            const auto &account = *status.account;
+            const QJsonArray identity{QString::number(account.ownerId), account.nodeId, account.tailnetId};
+            source = Aurora::Ui::AvatarLoader::Source{QJsonDocument(identity).toJson(QJsonDocument::Compact), url};
+        }
     }
+    accountAvatar->setContext(quint64(accountRevision), source, visible);
 }
 
 void NativeDesktop::updateDeviceCatalog(const aurora::tailscale::Status &status)
 {
     if (!(catalogAccount == status.account)) {
+        clientGrantCache.clear();
         catalogAccount = status.account;
         ++deviceEpoch;
     }
@@ -966,6 +981,12 @@ void NativeDesktop::refreshPreferences(const QJsonObject &request)
     QString closeFeedback;
     QString startupFeedback;
     QString sleepFeedback;
+    QString privacyTestFeedback;
+#ifdef Q_OS_WIN
+    const auto programFiles = qEnvironmentVariable("ProgramFiles");
+    const bool privacyHelperInstalled = !programFiles.isEmpty() && QFileInfo(QDir(programFiles)
+        .filePath(QStringLiteral("Aurora Developer/AuroraPrivacyOverlay.exe"))).isFile();
+#endif
     if (action == QLatin1String("set-close-to-tray")) {
         if (!trayAvailable || !value.isBool() || !preferences.setCloseToTray(value.toBool()))
             closeFeedback = tr("无法更改关闭窗口的设置。");
@@ -984,6 +1005,15 @@ void NativeDesktop::refreshPreferences(const QJsonObject &request)
     } else if (action == QLatin1String("set-startup-enabled")) {
         if (!startup || !value.isBool() || startup->change(value.toBool()) != StartupResult::Ok)
             startupFeedback = tr("无法更改开机自启动。");
+#ifdef Q_OS_WIN
+    } else if (action == QLatin1String("set-privacy-uiaccess-test")) {
+        if (!value.isBool())
+            privacyTestFeedback = tr("无法保存隐私屏保实现。");
+        else if (value.toBool() && !privacyHelperInstalled)
+            privacyTestFeedback = tr("未安装本机 UIAccess 测试组件。");
+        else if (!preferences.setPrivacyUiAccessTest(value.toBool()))
+            privacyTestFeedback = tr("无法保存隐私屏保实现。");
+#endif
     } else if (action != QLatin1String("read-general-settings")) {
         return;
     }
@@ -1021,6 +1051,11 @@ void NativeDesktop::refreshPreferences(const QJsonObject &request)
         {QStringLiteral("closeFeedback"), closeFeedback},
         {QStringLiteral("startupFeedback"), startupFeedback},
         {QStringLiteral("sleepFeedback"), sleepFeedback},
+#ifdef Q_OS_WIN
+        {QStringLiteral("privacyUiAccessTest"), preferences.privacyUiAccessTest()},
+        {QStringLiteral("privacyHelperInstalled"), privacyHelperInstalled},
+        {QStringLiteral("privacyTestFeedback"), privacyTestFeedback},
+#endif
     });
     emit stateChanged(snapshot);
 }

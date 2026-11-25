@@ -6,8 +6,8 @@
 
 - 桌面应用使用 C++17、Qt Quick 和 CMake。构建脚本需要 PowerShell 7.3 与 Python 3.10 或更新版本。
 - Windows x64 使用 Visual Studio x64 开发者环境及带 `qmake` 和 `windeployqt` 的 Qt。安装器使用 Inno Setup 6。
-- macOS 使用目标架构对应的 Xcode 工具和 Qt 6。Windows 与 macOS 的 Sunshine 依赖见[宿主构建说明](desktop/upstream/sunshine/README.md)。
-- 内置 Tailscale 使用 Go 1.27.4。Windows 还需要 GNU `windres` 和预处理器。[节点构建说明](desktop/upstream/tsnet/README.md)
+- macOS 使用目标架构对应的 Xcode 工具和 Qt 6。Windows 与 macOS 的 Sunshine 依赖见[宿主构建说明](desktop/packaging/Sunshine.md)。
+- 内置 Tailscale 使用 Go 1.27.4。Windows 还需要 GNU `windres` 和预处理器。[节点构建说明](desktop/tailnet/README.md)
 
 ## 构建发布包
 
@@ -16,23 +16,23 @@
 在 Visual Studio x64 开发者 PowerShell 中运行，再将前两个脚本输出的部署目录填入变量。
 
 ```powershell
-pwsh -File ./desktop/upstream/moonlight-qt/Build-Windows-Streamer.ps1
-pwsh -File ./desktop/upstream/sunshine/Build-Windows-Sunshine.ps1 -Msys2Root C:\msys64
-pwsh -File ./desktop/upstream/tsnet/Build-Tailnet.ps1 -Runtime win-x64 -OutputDirectory ./desktop/obj/tailnet-win -RunTests
+pwsh -File ./desktop/packaging/Build-Windows-Streamer.ps1
+pwsh -File ./desktop/packaging/Build-Windows-Sunshine.ps1 -Msys2Root C:\msys64
+pwsh -File ./desktop/tailnet/Build-Tailnet.ps1 -Runtime win-x64 -OutputDirectory ./desktop/obj/tailnet-win -RunTests
 $streamer = 'C:\build\aurora\Streamer'
 $sunshine = 'C:\build\aurora\Sunshine'
-pwsh -File ./desktop/Build.ps1 -StreamerDirectory $streamer -SunshineDirectory $sunshine -TailscaleDirectory ./desktop/obj/tailnet-win -Setup
+pwsh -File ./desktop/packaging/Build-Windows.ps1 -StreamerDirectory $streamer -SunshineDirectory $sunshine -TailscaleDirectory ./desktop/obj/tailnet-win -Setup
 ```
 
-`Build.ps1` 编译 Qt 主程序并组装便携包及校验文件。`-Setup` 同时生成安装器。传入 `-Qmake` 时选与 Moonlight 相同的 Qt 工具链。
+`Build-Windows.ps1` 编译 Qt 主程序并组装便携包及校验文件。`-Setup` 同时生成安装器。传入 `-Qmake` 时选与 Moonlight 相同的 Qt 工具链。
 
 ### macOS
 
 Apple 芯片用 `arm64`，Intel 用 `x64`，两个脚本的运行时架构须一致。
 
 ```powershell
-pwsh -File ./desktop/upstream/tsnet/Build-Tailnet.ps1 -Runtime osx-arm64 -OutputDirectory ./desktop/obj/tailnet-mac -RunTests
-pwsh -File ./desktop/Build-Mac.ps1 -Architecture arm64 -TailscaleDirectory ./desktop/obj/tailnet-mac
+pwsh -File ./desktop/tailnet/Build-Tailnet.ps1 -Runtime osx-arm64 -OutputDirectory ./desktop/obj/tailnet-mac -RunTests
+pwsh -File ./desktop/packaging/Build-Mac.ps1 -Architecture arm64 -TailscaleDirectory ./desktop/obj/tailnet-mac
 ```
 
 应用脚本从源码编译 Aurora、Moonlight 和 Sunshine，再将节点、Qt 框架及许可文件装入 `Aurora.app`。GitHub Actions 提供双平台构建。编译缓存和发布包分别放在 `desktop/obj/` 和 `dist/`。
@@ -47,6 +47,7 @@ pwsh -File ./desktop/Build-Mac.ps1 -Architecture arm64 -TailscaleDirectory ./des
 | [desktop/app/src/desktop](desktop/app/src/desktop) | 账号、设备、会话和被控功能的协调 |
 | [desktop/app/src/platform](desktop/app/src/platform) | 进程单实例、托盘、开机启动和系统适配 |
 | [desktop/app/src](desktop/app/src) | 串流、Sunshine、Tailscale、配对和壁纸模块 |
+| [desktop/packaging](desktop/packaging) | Windows 和 macOS 发布包、安装器和校验 |
 | [desktop/upstream](desktop/upstream) | 上游固定版本、补丁和部署脚本 |
 | [desktop/CMakeLists.txt](desktop/CMakeLists.txt) | 桌面程序的统一 CMake 构建入口 |
 | [tests/qt-ui](tests/qt-ui) | Qt 界面回归和模拟预览 |

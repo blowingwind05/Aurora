@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "PairingClient.h"
+#include "ClientGrantCache.h"
+#include "TailnetExchange.h"
 #include "../PairingWire.h"
+#include "../../adaptors/tailscale/EmbeddedStatusClient.h"
 
 #include <QCoreApplication>
 #include <QDir>
@@ -69,12 +72,12 @@ struct Bridge
         peer->flush();
     }
 
-    void handshake()
+    void handshake(RequestKind kind = RequestKind::Pair)
     {
         send(Challenge.left(11));
         CHECK(!waitFor([this] { return peer->bytesAvailable() > 0; }, 35));
         send(Challenge.mid(11));
-        const auto expected = dialProof(Key, Challenge) + requestFrame();
+        const auto expected = dialProof(Key, Challenge) + requestFrame(kind);
         CHECK(waitFor([&] { return peer->bytesAvailable() >= expected.size(); }));
         CHECK(peer->readAll() == expected);
     }
@@ -224,6 +227,120 @@ void embedded(const QString &runtime, const QString &certificate)
     CHECK(fixture.trace() == "pair\nlist\n");
     CHECK(!fixture.coordinator.busy() && bridge.client.state() == QAbstractSocket::UnconnectedState);
     CHECK(!fixture.gameStream.hasPendingConnections()); // The fake worker never dials.
+}
+
+void hostIdentity(const QString &runtime, const QString &certificate)
+{
+    Fixture fixture(runtime, certificate);
+    Bridge bridge;
+    fixture.request.kind = RequestKind::HostIdentity;
+    fixture.request.leasedRoute = {};
+    fixture.request.moonlightProgram.clear();
+    const auto id = fixture.start(bridge);
+    bridge.handshake(RequestKind::HostIdentity);
+    const auto reply = hostIdentityFrame(fixture.expectedPin);
+    bridge.send(reply.left(1));
+    QCoreApplication::processEvents();
+    CHECK(fixture.coordinator.busy());
+    bridge.send(reply.mid(1));
+    const auto result = fixture.result(id);
+    CHECK(result.status == Status::HostIdentityVerified && result.pinnedSha256 == fixture.expectedPin);
+    CHECK(fixture.trace().isEmpty() && !fixture.gameStream.hasPendingConnections());
+
+    Bridge routesBridge;
+    const QHostAddress global(QStringLiteral("2001:db8::34"));
+    fixture.request.kind = RequestKind::HostRoutes;
+    const auto routesId = fixture.start(routesBridge);
+    routesBridge.handshake(RequestKind::HostRoutes);
+    const auto routesReply = hostRoutesFrame(fixture.expectedPin, {global});
+    routesBridge.send(routesReply.left(HostIdentityFrameSize));
+    QCoreApplication::processEvents();
+    CHECK(fixture.coordinator.busy());
+    routesBridge.send(routesReply.mid(HostIdentityFrameSize));
+    const auto routesResult = fixture.result(routesId);
+    CHECK(routesResult.status == Status::HostIdentityVerified && routesResult.pinnedSha256 == fixture.expectedPin);
+    CHECK(routesResult.publicIpv6 == QList<QHostAddress>{global} && fixture.trace().isEmpty());
+
+    Fixture direct(runtime, certificate, false);
+    Stdio pipe;
+    direct.request.kind = RequestKind::HostIdentity;
+    const auto started = direct.coordinator.startStdio(direct.network, direct.request, &pipe, &pipe);
+    CHECK(started.error == StartError::None && started.request);
+    CHECK(waitFor([&] { return pipe.sent() == requestFrame(RequestKind::HostIdentity); }));
+    pipe.receive(OfferBytes);
+    CHECK(direct.result(started.request).status == Status::InvalidOffer && direct.trace().isEmpty());
+}
+
+void clientGrant(const QString &runtime, const QString &certificate)
+{
+    Fixture fixture(runtime, certificate);
+    fixture.request.kind = RequestKind::ClientGrant;
+    Bridge bridge;
+    const auto attempt = fixture.start(bridge);
+    bridge.handshake(RequestKind::ClientGrant);
+    const QHostAddress global(QStringLiteral("2001:db8::56"));
+    const auto instance = clientGrantInstance(QStringLiteral("host-launch"));
+    const auto challenge = grantChallenge(Challenge, fixture.expectedPin, 42, QStringLiteral("tailnet"),
+        QStringLiteral("host"), QStringLiteral("client"), {global}, instance);
+    bridge.send(challenge.left(12));
+    CHECK(!waitFor([&] { return !fixture.trace().isEmpty(); }, 35));
+    bridge.send(challenge.mid(12));
+    const auto proof = grantProofFrame({QByteArrayLiteral("cert"), QByteArrayLiteral("sig")});
+    CHECK(waitFor([&] { return bridge.peer->bytesAvailable() >= proof.size(); }));
+    CHECK(bridge.peer->readAll() == proof);
+    bridge.send(grantReplyFrame(GrantReply::Accepted));
+    const auto granted = fixture.result(attempt);
+    CHECK(granted.status == Status::ClientGranted && granted.pinnedSha256 == fixture.expectedPin);
+    CHECK(granted.publicIpv6 == QList<QHostAddress>{global} && fixture.trace() == "proof\n");
+    CHECK(granted.grantInstance == instance);
+    CHECK(granted.clientCertificateSha256 == QCryptographicHash::hash("cert", QCryptographicHash::Sha256));
+
+    fixture.request.leasedRoute.certificateSha256 = QByteArray(32, 'w');
+    Bridge conflicting;
+    const auto wrongPin = fixture.start(conflicting);
+    conflicting.handshake(RequestKind::ClientGrant);
+    conflicting.send(challenge);
+    CHECK(fixture.result(wrongPin).status == Status::TrustFailed && fixture.trace() == "proof\n");
+
+    Bridge premature;
+    const auto earlyAck = fixture.start(premature);
+    premature.handshake(RequestKind::ClientGrant);
+    premature.send(grantReplyFrame(GrantReply::Accepted));
+    CHECK(fixture.result(earlyAck).status == Status::InvalidOffer);
+
+    Bridge legacy;
+    const auto unsupported = fixture.start(legacy);
+    legacy.handshake(RequestKind::ClientGrant);
+    legacy.send(grantReplyFrame(GrantReply::Unsupported));
+    CHECK(fixture.result(unsupported).status == Status::GrantUnsupported);
+}
+
+void cachedClientGrant(const QString &, const QString &)
+{
+    const auto peer = QStringLiteral("remote-peer");
+    const QByteArray hostPin(32, 'h');
+    const QByteArray clientPin(32, 'c');
+    const auto instance = clientGrantInstance(QStringLiteral("same-host-launch"));
+    ClientGrantCache cache;
+    cache.noteSupport(peer, hostPin);
+    CHECK(cache.knowsPeer(peer) && cache.hostFingerprint(peer) == hostPin && !cache.hasRecentGrant(peer));
+    CHECK(!cache.reuse(peer, hostPin, instance, clientPin));
+
+    const QDeadlineTimer deadline(5000);
+    cache.remember(peer, hostPin, instance, clientPin, deadline);
+    cache.noteSupport(peer, hostPin);
+    CHECK(cache.hasRecentGrant(peer) && cache.reuse(peer, hostPin, instance, clientPin) == deadline);
+    CHECK(!cache.reuse(peer, hostPin, clientGrantInstance(QStringLiteral("host-restarted")), clientPin));
+    CHECK(!cache.reuse(peer, hostPin, instance, {}));
+    CHECK(!cache.reuse(peer, hostPin, instance, QByteArray(32, 'd')));
+    CHECK(!cache.reuse(peer, QByteArray(32, 'j'), instance, clientPin));
+
+    cache.forgetGrant(peer);
+    CHECK(cache.knowsPeer(peer) && !cache.hasRecentGrant(peer));
+    cache.remember(peer, hostPin, instance, clientPin, QDeadlineTimer(0));
+    CHECK(!cache.hasRecentGrant(peer) && !cache.reuse(peer, hostPin, instance, clientPin));
+    cache.clear();
+    CHECK(!cache.knowsPeer(peer));
 }
 
 void directStdio(const QString &runtime, const QString &certificate)
@@ -389,14 +506,41 @@ void cancellation(const QString &runtime, const QString &certificate)
     CHECK(revoked.client.state() == QAbstractSocket::UnconnectedState);
 }
 
+void exchangeCancellation(const QString &runtime, const QString &certificate)
+{
+    Fixture fixture(runtime, certificate);
+    aurora::tailscale::EmbeddedStatusClient helper({}, fixture.directory.path());
+    TailnetExchange exchange(&helper);
+    QList<QPair<quint64, Status>> finished;
+    QObject::connect(&exchange, &TailnetExchange::finished, &exchange,
+        [&](quint64 id, const Result &result) { finished.append({id, result.status}); });
+
+    const auto first = exchange.start(fixture.request, fixture.network, {}, true, [] { return true; });
+    CHECK(first);
+    exchange.cancel(first);
+    CHECK(finished.isEmpty());
+    CHECK(waitFor([&] { return finished.size() == 1; }));
+    CHECK(finished.first() == qMakePair(first, Status::Cancelled));
+
+    bool current = true;
+    const auto next = exchange.start(fixture.request, fixture.network, {}, true, [&] { return current; });
+    CHECK(next && next != first);
+    current = false;
+    CHECK(waitFor([&] { return finished.size() == 2; }));
+    CHECK(finished.last() == qMakePair(next, Status::AuthorizationChanged));
+    CHECK(fixture.trace().isEmpty());
+}
+
 } // namespace
 
 int main(int argc, char **argv)
 {
     const QCoreApplication app(argc, argv);
     const QHash<QString, void (*)(const QString &, const QString &)> fixtures{
-        {"embedded", embedded}, {"direct-stdio", directStdio}, {"rejected", rejected}, {"trust", trust},
-        {"deadlines", deadlines}, {"cancellation", cancellation}
+        {"embedded", embedded},
+        {"host-identity", hostIdentity}, {"client-grant", clientGrant}, {"cached-client-grant", cachedClientGrant},
+        {"direct-stdio", directStdio}, {"rejected", rejected}, {"trust", trust},
+        {"deadlines", deadlines}, {"cancellation", cancellation}, {"exchange-cancellation", exchangeCancellation}
     };
     try {
         CHECK(app.arguments().size() == 4);

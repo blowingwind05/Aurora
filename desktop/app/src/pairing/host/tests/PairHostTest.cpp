@@ -2,7 +2,7 @@
 #include "EmbeddedPairingHost.h"
 #include "LifecycleController.h"
 #include "PairingWire.h"
-#include "../../../sunshine/lifecycle/tests/LoopbackFixture.h"
+#include "../../../adaptors/sunshine/lifecycle/tests/LoopbackFixture.h"
 
 #include <QCoreApplication>
 #include <QDir>
@@ -91,6 +91,7 @@ struct FakeSunshine
     QList<Aurora::Sunshine::PendingPairing> rows;
     int withRows = 0;
     int approvals = 0;
+    bool supportsClientGrant = false;
     bool changeOnConfirmation = false;
     bool changePortOnConfirmation = false;
     std::function<void()> beforeFirstRow;
@@ -115,7 +116,7 @@ struct FakeSunshine
                     if (withRows >= 2 && changePortOnConfirmation)
                         candidate.first().sourcePort = 51008;
                 }
-                done({Admin::Error::None, 200, {}, candidate});
+                done({Admin::Error::None, 200, {}, candidate, supportsClientGrant});
                 return true;
             },
             [this](const QString &expected, HostSunshine::Approval, Admin::ApprovalCompletion done,
@@ -192,7 +193,7 @@ struct Fixture
         await([&] { return host.phase() == Phase::Listening; }, QStringLiteral("Pairing host never acquired a lease."));
     }
 
-    void hello(QTcpSocket &socket, bool valid = true)
+    void hello(QTcpSocket &socket, bool valid = true, RequestKind kind = RequestKind::Pair)
     {
         const auto bridge = QJsonDocument::fromJson(read(dir.filePath("bridge.json"))).object();
         const auto key = QByteArray::fromBase64(bridge.value("key").toString().toLatin1());
@@ -209,7 +210,7 @@ struct Fixture
                                                        key, QCryptographicHash::Sha256);
         if (!valid)
             proof[0] = char(proof.at(0) ^ 1);
-        const auto message = payload + proof + requestFrame();
+        const auto message = payload + proof + requestFrame(kind);
         socket.write(message.left(5));
         socket.flush();
         spin(15);
@@ -252,6 +253,21 @@ void testApproved(const QString &executable)
           QStringLiteral("Invalid bridge proof was not disconnected."));
     require(!invalid.bytesAvailable(), QStringLiteral("Invalid proof got an offer."));
 
+    QTcpSocket identity;
+    test.hello(identity, true, RequestKind::HostIdentity);
+    await([&] { return identity.bytesAvailable() == HostIdentityFrameSize; },
+          QStringLiteral("Authenticated host certificate reply was not sent."));
+    require(parseHostIdentityFrame(identity.readAll()) == test.context->scope.certificateSha256 &&
+            !test.sunshine.approvals, QStringLiteral("Certificate query changed pairing state."));
+
+    QTcpSocket candidates;
+    test.hello(candidates, true, RequestKind::HostRoutes);
+    await([&] { return candidates.bytesAvailable() == HostRoutesFrameSize; },
+          QStringLiteral("Authenticated host route reply was not sent."));
+    const auto routes = parseHostRoutesFrame(candidates.readAll());
+    require(routes && routes->certificateSha256 == test.context->scope.certificateSha256 &&
+            !test.sunshine.approvals, QStringLiteral("Route query changed pairing state."));
+
     QTcpSocket client;
     test.hello(client);
     const auto offer = test.offer(client);
@@ -282,6 +298,47 @@ void testApproved(const QString &executable)
     require(test.host.phase() == Phase::Stopped, QStringLiteral("A new account epoch retained the old listener."));
     await([&] { return read(test.dir.filePath("closes")) == "ok\n"; },
           QStringLiteral("The owned helper lease was not closed."));
+}
+
+void testClientGrant(const QString &executable)
+{
+    Fixture test(executable);
+    test.sunshine.supportsClientGrant = true;
+    test.start();
+    QTcpSocket identity;
+    test.hello(identity, true, RequestKind::HostRoutes);
+    await([&] { return identity.bytesAvailable() == HostRoutesFrameSize; },
+          QStringLiteral("Did not receive the authenticated capability."));
+    const auto routes = parseHostRoutesFrame(identity.readAll());
+    require(routes && routes->supportsClientGrant, QStringLiteral("Client grants were not advertised."));
+
+    QTcpSocket legacy;
+    test.hello(legacy);
+    await([&] { return legacy.bytesAvailable() == 1; }, QStringLiteral("Legacy PIN request was not rejected."));
+    require(parseGrantReply(legacy.readAll()) == GrantReply::Rejected,
+            QStringLiteral("Grant-capable host allowed a legacy PIN request."));
+
+    QTcpSocket client;
+    test.hello(client, true, RequestKind::ClientGrant);
+    await([&] { return client.bytesAvailable() == GrantChallengeFrameSize; },
+          QStringLiteral("Did not receive the combined challenge and host identity."));
+    const auto offer = parseGrantChallenge(client.readAll());
+    require(offer && offer->routes.certificateSha256 == test.context->scope.certificateSha256,
+            QStringLiteral("Challenge did not bind the enrolled host certificate."));
+    const auto proof = grantProofFrame({QByteArrayLiteral("DER fixture"), QByteArrayLiteral("signature fixture")});
+    client.write(proof.left(2));
+    client.flush();
+    spin(15);
+    require(!test.sunshine.approvals, QStringLiteral("Partial proof reached approval."));
+    client.write(proof.mid(2));
+    client.flush();
+    await([&] { return test.sunshine.approvals == 1; }, QStringLiteral("Verified proof did not reach approval."));
+    require(test.proofs() == "0\n" && !test.sunshine.withRows,
+            QStringLiteral("Grant did not recheck the live peer on its original channel."));
+    test.sunshine.settle();
+    await([&] { return client.bytesAvailable() == 1; }, QStringLiteral("Grant acknowledgement was not delivered."));
+    require(parseGrantReply(client.readAll()) == GrantReply::Accepted,
+            QStringLiteral("Unexpected grant acknowledgement."));
 }
 
 void testDenied(const QString &executable, const QString &reason)
@@ -398,7 +455,7 @@ void testPinnedSunshine(const QString &executable, const QDir &identities)
     require(layout.has_value(), QStringLiteral("Could not prepare synthetic Sunshine layout."));
     const QDir payload(layout->payloadDirectory());
     for (const auto &path : {layout->executable(), payload.filePath("zlib1.dll"),
-                            payload.filePath("assets/apps.json"), payload.filePath("assets/web/index.html")}) {
+                            payload.filePath("assets/apps.json"), payload.filePath("assets/box.png")}) {
         require(QDir().mkpath(QFileInfo(path).absolutePath()), QStringLiteral("Could not prepare synthetic payload."));
         touch(path);
     }
@@ -481,6 +538,7 @@ int main(int argc, char **argv)
             QStringLiteral("Expected the offline helper executable."));
     const auto helper = app.arguments().at(1);
     testApproved(helper);
+    testClientGrant(helper);
     for (const auto &reason : {"port", "changed", "changed-port", "peer", "duplicate", "duplicate-id", "address", "marker"})
         testDenied(helper, QString::fromLatin1(reason));
     testDisconnect(helper);

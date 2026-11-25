@@ -2,9 +2,11 @@
 #include "SessionSupervisor.h"
 #include "ControlAdapter.h"
 #include "MoonlightProcess.h"
+#include "../../../runtime/stream/AuroraStreamSessionProtocol.h"
 
 #include <QCloseEvent>
 #include <QFileInfo>
+#include <QPlatformSurfaceEvent>
 #include <QProcessEnvironment>
 #include <QThread>
 
@@ -15,6 +17,7 @@ namespace Aurora::Session {
 namespace {
 
 constexpr int runtimeDeadlineMs = 4000;
+constexpr int videoReadyDeadlineMs = 15000;
 constexpr int stopGraceMs = 6000;
 constexpr int maxProbeBytes = 256;
 constexpr int maxLineBytes = 160;
@@ -73,14 +76,21 @@ SessionSupervisor::SessionSupervisor(QString bundledExecutable, aurora::tailscal
         privacyControl_ = std::make_unique<Stream::Control::Adapter>();
         connect(privacyControl_.get(), &Stream::Control::Adapter::finished,
                 this, &SessionSupervisor::privacyFinished, Qt::QueuedConnection);
+        bitrateControl_ = std::make_unique<Stream::Control::Adapter>();
+        connect(bitrateControl_.get(), &Stream::Control::Adapter::finished,
+                this, &SessionSupervisor::videoBitrateFinished, Qt::QueuedConnection);
     }
     startupDeadline_.setSingleShot(true);
     stopDeadline_.setSingleShot(true);
     startupDeadline_.setTimerType(Qt::PreciseTimer);
     stopDeadline_.setTimerType(Qt::PreciseTimer);
     connect(&startupDeadline_, &QTimer::timeout, this, [this] {
-        if (worker_)
-            beginStop(probing_ ? SessionEnd::RuntimeProbeFailed : SessionEnd::WorkerStartFailed);
+        if (!worker_)
+            return;
+        if (probing_)
+            beginStop(SessionEnd::RuntimeProbeFailed);
+        else
+            playbackFailed({SessionEnd::WorkerStartFailed});
     });
     connect(&stopDeadline_, &QTimer::timeout, this, [this] {
         if (worker_ && worker_->state() != QProcess::NotRunning) {
@@ -92,13 +102,10 @@ SessionSupervisor::SessionSupervisor(QString bundledExecutable, aurora::tailscal
     connect(&surface_, &StreamSurface::clientPixelSizeChanged, this, &SessionSupervisor::clientPixelSizeChanged);
     connect(&surface_, &StreamSurface::surfaceLost, this, [this] { beginStop(SessionEnd::SurfaceLost); });
     connect(&surface_, &StreamSurface::stateChanged, this, [this] {
-        if (surface_.videoReady() && phase_ == Phase::Connecting) {
-            setPhase(Phase::Streaming);
-            if (view_.startFullScreen)
-                setFullScreen(true);
-        } else if (surface_.attachmentFailed() && worker_ && worker_->state() != QProcess::NotRunning) {
-            beginStop(SessionEnd::AttachmentFailed);
-        }
+        if (surface_.videoReady() && phase_ == Phase::Connecting)
+            playbackReady();
+        else if (surface_.attachmentFailed() && worker_ && worker_->state() != QProcess::NotRunning)
+            playbackFailed({SessionEnd::AttachmentFailed});
     });
 
     if (!tailnet_)
@@ -137,6 +144,7 @@ SessionSupervisor::SessionSupervisor(QString bundledExecutable, aurora::tailscal
 SessionSupervisor::~SessionSupervisor()
 {
     privacyControl_.reset();
+    bitrateControl_.reset();
     disconnect(&surface_, nullptr, this, nullptr);
     if (tailnet_) {
         disconnect(tailnet_, nullptr, this, nullptr);
@@ -159,6 +167,7 @@ QUuid SessionSupervisor::prepare(SessionCandidate candidate)
         return {};
     const auto token = QUuid::createUuid();
     attempt_ = token;
+    resumeAfterRelayStop_ = false;
     candidate_ = std::move(candidate);
     setPhase(Phase::Probing);
     QTimer::singleShot(0, this, [this, token] {
@@ -190,7 +199,8 @@ void SessionSupervisor::beginPreparation()
             return finish({SessionEnd::InvalidCandidate});
     }
 
-    probes_.enqueue(platform_ == Stream::RuntimePlatform::Windows ? Stream::Probe::EmbeddedWindow : Stream::Probe::Runtime);
+    verifiesHostIdentity_ = false;
+    probes_.enqueue(Stream::Probe::HostIdentity);
     if (std::holds_alternative<EmbeddedRoute>(candidate_.route))
         probes_.enqueue(Stream::Probe::GameStreamRelay);
     nextProbe();
@@ -222,7 +232,7 @@ void SessionSupervisor::resolveRoute()
 
 void SessionSupervisor::publishPrepared()
 {
-    const PreparedSession session{attempt_, candidate_.generation, executable_, resolved_};
+    const PreparedSession session{attempt_, candidate_.generation, executable_, resolved_, verifiesHostIdentity_};
     setPhase(Phase::AwaitingAuthorization);
     if (attempt_ == session.attempt && phase_ == Phase::AwaitingAuthorization)
         emit prepared(session);
@@ -236,11 +246,17 @@ bool SessionSupervisor::start(const SessionAuthorization &authorization, Session
         return false;
     }
 
+    if ((authorization.resumeOnly || !authorization.certificateSha256.isEmpty()) &&
+        (!verifiesHostIdentity_ || authorization.certificateSha256.size() != 32))
+        return false;
+
+    resolved_.certificateSha256 = authorization.certificateSha256;
+    resumeOnly_ = authorization.resumeOnly;
     view_ = std::move(view);
     if (platform_ == Stream::RuntimePlatform::MacOS)
         view_.owner.clear();
-    if (privacyControl_ && authorization.privacy && matchesPrivacyRoute(*authorization.privacy))
-        privacyRoute_ = authorization.privacy;
+    if (platform_ == Stream::RuntimePlatform::Windows && authorization.controls && matchesControlRoute(*authorization.controls))
+        controlRoute_ = authorization.controls;
     const auto token = attempt_;
     setPhase(Phase::Starting);
     QTimer::singleShot(0, this, [this, token] {
@@ -256,83 +272,117 @@ void SessionSupervisor::launchPlayback()
         return finish({SessionEnd::RelayLost});
 
     const bool embed = platform_ == Stream::RuntimePlatform::Windows;
+    const auto token = attempt_;
+    if (embed && !videoChange_) {
+        const auto initial = freezePlayback({view_.preferenceArguments, view_.sessionPreferences});
+        if (attempt_ != token || phase_ != Phase::Starting)
+            return;
+        view_.preferenceArguments = initial.preferenceArguments;
+    }
     Stream::Request request;
     request.route = resolved_;
+    request.resumeOnly = resumeOnly_;
+    request.readConnectionDetails = true;
     request.deviceName = candidate_.deviceName;
-    request.preferenceArguments = view_.preferenceArguments;
-    request.sessionPreferences = view_.sessionPreferences;
+    if (videoChange_ && videoChange_->step == VideoStep::Applying) {
+        request.preferenceArguments = videoChange_->requested.preferenceArguments;
+        request.sessionPreferences = videoChange_->requested.sessionPreferences;
+    } else {
+        request.preferenceArguments = view_.preferenceArguments;
+        request.sessionPreferences = view_.sessionPreferences;
+    }
     auto environment = QProcessEnvironment::systemEnvironment();
+    environment.remove(StreamSession::SwitchChannel);
+    if (platform_ == Stream::RuntimePlatform::MacOS && resolved_.certificateSha256.size() == 32)
+        environment.insert(StreamSession::SwitchChannel, QStringLiteral("1"));
     if (!environment.contains("AURORA_QT_SESSION"))
         environment.insert("AURORA_QT_SESSION", "1");
 
     if (embed) {
         if (!view_.owner || view_.owner->thread() != thread())
-            return finish({SessionEnd::AttachmentFailed});
+            return finish({SessionEnd::SurfaceLost});
 
-        const auto token = attempt_;
-        previousWindowState_ = view_.owner->windowState() == Qt::WindowMaximized ? Qt::WindowMaximized : Qt::WindowNoState;
-        view_.owner->installEventFilter(this);
-        ownerDestroyed_ = connect(view_.owner, &QObject::destroyed, this, [this] { beginStop(SessionEnd::SurfaceLost); });
-        ownerStateChanged_ = connect(view_.owner, &QWindow::windowStateChanged, this, [this](Qt::WindowState state) {
-            if (state == Qt::WindowNoState || state == Qt::WindowMaximized)
-                previousWindowState_ = state;
-            emit fullScreenChanged();
-        });
+        if (!videoChange_) {
+            previousWindowState_ = view_.owner->windowState() == Qt::WindowMaximized
+                ? Qt::WindowMaximized : Qt::WindowNoState;
+            view_.owner->installEventFilter(this);
+            ownerDestroyed_ = connect(view_.owner, &QObject::destroyed, this,
+                                      [this] { beginStop(SessionEnd::SurfaceLost); });
+            ownerStateChanged_ = connect(view_.owner, &QWindow::windowStateChanged, this,
+                                         [this](Qt::WindowState state) {
+                if (state == Qt::WindowNoState || state == Qt::WindowMaximized)
+                    previousWindowState_ = state;
+                emit fullScreenChanged();
+            });
+        }
         request.embeddedInvitation = surface_.prepare(view_.owner, view_.viewport);
         if (attempt_ != token || phase_ != Phase::Starting)
             return;
         if (request.embeddedInvitation.isEmpty())
-            return finish({SessionEnd::AttachmentFailed});
+            return playbackFailed({SessionEnd::AttachmentFailed});
         surface_.setViewport(view_.viewport, view_.suppressSurface);
         if (attempt_ != token || phase_ != Phase::Starting)
             return;
-        request.readConnectionDetails = true;
     }
 
-    const auto token = attempt_;
-    const auto command = Stream::makeCommand(executable_, request, platform_, environment);
+    auto command = Stream::makeCommand(executable_, request, platform_, environment);
     if (attempt_ != token || phase_ != Phase::Starting)
         return;
     if (resolved_.viaEmbeddedTailnet && (!lease_ || !lease_->isValid()))
         return finish({SessionEnd::RelayLost});
     if (!command.command)
-        return finish({SessionEnd::InvalidLaunch, {}, false, command.error});
+        return playbackFailed({SessionEnd::InvalidLaunch, {}, false, command.error});
+    // Keep the app on the host unless the Aurora session explicitly requests quit-on-stop.
+    auto &arguments = command.command->arguments;
+    if (!arguments.contains(QStringLiteral("--quit-after")) &&
+        !arguments.contains(QStringLiteral("--no-quit-after"))) {
+        arguments.append(QStringLiteral("--no-quit-after"));
+    }
     launchWorker(*command.command, false, embed);
 }
 
 void SessionSupervisor::launchWorker(const Stream::Command &command, bool probing, bool bindSurface)
 {
     probing_ = probing;
+    pinnedControlAvailable_ = false;
     output_.clear();
     discardLine_ = false;
     auto *child = new Stream::MoonlightProcess(this);
+    if (!probing && command.environment.contains(StreamSession::SwitchChannel))
+        child->setInputChannelMode(QProcess::ManagedInputChannel);
     worker_ = child;
     if (bindSurface && !surface_.bindWorker(child))
-        return finish({SessionEnd::AttachmentFailed});
+        return playbackFailed({SessionEnd::AttachmentFailed});
 
     connect(child, &QProcess::readyReadStandardOutput, this, &SessionSupervisor::drainOutput);
     connect(child, &QProcess::started, this, [this] {
         if (probing_ || phase_ != Phase::Starting)
             return;
         startupDeadline_.stop();
+        if (videoChange_)
+            startupDeadline_.start(videoReadyDeadlineMs);
         setPhase(platform_ == Stream::RuntimePlatform::Windows ? Phase::Connecting : Phase::Standalone);
         // The renderer can become ready during StreamSurface's started handler.
-        if (phase_ == Phase::Connecting && surface_.videoReady()) {
-            setPhase(Phase::Streaming);
-            if (view_.startFullScreen)
-                setFullScreen(true);
-        }
+        if (phase_ == Phase::Connecting && surface_.videoReady())
+            playbackReady();
     });
     connect(child, &QProcess::errorOccurred, this, [this](QProcess::ProcessError error) {
-        if (error == QProcess::FailedToStart)
-            finish({phase_ == Phase::Stopping ? stopReason_ :
-                    probing_ ? SessionEnd::RuntimeProbeFailed : SessionEnd::WorkerStartFailed});
+        if (error != QProcess::FailedToStart)
+            return;
+        if (phase_ == Phase::Stopping || probing_)
+            finish({phase_ == Phase::Stopping ? stopReason_ : SessionEnd::RuntimeProbeFailed});
+        else
+            playbackFailed({SessionEnd::WorkerStartFailed});
     });
     connect(child, qOverload<int, QProcess::ExitStatus>(&QProcess::finished), this, &SessionSupervisor::workerFinished);
 
     startupDeadline_.start(runtimeDeadlineMs);
-    if (!child->launch(command))
-        finish({probing_ ? SessionEnd::RuntimeProbeFailed : SessionEnd::WorkerStartFailed});
+    if (!child->launch(command)) {
+        if (probing_)
+            finish({SessionEnd::RuntimeProbeFailed});
+        else
+            playbackFailed({SessionEnd::WorkerStartFailed});
+    }
 }
 
 void SessionSupervisor::drainOutput()
@@ -370,20 +420,53 @@ void SessionSupervisor::handleLine(QByteArray line)
         line.chop(1);
     if (line.endsWith('\r'))
         line.chop(1);
-    if (line.size() > maxLineBytes || line.contains('\0') || phase_ == Phase::Stopping)
+    if (line.size() > maxLineBytes || line.contains('\0') || phase_ == Phase::Stopping ||
+        (videoChange_ && (videoChange_->step == VideoStep::Draining || videoChange_->step == VideoStep::Discarding))) {
         return;
+    }
 
     if (platform_ == Stream::RuntimePlatform::Windows) {
+        if (line == StreamSession::PinnedControlAvailable && controlRoute_ && !controlRoute_->revalidated) {
+            if (!std::exchange(pinnedControlAvailable_, true))
+                refreshPrivacyScreen();
+            return;
+        }
         if (surface_.handleWorkerLine(worker_, line))
             return;
-        QVariantMap metrics;
-        bool poor = false;
-        if (parseSample(line, metrics, poor) && (metrics != metrics_ || poor != networkPoor_)) {
+    }
+    if (platform_ == Stream::RuntimePlatform::MacOS) {
+        if (phase_ == Phase::Standalone &&
+            (line == StreamSession::PlaybackReady || line == StreamSession::SwitchReady)) {
+            if (line == StreamSession::SwitchReady && worker_->inputChannelMode() == QProcess::ManagedInputChannel)
+                switchState_ = SwitchState::Ready;
+            playbackReady();
+            return;
+        }
+        if (line == StreamSession::SwitchDenied && switchState_ == SwitchState::Requested) {
+            switchState_ = SwitchState::Ready;
+            emit routeSwitchDenied(attempt_);
+            return;
+        }
+    }
+
+    QVariantMap metrics;
+    bool poor = false;
+    if (parseSample(line, metrics, poor)) {
+        if (metrics != metrics_ || poor != networkPoor_) {
             metrics_ = std::move(metrics);
+            if (poor != networkPoor_) {
+                if (poor)
+                    networkPoorSince_.start();
+                else
+                    networkPoorSince_.invalidate();
+            }
             networkPoor_ = poor;
             emit connectionChanged();
         }
-    } else {
+        return;
+    }
+
+    if (platform_ == Stream::RuntimePlatform::MacOS) {
         const QByteArray prefix("aurora-stream-setting/1\t");
         if (line.size() > 128 || !line.startsWith(prefix))
             return;
@@ -403,19 +486,61 @@ void SessionSupervisor::workerFinished(int code, QProcess::ExitStatus status)
     drainOutput();
     if (old != worker_)
         return;
-    if (phase_ == Phase::Stopping)
-        return finish({stopReason_, code, forcedStop_});
+    if (phase_ == Phase::Stopping) {
+        const auto reason = stopReason_ == SessionEnd::RouteSwitched &&
+                (forcedStop_ || status != QProcess::NormalExit || code != 0)
+            ? SessionEnd::WorkerStartFailed : stopReason_;
+        return finish({reason, code, forcedStop_});
+    }
 
     if (probing_) {
         const bool supported = status == QProcess::NormalExit && Stream::probeSucceeded(currentProbe_, code, output_);
+        const bool legacy = currentProbe_ == Stream::Probe::HostIdentity &&
+            status == QProcess::NormalExit && code == 2 && output_.trimmed().isEmpty();
         retireWorker();
-        if (!supported)
+        if (legacy) {
+            probes_.prepend(platform_ == Stream::RuntimePlatform::Windows
+                ? Stream::Probe::EmbeddedWindow : Stream::Probe::Runtime);
+        } else if (!supported) {
             return finish({SessionEnd::RuntimeProbeFailed, code});
+        } else if (currentProbe_ == Stream::Probe::HostIdentity) {
+            verifiesHostIdentity_ = true;
+        }
         return nextProbe();
     }
+    if (videoChange_ && (videoChange_->step == VideoStep::Draining || videoChange_->step == VideoStep::Discarding)) {
+        const bool first = videoChange_->step == VideoStep::Draining;
+        // The old process and its job must finish before creating another invitation.
+        if (forcedStop_ || status != QProcess::NormalExit || (first && code != 0))
+            return finish({SessionEnd::WorkerStartFailed, code, forcedStop_});
+        return restartVideo(first ? VideoStep::Applying : VideoStep::Restoring);
+    }
+    if (status == QProcess::NormalExit && code == StreamSession::RouteSwitched &&
+        switchState_ == SwitchState::Requested)
+        return finish({SessionEnd::RouteSwitched, code});
+    if (status == QProcess::NormalExit && code == StreamSession::TransportLost)
+        return playbackFailed({SessionEnd::TransportLost, code});
     if (surface_.attachmentFailed())
-        return finish({SessionEnd::AttachmentFailed, code});
-    finish({status == QProcess::NormalExit ? SessionEnd::Exited : SessionEnd::WorkerCrashed, code});
+        return playbackFailed({SessionEnd::AttachmentFailed, code});
+    playbackFailed({status == QProcess::NormalExit ? SessionEnd::Exited : SessionEnd::WorkerCrashed, code});
+}
+
+bool SessionSupervisor::requestRouteSwitch(const QUuid &attempt)
+{
+    if (attempt.isNull() || attempt != attempt_ || resolved_.certificateSha256.size() != 32 || !canChangeRoute())
+        return false;
+    if (platform_ == Stream::RuntimePlatform::Windows) {
+        beginStop(SessionEnd::RouteSwitched);
+        return true;
+    }
+
+    switchState_ = SwitchState::Requested;
+    constexpr qint64 requestBytes = sizeof(StreamSession::SwitchRequest) - 1;
+    if (worker_->write(StreamSession::SwitchRequest, requestBytes) == requestBytes)
+        return true;
+    // Keep the running playback intact if its control pipe is no longer usable.
+    switchState_ = SwitchState::Unavailable;
+    return false;
 }
 
 bool SessionSupervisor::cancel(const QUuid &attempt)
@@ -433,12 +558,17 @@ void SessionSupervisor::requestStop()
 
 void SessionSupervisor::beginStop(SessionEnd reason)
 {
+    if (phase_ == Phase::Stopping && stopReason_ == SessionEnd::RouteSwitched && reason == SessionEnd::Cancelled)
+        stopReason_ = SessionEnd::Cancelled;
     if (phase_ == Phase::Idle || phase_ == Phase::Stopping || pendingFinish_)
         return;
     stopReason_ = reason;
+    resumeAfterRelayStop_ = reason == SessionEnd::RelayLost &&
+        platform_ == Stream::RuntimePlatform::Windows && canKeepApplication();
     startupDeadline_.stop();
     setPhase(Phase::Stopping);
     revokePrivacy();
+    resetVideoBitrate();
 
     if (pendingOpen_ && tailnet_) {
         tailnet_->cancelOpen(pendingOpen_);
@@ -447,12 +577,18 @@ void SessionSupervisor::beginStop(SessionEnd reason)
     } else if (probing_) {
         worker_->cancel();
     } else {
-        stopDeadline_.start(stopGraceMs);
-        if (platform_ == Stream::RuntimePlatform::Windows)
-            surface_.requestStop();
-        else
-            worker_->terminate();
+        stopPlaybackWorker();
     }
+}
+
+void SessionSupervisor::stopPlaybackWorker()
+{
+    startupDeadline_.stop();
+    stopDeadline_.start(stopGraceMs);
+    if (platform_ == Stream::RuntimePlatform::Windows)
+        surface_.requestStop();
+    else
+        worker_->terminate();
 }
 
 void SessionSupervisor::retireWorker()
@@ -469,21 +605,27 @@ void SessionSupervisor::finish(SessionResult result)
 {
     if (pendingFinish_)
         return;
+    result.canResumeAfterLoss = resolved_.certificateSha256.size() == 32 &&
+        (result.reason == SessionEnd::RelayLost || result.reason == SessionEnd::TransportLost) &&
+        (resumeAfterRelayStop_ || canKeepApplication());
     pendingFinish_ = std::move(result);
     retireWorker();
-    if (privacyControl_ && privacyControl_->busy())
+    if (sessionControlBusy())
         setPhase(Phase::Stopping);
     revokePrivacy();
-    if (pendingFinish_ && (!privacyControl_ || !privacyControl_->busy()))
-        completeFinish();
+    resetVideoBitrate();
+    completeFinish();
 }
 
 void SessionSupervisor::completeFinish()
 {
+    if (!pendingFinish_ || sessionControlBusy())
+        return;
     const auto token = attempt_;
     const auto generation = candidate_.generation;
     const auto result = *pendingFinish_;
     privacyRequest_ = {};
+    controlRoute_.reset();
     surface_.requestStop();
     if (lease_) {
         lease_->close();
@@ -504,8 +646,17 @@ void SessionSupervisor::completeFinish()
     forcedStop_ = false;
     metrics_.clear();
     networkPoor_ = false;
+    networkPoorSince_.invalidate();
+    const bool unsettledVideo = videoSettingsPending();
+    videoChange_.reset();
+    switchState_ = SwitchState::Unavailable;
+    confirmedVideoSettings_ = {};
+    videoMessage_.clear();
     pendingFinish_.reset();
     setPhase(Phase::Idle);
+    emit videoSettingsChanged();
+    if (unsettledVideo)
+        emit videoSettingsApplied(false);
     emit fullScreenChanged();
     emit connectionChanged();
     emit finished(token, generation, result);
@@ -542,6 +693,10 @@ void SessionSupervisor::setFullScreen(bool enabled)
 
 bool SessionSupervisor::eventFilter(QObject *watched, QEvent *event)
 {
+    if (watched == view_.owner && videoChange_ && event->type() == QEvent::PlatformSurface &&
+        static_cast<QPlatformSurfaceEvent *>(event)->surfaceEventType() == QPlatformSurfaceEvent::SurfaceAboutToBeDestroyed) {
+        beginStop(SessionEnd::SurfaceLost);
+    }
     if (watched == view_.owner && event->type() == QEvent::Close && phase_ != Phase::Idle) {
         static_cast<QCloseEvent *>(event)->ignore();
         requestStop();

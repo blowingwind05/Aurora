@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 import QtQuick 2.15
-import ".." as Aurora
+import "../common" as Aurora
 
 Item {
     id: chrome
@@ -33,6 +33,9 @@ Item {
     property string displayActionError
 
     property var preferences: ({})
+    property bool videoSettingsApplyDuringSession: false
+    property int liveVideoBitrateLimit: 0
+    property string videoSettingsMessage
     property var mouseMode: null
     property var privacyScreen: null
     property string privacyScreenMessage
@@ -76,7 +79,7 @@ Item {
     signal mouseModeRequested(string mode)
     signal swapMouseButtonsRequested(bool enabled)
     signal reverseScrollRequested(bool enabled)
-    signal privacyScreenRequested(bool enabled)
+    signal privacyModeRequested(string mode)
 
     function focusControls() {
         if (!connected)

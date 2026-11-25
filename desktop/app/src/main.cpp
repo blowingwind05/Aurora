@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "desktop/NativeDesktop.h"
 #include "platform/NativeInstance.h"
+#ifdef Q_OS_WIN
+#include "platform/WindowsWindowFrame.h"
+#endif
 #include "ui/AuroraMore.h"
 #include "ui/DesktopBridge.h"
 #include "ui/StreamSessionWindow.h"
@@ -98,12 +101,26 @@ int main(int argc, char *argv[])
     more.setApplicationVersion(desktop.state().value(QStringLiteral("applicationVersion")).toString());
     engine.rootContext()->setContextProperty("auroraBridge", &bridge);
     engine.rootContext()->setContextProperty("auroraMore", &more);
+#ifdef Q_OS_WIN
+    const bool nativeWindowsFrame = QGuiApplication::platformName() == QLatin1String("windows");
+#else
+    const bool nativeWindowsFrame = false;
+#endif
+    engine.rootContext()->setContextProperty("auroraNativeWindowsFrame", nativeWindowsFrame);
     engine.load(QUrl::fromLocalFile(entry));
     if (engine.rootObjects().isEmpty())
         return 1;
     const auto window = qobject_cast<QWindow *>(engine.rootObjects().constFirst());
     if (!window)
         return 1;
+#ifdef Q_OS_WIN
+    if (window->property("nativeWindowsFrame").toBool() && !installWindowsWindowFrame(*window)) {
+        qWarning("Aurora could not install the native Windows window frame.");
+        if (checkNative)
+            return 1;
+        window->setProperty("nativeWindowsFrame", false);
+    }
+#endif
 #ifdef Q_OS_MACOS
     const bool cocoaWindow = QGuiApplication::platformName() == QLatin1String("cocoa") &&
         window->metaObject()->indexOfProperty("macTitleBarHeight") >= 0;

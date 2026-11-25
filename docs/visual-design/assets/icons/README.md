@@ -18,7 +18,7 @@ Windows 和 macOS 共用这套界面图标。Lucide 官方 SVG 来源固定为 *
 | 观看模式 | [square-play.svg](lucide/square-play.svg) |
 | 终端 | [square-terminal.svg](lucide/square-terminal.svg) |
 | 端口映射 | [panels-top-left.svg](lucide/panels-top-left.svg) |
-| 设备卡片「更多工具」 | [grid-2x2.svg](lucide/grid-2x2.svg) |
+| 设备卡片「更多工具」 | [Fluent Apps Regular](fluent/ic_fluent_apps_24_regular.svg)，右上角为菱形，16 px 显示，随按钮前景着色。[上游 SVG](https://github.com/microsoft/fluentui-system-icons/blob/main/assets/Apps/SVG/ic_fluent_apps_24_regular.svg) · [本地 MIT 许可](fluent/LICENSE) |
 | 设备卡片「重启」「关机」 | [rotate-ccw.svg](lucide/rotate-ccw.svg) · [power.svg](lucide/power.svg) |
 | 串流窗口「控制中心」 | [双横向滑杆](prototype/stream-control-center.svg)，原型定制，16 px 显示 |
 | 退出 Tailscale 登录 | [log-out.svg](lucide/log-out.svg) |

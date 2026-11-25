@@ -2,8 +2,10 @@
 find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS Gui)
 find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Gui)
 
-add_library(aurora_native_session STATIC StreamSurface.cpp StreamSurface.h SessionSupervisor.cpp SessionSupervisor.h
-    SessionPrivacy.cpp)
+add_library(aurora_native_session STATIC
+    ../adaptors/moonlight/StreamSurface.cpp ../adaptors/moonlight/StreamSurface.h
+    SessionSupervisor.cpp SessionSupervisor.h
+    SessionPrivacy.cpp SessionVideo.cpp SessionBitrate.cpp)
 set_target_properties(aurora_native_session PROPERTIES AUTOMOC ON)
 target_compile_features(aurora_native_session PUBLIC cxx_std_17)
 target_include_directories(aurora_native_session PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")

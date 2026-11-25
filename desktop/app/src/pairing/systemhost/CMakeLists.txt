@@ -16,7 +16,7 @@ if(NOT TARGET aurora_native_pairing)
     add_subdirectory(.. pairing-wire)
 endif()
 if(NOT TARGET AuroraSystemTailscale)
-    add_subdirectory(../../tailscale/system system-tailscale)
+    add_subdirectory(../../adaptors/tailscale/system system-tailscale)
 endif()
 
 add_library(AuroraSystemPairingHost STATIC
@@ -29,7 +29,7 @@ target_link_libraries(AuroraSystemPairingHost PUBLIC AuroraSystemTailscale
     PRIVATE aurora_native_pairing iphlpapi ws2_32)
 
 if(NOT TARGET Aurora::SunshineLifecycle)
-    add_subdirectory(../../sunshine/lifecycle sunshine-lifecycle)
+    add_subdirectory(../../adaptors/sunshine/lifecycle sunshine-lifecycle)
 endif()
 add_library(aurora_system_pairing_coordinator STATIC SystemPairingCoordinator.cpp SystemPairingCoordinator.h)
 add_library(Aurora::SystemPairingCoordinator ALIAS aurora_system_pairing_coordinator)
@@ -59,7 +59,7 @@ if(BUILD_TESTING AND CMAKE_CURRENT_SOURCE_DIR STREQUAL CMAKE_SOURCE_DIR)
     foreach(scenario IN ITEMS approved denied revoked expired)
         add_test(NAME system-pair-coordinator-${scenario} COMMAND AuroraSystemPairingCoordinatorTests
             ${scenario} $<TARGET_FILE:AuroraSystemPairingHostFixture>
-            "${CMAKE_CURRENT_SOURCE_DIR}/../../sunshine/admin/tests/tls")
+            "${CMAKE_CURRENT_SOURCE_DIR}/../../adaptors/sunshine/admin/tests/tls")
         set_tests_properties(system-pair-coordinator-${scenario} PROPERTIES TIMEOUT 45)
     endforeach()
 endif()

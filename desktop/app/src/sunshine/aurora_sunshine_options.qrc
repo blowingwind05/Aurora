@@ -1,6 +1,0 @@
-<!-- SPDX-License-Identifier: GPL-3.0-only -->
-<RCC>
-    <qresource prefix="/aurora/sunshine">
-        <file alias="SunshineOptions.json">../../../SunshineOptions.json</file>
-    </qresource>
-</RCC>

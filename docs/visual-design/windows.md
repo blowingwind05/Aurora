@@ -6,13 +6,15 @@
 
 入口是任务栏通知区域里的彩色 Aurora A，复用 [Windows 定稿 ICO](assets/brand/Aurora-Windows.ico) 的小尺寸帧。图标由 Windows 管理，可能显示在通知区域或折叠区。右键后，菜单从图标附近向任务栏外侧展开。任务栏在屏幕底部时，菜单向上弹出。正式界面的定位、边缘避让和显示缩放交给系统。[Microsoft 通知区域文档](https://learn.microsoft.com/en-us/windows/win32/shell/notification-area)
 
-浏览器按 Windows 11 的原生快捷菜单样式预览。每行左侧放 16 px 的 Microsoft Fluent 线图标，图标与文字相隔 8 px，颜色同文字。图标与文字分别沿同一左边线排列，行悬停用中性灰，仅在「退出极光」上方保留一条分隔线。「打开极光」是默认命令，预览中加粗。正式界面使用系统菜单，由 Windows 决定字体、行高、圆角、边框、阴影和对比度，随系统外观和辅助设置变化。[Microsoft 原生快捷菜单文档](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-createpopupmenu) · [Microsoft 默认菜单项文档](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setmenudefaultitem)
+托盘入口与弹出位置沿用 Windows 通知区域的习惯。菜单面板采用 Windows 11 风格，宽 160 px，外圆角 8 px，内边距 5 px。浅色用白底、1 px #DBE2ED 边线和柔和阴影；深色用 #292D35 面板和 #4B5260 边线。面板从左到右保持同一底色。Qt 版在托盘菜单范围内应用这套外观，并跟随 Windows 浅色、深色和高对比设置。
+
+三行命令各高至少 31 px，文字 13 px。微软 Fluent 线图标为 16 px，距文字 8 px，随文字色。在「退出 Aurora」上方放一条 1 px 淡线，浅色分隔为 #E6EAF1。悬停铺浅蓝灰，默认项「打开 Aurora」半粗显示。
 
 | 顺序 | 菜单项 | 图标 | 动作 |
 | --- | --- | --- | --- |
-| 1 | 打开极光 | [Open](assets/icons/fluent/ic_fluent_open_16_regular.svg) | 恢复并聚焦主窗口，保留当前页面。 |
+| 1 | 打开 Aurora | [Open](assets/icons/fluent/ic_fluent_open_16_regular.svg) | 恢复并聚焦主窗口，保留当前页面。 |
 | 2 | 设置 | [Settings](assets/icons/fluent/ic_fluent_settings_16_regular.svg) | 恢复主窗口并直接打开左下「设置」对应的页面。 |
-| 3 | 退出极光 | [Dismiss](assets/icons/fluent/ic_fluent_dismiss_16_regular.svg) | 结束应用并移除托盘图标。 |
+| 3 | 退出 Aurora | [Dismiss](assets/icons/fluent/ic_fluent_dismiss_16_regular.svg) | 结束应用并移除托盘图标。 |
 
 左键点托盘图标恢复主窗口。进入通知区域后可用键盘打开快捷菜单，↑ / ↓ 切换命令，Enter 执行，Esc 收起。点击菜单外也能收起。默认关闭主窗口时最小化到托盘，可在「设置 → 界面 → 关闭窗口时」改为退出。三条菜单命令在 Tailscale 未登录时仍可使用。[Microsoft 任务栏文档](https://learn.microsoft.com/en-us/windows/win32/shell/taskbar)
 

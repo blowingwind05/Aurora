@@ -35,14 +35,14 @@ Stream.StreamSessionChrome {
 
 | 输入 | 请求信号 | 生效时机 |
 | --- | --- | --- |
-| `preferences.resolution`、`frameRate`、`bitrate`、`codec` | `resolutionRequested(string resolution)`、`frameRateRequested(int fps)`、`bitrateRequested(int kbps)`、`codecRequested(string codec)` | 下次连接 |
-| `preferences.hdr`、`performanceOverlay` | `hdrRequested(bool enabled)`、`performanceOverlayRequested(bool enabled)` | 下次连接 |
+| `preferences.resolution`、`frameRate`、`bitrate`、`codec`、`hdr` | `resolutionRequested(string resolution)`、`frameRateRequested(int fps)`、`bitrateRequested(int kbps)`、`codecRequested(string codec)`、`hdrRequested(bool enabled)` | 由会话控制器确认即时调整或同窗口重协商 |
+| `preferences.performanceOverlay` | `performanceOverlayRequested(bool enabled)` | 下次连接 |
 | `preferences.audioConfiguration`、`remoteAudioMuted`、`muteOnFocusLoss` | `audioConfigurationRequested(string configuration)`、`remoteAudioMutedRequested(bool muted)`、`muteOnFocusLossRequested(bool muted)` | 下次连接 |
 | `preferences.swapMouseButtons`、`reverseScroll` | `swapMouseButtonsRequested(bool enabled)`、`reverseScrollRequested(bool enabled)` | 下次连接 |
 | `mouseMode` | `mouseModeRequested(string mode)`，宿主可提供 `desktop` 和 `relative` | 当前会话 |
-| `privacyScreen` | `privacyScreenRequested(bool enabled)` | 当前会话 |
+| `privacyScreen` | `privacyModeRequested(string mode)` | 当前会话 |
 
-宿主将启动参数写入现有偏好存储。如果映射到 `audio-on-host`，远端扬声器静音与该偏好布尔值方向相反。隐私屏保在能力未知时传入 `null`，状态已知但禁止改动时传入 `{value, writable: false}`，并用 `privacyScreenMessage` 说明原因。仅在实际鼠标已捕获且宿主提供 `releaseMouseShortcut` 时才显示释放提示。
+宿主将启动参数写入现有偏好存储。如果映射到 `audio-on-host`，远端扬声器静音与该偏好布尔值方向相反。隐私保护在状态未知时传入 `null`，状态确认后传入 `{mode, writable}`。`mode` 为 `off`、`display-off` 或 `screensaver`。使用 `privacyScreenMessage` 说明等待或失败原因。仅在实际鼠标已捕获且宿主提供 `releaseMouseShortcut` 时才显示释放提示。
 
 ## 离线验收
 

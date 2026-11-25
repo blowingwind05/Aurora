@@ -132,6 +132,35 @@ KnownIdentities resolveKnownIdentities(const QList<Device> &peers, const QList<P
     return known;
 }
 
+QList<QHostAddress> nearbyHostAddresses(const NetworkSnapshot &network, const KnownIdentities &known,
+                                       const QString &peerId, const QList<PresentDevice> &lan)
+{
+    const auto identity = known.value(peerId);
+    if (identity.isNull() || !network.isAuthenticated() ||
+        std::none_of(network.devices.cbegin(), network.devices.cend(), [&peerId](const Device &peer) {
+            return peer.id == peerId;
+        }))
+        return {};
+
+    QHash<QHostAddress, QUuid> owners;
+    QList<QHostAddress> candidates;
+    for (const auto &device : lan) {
+        if (device.address.isNull() || device.id.isNull())
+            continue;
+        const auto existing = owners.constFind(device.address);
+        if (existing != owners.cend() && *existing != device.id)
+            owners.insert(device.address, QUuid{});
+        else if (existing == owners.cend())
+            owners.insert(device.address, device.id);
+        if (device.hosting && device.id == identity && !candidates.contains(device.address))
+            candidates.append(device.address);
+    }
+    candidates.erase(std::remove_if(candidates.begin(), candidates.end(), [&owners, &identity](const QHostAddress &address) {
+        return owners.value(address) != identity;
+    }), candidates.end());
+    return candidates;
+}
+
 QList<Device> merge(const QList<Device> &peers, const LanSnapshot *lan, const TailnetSnapshot *tailnet,
                     const QLocale &locale)
 {

@@ -4,6 +4,7 @@
 #include "HostPairingOffer.h"
 #include "LifecycleController.h"
 
+#include <QNetworkInterface>
 #include <QThread>
 
 #include <utility>
@@ -68,7 +69,7 @@ QString transportError(SystemHostStop reason)
 
 struct SystemPairingCoordinator::Attempt
 {
-    enum class Step { Polling, Confirming, Revalidating, Approving };
+    enum class Step { Polling, Confirming, GrantProof, Revalidating, Approving };
 
     quint64 connection;
     QHostAddress source;
@@ -77,6 +78,9 @@ struct SystemPairingCoordinator::Attempt
     QByteArray pin;
     Step step = Step::Polling;
     std::optional<PendingPairing> selected;
+    QPointer<QTcpSocket> grantChannel;
+    QByteArray grantChallenge;
+    std::optional<GrantProof> grant;
 
     ~Attempt() { pin.fill('\0'); }
 };
@@ -112,6 +116,16 @@ SystemPairingCoordinator::SystemPairingCoordinator(LifecycleController &sunshine
             setPhase(Phase::Listening);
     });
     connect(transport_.get(), &SystemPairingHost::authenticated, this, &SystemPairingCoordinator::authenticated);
+    connect(transport_.get(), &SystemPairingHost::clientProofReceived, this,
+        [this](quint64 host, quint64 generation, quint64 connection, const GrantProof &proof) {
+            if (host != host_ || !checkContext() || generation != context_->accountEpoch ||
+                !attempt_ || attempt_->connection != connection || attempt_->step != Attempt::Step::GrantProof)
+                return;
+            attempt_->grant = proof;
+            attempt_->step = Attempt::Step::Revalidating;
+            if (!transport_->revalidate(host, connection))
+                finishAttempt();
+        });
     connect(transport_.get(), &SystemPairingHost::revalidated, this, &SystemPairingCoordinator::revalidated);
     connect(transport_.get(), &SystemPairingHost::connectionClosed, this, [this](quint64 host, quint64 connection) {
         if (host == host_ && attempt_ && attempt_->connection == connection) {
@@ -236,10 +250,12 @@ void SystemPairingCoordinator::pendingFinished(quint64 connection, PendingResult
     if (!connection) {
         if (phase_ != Phase::Checking)
             return;
-        if (result)
+        if (result) {
+            supportsClientGrant_ = result.supportsClientGrant;
             openTransport();
-        else
+        } else {
             fail(QStringLiteral("内置 Sunshine 未提供自动配对所需的待确认请求。"));
+        }
         return;
     }
     if (!attempt_ || attempt_->connection != connection)
@@ -287,9 +303,44 @@ void SystemPairingCoordinator::authenticated(quint64 host, quint64 generation, q
 {
     if (host != host_ || !checkContext() || generation != context_->accountEpoch)
         return;
+    if (peer.request == RequestKind::HostIdentity || peer.request == RequestKind::HostRoutes) {
+        const auto &pin = context_->scope.certificateSha256;
+        const auto reply = peer.request == RequestKind::HostRoutes
+            ? hostRoutesFrame(pin, QNetworkInterface::allAddresses(), supportsClientGrant_,
+                clientGrantInstance(context_->sunshineSession)) : hostIdentityFrame(pin);
+        if (!reply.isEmpty() && channel->write(reply) == reply.size())
+            channel->disconnectFromHost();
+        else
+            transport_->closeConnection(host, connection);
+        return;
+    }
     if (pendingApproval_ || attempt_) {
         channel->write(QByteArray(1, '\0'));
         channel->disconnectFromHost();
+        return;
+    }
+
+    if ((supportsClientGrant_ && peer.request == RequestKind::Pair) ||
+        (!supportsClientGrant_ && peer.request == RequestKind::ClientGrant)) {
+        channel->write(grantReplyFrame(peer.request == RequestKind::Pair
+            ? GrantReply::Rejected : GrantReply::Unsupported));
+        channel->disconnectFromHost();
+        return;
+    }
+
+    if (peer.request == RequestKind::ClientGrant) {
+        const auto offer = grantChallenge(HostOffer::randomBytes(ClientProof::DigestSize),
+            context_->scope.certificateSha256, context_->account.ownerId, context_->account.tailnetId,
+            context_->account.nodeId, peer.nodeId, QNetworkInterface::allAddresses(),
+            clientGrantInstance(context_->sunshineSession));
+        if (offer.isEmpty() || channel->write(offer) != offer.size()) {
+            transport_->closeConnection(host, connection);
+            return;
+        }
+        attempt_.reset(new Attempt{connection, peer.address, HostOffer::displayName(peer.name), {}, {}});
+        attempt_->step = Attempt::Step::GrantProof;
+        attempt_->grantChannel = channel;
+        attempt_->grantChallenge = offer.mid(1, ClientProof::ChallengeSize);
         return;
     }
 
@@ -314,21 +365,34 @@ void SystemPairingCoordinator::revalidated(quint64 host, quint64 generation, qui
     }
 
     attempt_->step = Attempt::Step::Approving;
-    auto approval = SupervisorPairingApproval::authorized(attempt_->selected->id,
-        QString::fromLatin1(attempt_->pin), attempt_->label);
+    auto approval = attempt_->grant
+        ? SupervisorPairingApproval::clientGrant(attempt_->label, std::move(attempt_->grantChallenge),
+            std::move(attempt_->grant->certificate), std::move(attempt_->grant->signature))
+        : SupervisorPairingApproval::authorized(attempt_->selected->id, QString::fromLatin1(attempt_->pin), attempt_->label);
     attempt_->pin.fill('\0');
 
     pendingApproval_ = connection;
     approvalSession_ = context_->sunshineSession;
     const QPointer<SystemPairingCoordinator> self(this);
     const bool submitted = sunshine_->approvePairing(approvalSession_, std::move(approval),
-        [self, connection](BundledAdmin::ApprovalResult) {
+        [self, connection](BundledAdmin::ApprovalResult result) {
             if (!self || self->pendingApproval_ != connection)
                 return;
             self->pendingApproval_ = 0;
             self->approvalSession_.clear();
-            if (self->attempt_ && self->attempt_->connection == connection)
-                self->finishAttempt();
+            if (!self->attempt_ || self->attempt_->connection != connection)
+                return;
+            if (self->attempt_->grantChannel && self->checkContext()) {
+                auto channel = self->attempt_->grantChannel;
+                const auto reply = result ? GrantReply::Accepted :
+                    result.error == BundledAdmin::Error::HttpStatus && result.httpStatus == 404
+                    ? GrantReply::Unsupported : GrantReply::Rejected;
+                if (channel && channel->write(grantReplyFrame(reply)) == 1) {
+                    channel->disconnectFromHost();
+                    return;
+                }
+            }
+            self->finishAttempt();
         }, std::move(guard));
     if (!submitted) {
         pendingApproval_ = 0;

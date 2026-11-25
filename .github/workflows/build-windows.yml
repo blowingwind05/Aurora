@@ -25,10 +25,6 @@ jobs:
           go-version: '1.27.4'
           cache: false
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-
       - uses: jurplel/install-qt-action@v4
         with:
           version: '6.6.3'
@@ -49,7 +45,6 @@ jobs:
             mingw-w64-ucrt-x86_64-curl-winssl
             mingw-w64-ucrt-x86_64-gcc
             mingw-w64-ucrt-x86_64-MinHook
-            mingw-w64-ucrt-x86_64-miniupnpc
             mingw-w64-ucrt-x86_64-ninja
             mingw-w64-ucrt-x86_64-nlohmann-json
             mingw-w64-ucrt-x86_64-onevpl
@@ -62,7 +57,7 @@ jobs:
           MSYS2_ROOT: ${{ steps.msys2.outputs.msys2-location }}
         run: |
           $tailnet = Join-Path $env:RUNNER_TEMP 'aurora-tailnet'
-          ./desktop/upstream/tsnet/Build-Tailnet.ps1 -Runtime win-x64 -OutputDirectory $tailnet -RunTests `
+          ./desktop/tailnet/Build-Tailnet.ps1 -Runtime win-x64 -OutputDirectory $tailnet -RunTests `
             -Windres (Join-Path $env:MSYS2_ROOT 'ucrt64/bin/windres.exe')
 
       - name: Build and package Aurora for Windows
@@ -77,14 +72,14 @@ jobs:
           Import-Module (Join-Path $vs 'Common7/Tools/Microsoft.VisualStudio.DevShell.dll')
           Enter-VsDevShell -VsInstallPath $vs -SkipAutomaticLocation -DevCmdArguments '-arch=x64 -host_arch=x64'
           $qmake = Join-Path $env:QT_ROOT_DIR 'bin/qmake.exe'
-          $streamer = ./desktop/upstream/moonlight-qt/Build-Windows-Streamer.ps1 -Qmake $qmake |
+          $streamer = ./desktop/packaging/Build-Windows-Streamer.ps1 -Qmake $qmake |
             Where-Object { $_ -is [IO.DirectoryInfo] } | Select-Object -Last 1
           $nativePath = Join-Path ([IO.Path]::GetPathRoot($env:RUNNER_TEMP)) 'aurora-native'
-          $hostRuntime = ./desktop/upstream/sunshine/Build-Windows-Sunshine.ps1 -Msys2Root $env:MSYS2_ROOT -WorkDirectory $nativePath |
+          $hostRuntime = ./desktop/packaging/Build-Windows-Sunshine.ps1 -Msys2Root $env:MSYS2_ROOT -WorkDirectory $nativePath |
             Where-Object { $_ -is [IO.DirectoryInfo] } | Select-Object -Last 1
           if (!$streamer -or !$hostRuntime) { throw 'A Windows runtime build did not return its package.' }
           $tailnet = Join-Path $env:RUNNER_TEMP 'aurora-tailnet'
-          ./desktop/Build.ps1 -StreamerDirectory $streamer.FullName -SunshineDirectory $hostRuntime.FullName -TailscaleDirectory $tailnet -Qmake $qmake -Setup
+          ./desktop/packaging/Build-Windows.ps1 -StreamerDirectory $streamer.FullName -SunshineDirectory $hostRuntime.FullName -TailscaleDirectory $tailnet -Qmake $qmake -Setup
 
       - name: Create and verify Windows downloads
         shell: pwsh
@@ -116,12 +111,12 @@ jobs:
             if ($probe.ExitCode -ne 0) { throw "Packaged Aurora native startup failed ($($probe.ExitCode))." }
           } finally { $probe.Dispose() }
 
-          ./desktop/Artifact-Checksums.ps1 -Path $portable.FullName -Verify
-          ./desktop/Artifact-Checksums.ps1 -Path $setup -Verify
+          ./desktop/packaging/Artifact-Checksums.ps1 -Path $portable.FullName -Verify
+          ./desktop/packaging/Artifact-Checksums.ps1 -Path $setup -Verify
           $zip = Join-Path (Resolve-Path -LiteralPath 'dist').Path 'Aurora-Windows-x64-portable.zip'
           [IO.Compression.ZipFile]::CreateFromDirectory($portable.FullName, $zip, [IO.Compression.CompressionLevel]::Optimal, $false)
-          ./desktop/Artifact-Checksums.ps1 -Path $zip
-          ./desktop/Artifact-Checksums.ps1 -Path $zip -Verify
+          ./desktop/packaging/Artifact-Checksums.ps1 -Path $zip
+          ./desktop/packaging/Artifact-Checksums.ps1 -Path $zip -Verify
           python tests/Check-NativeDesktopPackage.py $zip
           if ($LASTEXITCODE -ne 0) { throw 'The portable ZIP did not pass the native package scan.' }
 

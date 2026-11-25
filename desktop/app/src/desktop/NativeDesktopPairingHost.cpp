@@ -49,6 +49,8 @@ void NativeDesktop::initializePairingHost()
 {
     if (!host)
         return;
+    hostGrantExpirationRetry.setSingleShot(true);
+    connect(&hostGrantExpirationRetry, &QTimer::timeout, this, &NativeDesktop::expireHostClientGrants);
     if (tailnet && tailnet->isAvailable()) {
         embeddedPairingHost = std::make_unique<EmbeddedPairingHost>(*tailnet, *host, [this] {
             return embeddedSelected ? pairingHostContext : std::nullopt;
@@ -105,6 +107,12 @@ void NativeDesktop::refreshPairingHost(bool confirmed)
         pairingHostContext->sunshineSession == next.sunshineSession &&
         pairingHostContext->localAddress == next.localAddress &&
         Aurora::Pairing::approvalId(pairingHostContext->scope) == Aurora::Pairing::approvalId(next.scope);
+    if (pairingHostContext && pairingHostContext->enrollment == EnrollmentResult::Approved &&
+        pairingHostContext->sunshineSession == next.sunshineSession &&
+        (pairingHostContext->accountEpoch != next.accountEpoch || !(pairingHostContext->account == next.account) ||
+         Aurora::Pairing::approvalId(pairingHostContext->scope) != Aurora::Pairing::approvalId(next.scope))) {
+        scheduleHostGrantExpiration(next.sunshineSession);
+    }
     next.enrollment = same && !confirmed ? pairingHostContext->enrollment
         : Aurora::Pairing::enrollLocalHost(directory, next.scope, confirmed);
     pairingHostContext = std::move(next);
@@ -115,7 +123,8 @@ void NativeDesktop::refreshPairingHost(bool confirmed)
         systemPairingHost->contextChanged();
 #endif
 
-    if (pairingHostContext->enrollment != EnrollmentResult::Approved || tailnetBusy || pendingAdvertisement ||
+    if (pairingHostContext->enrollment != EnrollmentResult::Approved || !pendingHostGrantExpiration.isEmpty() ||
+        tailnetBusy || pendingAdvertisement ||
         (connection && !connection->launched))
         return;
     if (useEmbedded)
@@ -128,13 +137,52 @@ void NativeDesktop::refreshPairingHost(bool confirmed)
 
 void NativeDesktop::retirePairingHost()
 {
-    pairingHostContext.reset();
+    const auto previous = std::exchange(pairingHostContext, std::nullopt);
     if (embeddedPairingHost && embeddedPairingHost->phase() != EmbeddedPairingHost::Phase::Stopped)
         embeddedPairingHost->stop();
 #ifdef Q_OS_WIN
     if (systemPairingHost && systemPairingHost->phase() != Aurora::Pairing::SystemPairingCoordinator::Phase::Stopped)
         systemPairingHost->stop();
 #endif
+    if (previous && previous->enrollment == EnrollmentResult::Approved)
+        scheduleHostGrantExpiration(previous->sunshineSession);
+}
+
+void NativeDesktop::scheduleHostGrantExpiration(const QString &session)
+{
+    if (!hasValidHostIdentity(host->state()) || host->state().settingsSession != session)
+        return;
+    pendingHostGrantExpiration = session;
+    if (!hostGrantExpirationInFlight)
+        hostGrantExpirationRetry.start(0);
+}
+
+void NativeDesktop::expireHostClientGrants()
+{
+    if (hostGrantExpirationInFlight || pendingHostGrantExpiration.isEmpty())
+        return;
+    if (!hasValidHostIdentity(host->state()) || host->state().settingsSession != pendingHostGrantExpiration) {
+        pendingHostGrantExpiration.clear();
+        refreshPairingHost();
+        return;
+    }
+
+    const auto session = pendingHostGrantExpiration;
+    hostGrantExpirationInFlight = host->approvePairing(session,
+        Aurora::Sunshine::SupervisorPairingApproval::expireClientGrants(),
+        [this, session](const auto &result) {
+            hostGrantExpirationInFlight = false;
+            const bool olderHost = result.error == Aurora::Sunshine::BundledAdmin::Error::HttpStatus &&
+                result.httpStatus == 404;
+            if (pendingHostGrantExpiration == session && (result || olderHost))
+                pendingHostGrantExpiration.clear();
+            if (!pendingHostGrantExpiration.isEmpty())
+                hostGrantExpirationRetry.start(250);
+            else
+                refreshPairingHost();
+        });
+    if (!hostGrantExpirationInFlight)
+        hostGrantExpirationRetry.start(250);
 }
 
 QString NativeDesktop::pairingHostConfirmation() const

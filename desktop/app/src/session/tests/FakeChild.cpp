@@ -1,5 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "AuroraStreamEntry.h"
+#include "AuroraStreamSessionProtocol.h"
+#ifdef Q_OS_MACOS
+#include <QSocketNotifier>
+#include <unistd.h>
+#endif
 
 #include <QCoreApplication>
 #include <QFile>
@@ -7,6 +12,7 @@
 #include <QTimer>
 
 #include <cstdio>
+#include <cstring>
 #ifdef Q_OS_WIN
 #include <windows.h>
 #endif
@@ -20,18 +26,49 @@ void report(const char *line)
 }
 
 #ifdef Q_OS_WIN
-int fakePrivacy(int argc, char **argv)
+bool matchesControlRoute(char **argv)
 {
     const auto endpoint = QByteArray(argv[2]);
     const auto host = QByteArray(argv[3]);
-    const auto operation = QByteArray(argv[4]);
     const auto relay = qgetenv("AURORA_TEST_STREAM_RELAY");
-    if (endpoint != qgetenv("AURORA_TEST_STREAM_ENDPOINT") || host != qgetenv("AURORA_TEST_STREAM_HOST") ||
-        qgetenv("AURORA_GAMESTREAM_RELAY_BASE") != relay || qEnvironmentVariableIsSet("AURORA_EMBEDDED_SESSION") ||
-        qgetenv("AURORA_GAMESTREAM_HOST_UUID") != (relay.isEmpty() ? QByteArray() : host)) {
+    const auto expectedPin = qgetenv("AURORA_TEST_STREAM_PIN");
+    return (expectedPin.isEmpty() || expectedPin == qgetenv("AURORA_GAMESTREAM_HOST_CERTIFICATE_SHA256")) &&
+        endpoint == qgetenv("AURORA_TEST_STREAM_ENDPOINT") && host == qgetenv("AURORA_TEST_STREAM_HOST") &&
+        qgetenv("AURORA_GAMESTREAM_RELAY_BASE") == relay && !qEnvironmentVariableIsSet("AURORA_EMBEDDED_SESSION") &&
+        qgetenv("AURORA_GAMESTREAM_HOST_UUID") == (relay.isEmpty() ? QByteArray() : host);
+}
+
+int fakeBitrate(int argc, char **argv)
+{
+    if (argc < 5 || !matchesControlRoute(argv))
         return 23;
+    const QByteArray session(32, 'a');
+    const bool pending = qEnvironmentVariableIsSet("AURORA_TEST_BITRATE_PENDING");
+    QFile settled(qEnvironmentVariable("AURORA_TEST_PRIVACY_LOG") + QStringLiteral(".bitrate"));
+    if (argc == 5 && QByteArray(argv[4]) == "status") {
+        report(("status " + session + (pending && settled.exists() ? " 15000 12000 25000 8" : " 20000 16000 25000 7")).constData());
+        return 0;
     }
-    if (operation != "status" && operation != "on" && operation != "off")
+    if (argc == 8 && QByteArray(argv[4]) == "set" && QByteArray(argv[5]) == session &&
+        QByteArray(argv[6]) == "15000" && QByteArray(argv[7]) == "7") {
+        if (pending) {
+            if (!settled.open(QIODevice::WriteOnly | QIODevice::NewOnly))
+                return 24;
+            report("pending");
+        } else {
+            report(("applied " + session + " 15000 12000 25000 8").constData());
+        }
+        return 0;
+    }
+    return 24;
+}
+
+int fakePrivacy(int argc, char **argv)
+{
+    if (!matchesControlRoute(argv))
+        return 23;
+    const auto operation = QByteArray(argv[4]);
+    if (operation != "status" && operation != "on" && operation != "off" && operation != "display-off")
         return 24;
 
     QCoreApplication app(argc, argv);
@@ -46,8 +83,9 @@ int fakePrivacy(int argc, char **argv)
         return app.exec();
     if (mode == "failed")
         return 4;
-    const auto reply = mode == "unavailable" ? QByteArray("unavailable") :
-        operation == "status" ? QByteArray("off") : operation;
+    const auto reply = mode == "unavailable" || mode == "unsupported" ? mode :
+        operation == "status" || (mode == "no-virtual-display" && operation == "display-off")
+            ? QByteArray("off") : operation;
     QTimer::singleShot(120, &app, [&app, reply] {
         report(reply.constData());
         app.quit();
@@ -58,6 +96,13 @@ int fakePrivacy(int argc, char **argv)
 LPCWSTR wide(const QString &text)
 {
     return reinterpret_cast<LPCWSTR>(text.utf16());
+}
+
+bool recordVideo(const QByteArray &event, const QByteArray &fps)
+{
+    QFile log(qEnvironmentVariable("AURORA_TEST_VIDEO_LOG"));
+    const auto line = event + ' ' + fps + '\n';
+    return log.open(QIODevice::Append) && log.write(line) == line.size() && log.flush();
 }
 
 bool hasHost(HWND hwnd, DWORD expectedPid, const QString &property)
@@ -102,12 +147,14 @@ int main(int argc, char **argv)
 {
     const bool supervisor = argc > 1;
     if (supervisor) {
-        const int guard = prepareAuroraStreamInvocation(argc, argv);
-        if (guard >= 0)
-            return guard;
+        const auto invocation = prepareAuroraStreamInvocation(argc, argv);
+        if (invocation.operation == AuroraStreamOperation::Exit)
+            return invocation.exitCode;
 #ifdef Q_OS_WIN
         if (argc == 5 && std::strcmp(argv[1], "privacy") == 0)
             return fakePrivacy(argc, argv);
+        if (std::strcmp(argv[1], "bitrate") == 0)
+            return fakeBitrate(argc, argv);
 #endif
         if (argc < 4 || std::strcmp(argv[1], "stream") || std::strcmp(argv[3], "Desktop")
             || QByteArray(argv[2]) != qgetenv("AURORA_TEST_STREAM_ENDPOINT")) {
@@ -125,6 +172,26 @@ int main(int argc, char **argv)
     QCoreApplication app(argc, argv);
     const auto mode = qgetenv("AURORA_TEST_STREAM_MODE");
 #ifdef Q_OS_WIN
+    const bool recordPlayback = mode == "video" || mode == "video-ignore-stop";
+    QByteArray fps;
+    if (recordPlayback) {
+        const auto args = app.arguments();
+        fps = args.value(args.indexOf("--fps") + 1).toLatin1();
+        // Keep the exclusive handle open until process exit. A successor that
+        // starts before this process has exited cannot acquire it.
+        const auto lock = CreateFileW(wide(qEnvironmentVariable("AURORA_TEST_VIDEO_LOCK")),
+                                      GENERIC_WRITE, 0, nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (lock == INVALID_HANDLE_VALUE) {
+            recordVideo("overlap", fps);
+            return 75;
+        }
+        if (!recordVideo("start", fps))
+            return 76;
+        if (fps == "55") {
+            recordVideo("failed", fps);
+            return 74;
+        }
+    }
     const auto fields = qEnvironmentVariable("AURORA_EMBEDDED_SESSION").split(QLatin1Char(':'));
     if (fields.size() != 3 || fields[2].size() != 32)
         return 74;
@@ -154,11 +221,14 @@ int main(int argc, char **argv)
     if (!stage || GetParent(stage) != host)
         return 74;
     report("aurora-connection-stage/1,qt");
+    if (qEnvironmentVariableIsSet("AURORA_TEST_PINNED_CONTROL"))
+        report(Aurora::StreamSession::PinnedControlAvailable);
 
     HWND video = nullptr;
     QSize lastSize;
     QByteArray pending;
     bool receivedStop = false;
+    bool fixtureWeak = true;
     const auto showVideo = [&] {
         video = makeChild(host, wc.lpszClassName);
         if (!video || GetParent(video) != host) {
@@ -166,10 +236,14 @@ int main(int argc, char **argv)
             return;
         }
         ShowWindow(stage, SW_HIDE);
+        if (recordPlayback)
+            recordVideo("ready", fps);
         SetEvent(ready);
     };
+    const bool deferReady = recordPlayback && fps == "50";
     if (supervisor) {
-        QTimer::singleShot(40, &app, showVideo);
+        if (!deferReady)
+            QTimer::singleShot(40, &app, showVideo);
         QTimer::singleShot(75, &app, [] {
             const QByteArray noise(800, 'x');
             report(noise.constData());
@@ -182,12 +256,21 @@ int main(int argc, char **argv)
     }
     QTimer tick;
     QObject::connect(&tick, &QTimer::timeout, &app, [&] {
-        if (mode == "exit-on-fixture" && QFile::exists(qEnvironmentVariable("AURORA_TEST_PLAYBACK_EXIT"))) {
-            app.quit();
+        if (mode == "quality-reset") {
+            const bool weak = !QFile::exists(qEnvironmentVariable("AURORA_TEST_PLAYBACK_EXIT"));
+            if (weak != fixtureWeak) {
+                fixtureWeak = weak;
+                report(weak ? "aurora-connection/1,1920,1080,2,5994,18000,100,4200,30,1"
+                            : "aurora-connection/1,1920,1080,2,5994,18000,0,4200,30,0");
+            }
+        }
+        if ((mode == "exit-on-fixture" || mode == "transport-loss") &&
+            QFile::exists(qEnvironmentVariable("AURORA_TEST_PLAYBACK_EXIT"))) {
+            app.exit(mode == "transport-loss" ? Aurora::StreamSession::TransportLost : 0);
             return;
         }
         if (WaitForSingleObject(stop, 0) == WAIT_OBJECT_0) {
-            if (mode == "ignore-stop")
+            if (mode == "ignore-stop" || mode == "video-ignore-stop")
                 return;
             if (supervisor) {
                 if (!receivedStop) {
@@ -205,6 +288,8 @@ int main(int argc, char **argv)
             app.quit();
             return;
         }
+        if (deferReady && !video && QFile::exists(qEnvironmentVariable("AURORA_TEST_VIDEO_READY")))
+            showVideo();
 
         const auto input = GetStdHandle(STD_INPUT_HANDLE);
         DWORD queued = 0;
@@ -248,10 +333,38 @@ int main(int argc, char **argv)
     CloseHandle(fullscreen);
     CloseHandle(stop);
     CloseHandle(ready);
+    if (recordPlayback)
+        recordVideo("exit", fps);
     return status;
 #else
     if (qEnvironmentVariableIsSet("AURORA_EMBEDDED_SESSION"))
         return 74;
+#ifdef Q_OS_MACOS
+    using namespace Aurora::StreamSession;
+    if (mode.startsWith("route-switch-")) {
+        QFile input;
+        if (!input.open(stdin, QIODevice::ReadOnly, QFileDevice::DontCloseHandle))
+            return 1;
+        QSocketNotifier command(STDIN_FILENO, QSocketNotifier::Read);
+        const bool supported = mode != "route-switch-legacy";
+        command.setEnabled(supported && qEnvironmentVariableIntValue(SwitchChannel) == 1);
+        QObject::connect(&command, &QSocketNotifier::activated, &app, [&] {
+            if (input.readLine(sizeof(SwitchRequest)) != SwitchRequest) {
+                app.exit(1);
+            } else if (mode == "route-switch-deny") {
+                report(SwitchDenied);
+            } else {
+                app.exit(RouteSwitched);
+            }
+        });
+        QTimer::singleShot(0, &app, [&] {
+            report(supported ? SwitchReady : PlaybackReady);
+            if (mode == "route-switch-unsolicited")
+                app.exit(RouteSwitched);
+        });
+        return app.exec();
+    }
+#endif
     QTimer::singleShot(40, &app, [] {
         report("aurora-stream-setting/1\tresolution\t1920x1080");
         report("aurora-stream-setting/1\tunknown-option\tbogus");

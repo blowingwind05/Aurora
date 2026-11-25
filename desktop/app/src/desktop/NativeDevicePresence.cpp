@@ -77,6 +77,7 @@ void NativeDevicePresence::update(const aurora::tailscale::Status &status, bool 
         embeddedMode = embedded;
         ++accountGeneration;
         lanRequest = peersRequest = 0;
+        sessionLanPeer.clear();
         lanDevices = {};
         tailnetDevices = {};
     }
@@ -218,8 +219,11 @@ void NativeDevicePresence::setHosting(bool ready)
 void NativeDevicePresence::setSessionActive(bool active)
 {
     sessionActive = active;
-    if (!active)
+    if (!active) {
+        cancelSessionLanProbe(lanRequest);
         return;
+    }
+    sessionLanPeer.clear();
     if (transport) {
         if (const auto request = std::exchange(lanRequest, 0))
             transport->cancelScan(request);
@@ -228,6 +232,24 @@ void NativeDevicePresence::setSessionActive(bool active)
     }
     clearEmbeddedScan();
     finishRouteSurvey(false);
+}
+
+quint64 NativeDevicePresence::probeSessionLan(const QString &peerId)
+{
+    if (!sessionActive || !transport || lanRequest || !currentNetwork.isAuthenticated() ||
+        tailnetDevices.known.value(peerId).isNull())
+        return 0;
+    sessionLanPeer = peerId;
+    return lanRequest = transport->probeLan();
+}
+
+void NativeDevicePresence::cancelSessionLanProbe(quint64 request)
+{
+    if (!request || request != lanRequest || sessionLanPeer.isEmpty())
+        return;
+    lanRequest = 0;
+    sessionLanPeer.clear();
+    transport->cancelScan(request);
 }
 
 QByteArray NativeDevicePresence::announcementPacket(bool canHost) const
@@ -241,14 +263,25 @@ void NativeDevicePresence::receiveScan(quint64 request, const Aurora::Presence::
     if (!lan && request != peersRequest)
         return;
     (lan ? lanRequest : peersRequest) = 0;
-    if (result.status != ScanStatus::Complete || !currentNetwork.isAuthenticated())
+    const auto activePeer = lan ? std::exchange(sessionLanPeer, {}) : QString{};
+    if (result.status != ScanStatus::Complete || !currentNetwork.isAuthenticated()) {
+        if (!activePeer.isEmpty())
+            emit sessionLanProbed(request, {});
         return;
+    }
 
     auto &devices = lan ? lanDevices.devices : tailnetDevices.devices;
     devices.clear();
     for (const auto &reply : result.replies) {
         const auto &device = reply.announcement;
         devices.append({device.id, reply.address, device.name, platformName(device.platform), device.hosting});
+    }
+    if (!activePeer.isEmpty()) {
+        // Keep the normal catalog survey suspended while streaming. The reply is only a
+        // route hint. The playback coordinator must still prove the exact endpoint over TLS.
+        serverInfo.updateDiscovery(accountGeneration, currentNetwork, devices, tailnetDevices.devices, embeddedMode);
+        emit sessionLanProbed(request, nearbyHostAddresses(currentNetwork, tailnetDevices.known, activePeer, devices));
+        return;
     }
     if (!lan)
         tailnetDevices.known = rememberKnownDevices(directory, currentNetwork, tailnetDevices.devices);

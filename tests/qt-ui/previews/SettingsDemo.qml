@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 import QtQuick 2.15
-import "../../../desktop/app/qml"
+import "../../../desktop/app/qml/shell"
+import "../../../desktop/app/qml/pages" as Pages
 
 AuroraMainWindow {
     id: shell
@@ -24,7 +25,7 @@ AuroraMainWindow {
     Component {
         id: generalPage
 
-        GeneralSettingsPage {
+        Pages.GeneralSettingsPage {
             objectName: "generalSettingsPage"
             compact: shell.compact
             narrow: shell.narrow

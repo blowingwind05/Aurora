@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #pragma once
 
+#include "PairingWire.h"
 #include "SystemStatus.h"
 #include "WindowsInstallation.h"
 
@@ -21,6 +22,7 @@ struct SystemHostPeer
     QString nodeId;
     QString name;
     QHostAddress address; // Same source to match in the managed Sunshine pending request.
+    RequestKind request = RequestKind::Pair;
 };
 
 enum class SystemHostStop {
@@ -63,6 +65,8 @@ signals:
     // to this borrowed socket and leave reads to the adapter. It owns the socket.
     void authenticated(quint64 host, quint64 generation, quint64 connection,
         const Aurora::Pairing::SystemHostPeer &peer, QTcpSocket *channel);
+    void clientProofReceived(quint64 host, quint64 generation, quint64 connection,
+        const Aurora::Pairing::GrantProof &proof);
     void revalidated(quint64 host, quint64 generation, quint64 connection);
     void connectionClosed(quint64 host, quint64 connection);
     void stopped(quint64 host, quint64 generation, Aurora::Pairing::SystemHostStop reason);

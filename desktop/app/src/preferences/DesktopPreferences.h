@@ -29,6 +29,8 @@ public:
 
     bool managedHostAllowed() const;
     bool setManagedHostAllowed(bool allowed) const;
+    bool privacyUiAccessTest() const;
+    bool setPrivacyUiAccessTest(bool enabled) const;
 
     bool startupInitialized() const;
     StartupClaim claimStartupInitialization() const;
@@ -57,6 +59,7 @@ struct SessionControlChange
     // Parse a complete worker line without its line terminator.
     static std::optional<SessionControlChange> fromLine(const QString &line);
     bool isValid() const;
+    bool isVideoSetting() const;
 };
 
 enum class SessionControlSaveResult { Ignored, Saved, SaveFailed };
@@ -65,6 +68,8 @@ class StreamPreferences
 {
 public:
     explicit StreamPreferences(const QString &directory = defaultDirectory());
+    static StreamPreferences forDevice(const QString &directory, const QString &tailnetId, qint64 ownerId,
+                                       const QString &hostId);
 
     StreamPreferenceSnapshot read() const;
     bool set(const QString &option, const QString &value) const;

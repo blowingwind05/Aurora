@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 import QtQuick 2.15
-import "../../../desktop/app/qml"
+import "../../../desktop/app/qml/common"
+import "../../../desktop/app/qml/shell"
 
 AuroraMainWindow {
     id: demo

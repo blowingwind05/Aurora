@@ -2,23 +2,23 @@
 #pragma once
 
 #include "NativeDevicePresence.h"
-#include "pairing/client/PairingClient.h"
+#include "pairing/client/TailnetExchange.h"
+#include "pairing/client/ClientGrantCache.h"
 #include "pairing/host/EmbeddedPairingHost.h"
 #include "preferences/DesktopPreferences.h"
 #include "platform/DesktopTray.h"
 #include "platform/HostSleepPrevention.h"
 #include "platform/StartupRegistration.h"
 #include "session/SessionSupervisor.h"
-#include "sunshine/lifecycle/LifecycleController.h"
-#include "stream/MoonlightProcess.h"
-#include "tailscale/EmbeddedStatusClient.h"
-#include "tailscale/avatar/AvatarLoader.h"
+#include "adaptors/sunshine/lifecycle/LifecycleController.h"
+#include "adaptors/moonlight/MoonlightProcess.h"
+#include "adaptors/tailscale/EmbeddedStatusClient.h"
+#include "ui/avatar/AvatarLoader.h"
 #include "wallpaper/host/HostWallpaper.h"
 #include "wallpaper/client/WallpaperClient.h"
 #ifdef Q_OS_WIN
 #include "pairing/systemhost/SystemPairingCoordinator.h"
-#include "tailscale/system/SystemPairingNc.h"
-#include "tailscale/system/SystemTailscaleClient.h"
+#include "adaptors/tailscale/system/SystemTailscaleClient.h"
 #endif
 
 #include <QObject>
@@ -64,6 +64,8 @@ private:
     void initializePairingHost();
     void refreshPairingHost(bool confirmed = false);
     void retirePairingHost();
+    void scheduleHostGrantExpiration(const QString &session);
+    void expireHostClientGrants();
     QString pairingHostConfirmation() const;
     QString pairingHostFeedback() const;
     void readManualPairings();
@@ -109,22 +111,37 @@ private:
     void requestConnectionStatus();
     void connectionAccountReady();
     void prepareNextRoute();
+    void initializeRouteQuality();
+    void updateRouteQuality();
+    void beginRouteQuality();
+    bool beginRouteRecovery();
+    void beginRecoveryRouteQuality();
+    bool probeSessionLanForRouteQuality();
+    void routeLanProbed(quint64 request, const QList<QHostAddress> &addresses);
+    void startRouteComparison();
+    void probeNextRoute();
+    void routeProbeFinished(std::optional<Aurora::Stream::RouteQuality> sample);
+    bool ownsRouteQuality() const;
+    void launchRouteProbe(const Aurora::Stream::Route &route);
+    void endRouteQuality(bool comparisonFinished = false);
+    bool canMeasureRouteQuality() const;
     void receivePrepared(const Aurora::Session::PreparedSession &session);
     void routeChecked(quint64 request, const Aurora::Discovery::ServerInfo::CheckResult &result);
     void verifyMoonlightTrust();
     void trustCheckFinished(bool trusted);
     void initializePairingClient();
     bool beginPairing();
+    bool beginHostIdentity(Aurora::Pairing::RequestKind kind = Aurora::Pairing::RequestKind::HostRoutes);
+    void renewClientGrant();
+    void scheduleClientGrantRenewal(int delayMs);
+    bool canQueryPublicFallback() const;
+    bool beginTailscaleExchange(const QHostAddress &peerAddress, Aurora::Pairing::RequestKind kind);
     bool canPairOverRoute(const Aurora::Discovery::StreamHost &route) const;
-#ifdef Q_OS_WIN
-    void startSystemPairingExchange(quint64 request, QIODevice *channel);
-#endif
-    void requestEmbeddedPairing();
-    void receivePairingLease(quint64 generation, quint64 request, const aurora::tailscale::PairingLeaseResult &result);
-    void startPairingExchange();
     void pairingFinished(quint64 request, const Aurora::Pairing::Client::Result &result);
-    void releasePairingTransport();
     void launchPreparedSession();
+    Aurora::Preferences::StreamPreferences deviceStreamPreferences() const;
+    void changeVideoSetting(const QString &option, const QString &value);
+    void finishVideoSetting(bool applied);
     void sessionFinished(const QUuid &attempt, quint64 generation, const Aurora::Session::SessionResult &result);
     void cancelConnection(const QString &reason = {});
     void failRoute(const QString &reason, bool tryNext);
@@ -142,13 +159,31 @@ private:
         bool routesVerified = false;
         bool waitingForEncoder = false;
         bool launched = false;
+        bool streamingConfirmed = false;
         bool retryRoute = false;
         bool pairingAttempted = false;
+        bool clientGrantRequired = false;
+        bool clientGranted = false;
+        QDeadlineTimer clientGrantDue{QDeadlineTimer::Forever};
         QQueue<Aurora::Discovery::StreamHost> routes;
+        std::optional<Aurora::Discovery::StreamHost> pendingRouteSwitch;
         std::optional<Aurora::Discovery::StreamHost> selected;
+        std::optional<Aurora::Discovery::StreamHost> preferredLan;
+        std::optional<Aurora::Discovery::StreamHost> tailnetFallback;
         std::optional<Aurora::Discovery::StreamHost> preferAfterPairing;
         std::optional<Aurora::Session::PreparedSession> prepared;
-        std::optional<Aurora::Session::SessionPrivacyRoute> privacy;
+        QByteArray certificateSha256;
+        QByteArray resumeCertificateSha256;
+        QByteArray publicCertificateSha256;
+        QList<Aurora::Discovery::StreamHost> publicRoutes;
+        bool requestedHostRoutes = false;
+        bool lookingForPublicFallback = false;
+        bool recoveringRoute = false;
+        bool comparedPublicRoutes = false;
+        QDeadlineTimer routeSwitchCooldown;
+        std::optional<Aurora::Session::SessionControlRoute> controls;
+        Aurora::Preferences::StreamPreferenceSnapshot playbackPreferences;
+        std::optional<Aurora::Preferences::SessionControlChange> pendingVideoSetting;
         QUuid attempt;
         quint64 probe = 0;
         QString failure;
@@ -177,6 +212,9 @@ private:
     std::optional<Aurora::Pairing::EmbeddedHostContext> pairingHostContext;
     std::unique_ptr<Aurora::Pairing::EmbeddedPairingHost> embeddedPairingHost;
     QElapsedTimer pairingHostRetry;
+    QTimer hostGrantExpirationRetry;
+    QString pendingHostGrantExpiration;
+    bool hostGrantExpirationInFlight = false;
 #ifdef Q_OS_WIN
     std::unique_ptr<Aurora::Pairing::SystemPairingCoordinator> systemPairingHost;
     std::unique_ptr<aurora::tailscale::system::SystemTailscaleClient> systemTailnet;
@@ -187,7 +225,7 @@ private:
     bool wantSystemProfiles = false;
 #endif
     aurora::tailscale::Status tailnetStatus;
-    std::unique_ptr<aurora::tailscale::AvatarLoader> accountAvatar;
+    std::unique_ptr<Aurora::Ui::AvatarLoader> accountAvatar;
     bool avatarVisible = false;
     QTimer tailnetPoll;
     QString tailnetFeedback;
@@ -217,26 +255,46 @@ private:
     bool refreshAfterRetirement = false;
     std::unique_ptr<Aurora::Session::SessionSupervisor> sessionSupervisor;
     std::optional<Connection> connection;
+
+    enum class RouteCheckMode { Playing, Recovery };
+
+    struct RouteQualityCheck
+    {
+        QUuid attempt;
+        quint64 generation;
+        RouteCheckMode mode = RouteCheckMode::Playing;
+        bool testingLan = false;
+        bool comparingWeakRoute = false;
+        bool testedPublicRoute = false;
+        QQueue<Aurora::Discovery::StreamHost> remaining;
+        std::optional<Aurora::Discovery::StreamHost> candidate;
+        std::optional<Aurora::Discovery::StreamHost> best;
+        std::optional<Aurora::Stream::RouteQuality> bestQuality;
+        std::optional<Aurora::Stream::RouteQuality> current;
+        quint64 lanProbe = 0;
+        quint64 opening = 0;
+        std::shared_ptr<aurora::tailscale::StreamLease> lease;
+        std::unique_ptr<Aurora::Stream::MoonlightProcess> worker;
+        QByteArray output;
+    };
+    QTimer routeQualityDelay;
+    QTimer routeQualityDeadline;
+    QTimer routeQualityBudget;
+    std::optional<RouteQualityCheck> routeQuality;
+
     struct PairingAttempt
     {
         quint64 generation;
-        QByteArray key;
-        QDeadlineTimer connectDeadline{6000};
-        quint64 allocation = 0;
+        Aurora::Pairing::RequestKind kind = Aurora::Pairing::RequestKind::Pair;
         quint64 exchange = 0;
-        std::shared_ptr<aurora::tailscale::PairingLease> lease;
-        QPointer<QTcpSocket> socket;
         std::optional<QString> cancellation;
-#ifdef Q_OS_WIN
-        quint64 systemRequest = 0;
-#endif
+        bool renewingGrant = false;
+        std::optional<Aurora::Session::SessionResult> interruptedPlayback;
     };
-    std::unique_ptr<Aurora::Pairing::Client::Coordinator> pairingClient;
-#ifdef Q_OS_WIN
-    std::unique_ptr<aurora::tailscale::system::SystemPairingNc> systemPairing;
-#endif
+    std::unique_ptr<Aurora::Pairing::Client::TailnetExchange> pairingClient;
     std::optional<PairingAttempt> pairingAttempt;
-    QTimer pairingConnectRetry;
+    QTimer clientGrantRenewal;
+    Aurora::Pairing::Client::ClientGrantCache clientGrantCache;
     QTimer connectionStatusRetry;
     std::unique_ptr<Aurora::Stream::MoonlightProcess> trustCheck;
     QTimer trustDeadline;

@@ -1,0 +1,6 @@
+[submodule "moonlight"]
+	path = desktop/upstream/moonlight-aurora
+	url = https://github.com/blowingwind05/moonlight-aurora.git
+[submodule "sunshine"]
+	path = desktop/upstream/sunshine-aurora
+	url = https://github.com/blowingwind05/Sunshine-aurora.git

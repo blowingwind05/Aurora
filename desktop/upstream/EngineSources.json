@@ -1,0 +1,12 @@
+{
+  "moonlight": {
+    "upstreamRepository": "https://github.com/moonlight-stream/moonlight-qt.git",
+    "upstreamRelease": "v6.0.0",
+    "upstreamRevision": "e7a2d9f44d7b43fe7f6d2e0f08bf55b7cca48818"
+  },
+  "sunshine": {
+    "upstreamRepository": "https://github.com/SunshineStream/Sunshine.git",
+    "upstreamRelease": "v2026.914.233613",
+    "upstreamRevision": "63d35f702ee9e362e43263742981836ec0710384"
+  }
+}

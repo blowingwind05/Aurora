@@ -65,7 +65,7 @@ Item {
         })
         mouseMode: ({value: "desktop", writable: true, options: [
             {value: "desktop", label: qsTr("桌面指针")}, {value: "relative", label: qsTr("锁定鼠标（相对）")} ]})
-        privacyScreenMessage: qsTr("远端未回报隐私屏保支持。")
+        privacyScreen: ({mode: "off", writable: true})
 
         onDisplayRequested: function(displayId) {
             activeDisplayId = displayId
@@ -75,6 +75,7 @@ Item {
             fullScreen = enabled
             console.log("fullscreen", enabled)
         }
+        onPrivacyModeRequested: function(mode) { privacyScreen = ({mode: mode, writable: true}) }
         onCancelRequested: console.log("cancel")
         onDisconnectRequested: console.log("disconnect")
         onCreateDisplayRequested: console.log("createDisplay")

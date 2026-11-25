@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 import QtQuick 2.15
 import QtQuick.Controls 2.15
-import ".." as Aurora
+import "../common" as Aurora
 
 FocusScope {
     id: bar

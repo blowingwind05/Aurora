@@ -20,6 +20,18 @@ int main(int argc, char **argv)
         std::puts(qEnvironmentVariableIsSet("PAIR_FIXTURE_BAD_RELAY") ? "unexpected" : "--aurora-background --aurora-pair-id");
         return 0;
     }
+    if (args.size() == 4 && args.at(1) == "--aurora-runtime" && args.at(2) == "client-proof") {
+        if (!QFileInfo::exists("portable.dat") || args.at(3).size() != 192 ||
+            args.at(3).mid(64, 64) != qEnvironmentVariable("AURORA_GAMESTREAM_HOST_CERTIFICATE_SHA256") ||
+            qEnvironmentVariableIsSet("AURORA_GAMESTREAM_RELAY_BASE"))
+            return 5;
+        QFile trace(QStringLiteral("trace"));
+        if (!trace.open(QIODevice::WriteOnly | QIODevice::Append))
+            return 6;
+        trace.write("proof\n");
+        std::puts("aurora-client-proof/1,Y2VydA==,c2ln");
+        return 0;
+    }
     const auto base = qEnvironmentVariable("AURORA_GAMESTREAM_RELAY_BASE");
     const auto uuid = qEnvironmentVariable("PAIR_FIXTURE_HOST");
     if (args.size() < 4 || args.at(1) != "--aurora-runtime" ||

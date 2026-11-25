@@ -14,7 +14,7 @@ gh attestation verify Aurora-macOS-arm64-integrated.zip --repo blowingwind05/Aur
 本地编译或离线传输可用仓库里的脚本验证 SHA-256。保留原始文件名，将校验文件放在同一目录。便携目录把 `-Path` 指向解压后的目录。
 
 ```powershell
-pwsh -File ./desktop/Artifact-Checksums.ps1 -Path ./AuroraSetup.exe -Verify
+pwsh -File ./desktop/packaging/Artifact-Checksums.ps1 -Path ./AuroraSetup.exe -Verify
 ```
 
 ```sh

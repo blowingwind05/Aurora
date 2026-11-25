@@ -38,7 +38,7 @@ Item {
     SignalSpy { id: fpsSpy; target: chrome; signalName: "frameRateRequested" }
     SignalSpy { id: hdrSpy; target: chrome; signalName: "hdrRequested" }
     SignalSpy { id: bitrateSpy; target: chrome; signalName: "bitrateRequested" }
-    SignalSpy { id: privacySpy; target: chrome; signalName: "privacyScreenRequested" }
+    SignalSpy { id: privacySpy; target: chrome; signalName: "privacyModeRequested" }
     SignalSpy { id: mouseSpy; target: chrome; signalName: "mouseModeRequested" }
     SignalSpy { id: audioSpy; target: chrome; signalName: "audioConfigurationRequested" }
     SignalSpy { id: remoteAudioSpy; target: chrome; signalName: "remoteAudioMutedRequested" }
@@ -290,21 +290,60 @@ Item {
             compare(chrome.panelKind, "displays")
         }
 
+        function test_privacyModesUseConfirmedState() {
+            menu("safety")
+            var choices = lookup("privacyScreen")
+            var off = lookup("privacyScreen:off")
+            var displayOff = lookup("privacyScreen:display-off")
+            var screensaver = lookup("privacyScreen:screensaver")
+            compare(choices.label, "隐私保护")
+            compare(choices.setting.options.length, 3)
+            compare(off.text, "关闭")
+            compare(displayOff.text, "关闭显示器")
+            compare(screensaver.text, "隐私屏保")
+            var options = [off, displayOff, screensaver]
+            options.forEach(function(option) {
+                verify(!option.enabled)
+                verify(!option.selected)
+            })
+
+            chrome.privacyScreen = ({mode: "off", writable: true})
+            verify(off.selected)
+            click("privacyScreen:off")
+            compare(privacySpy.count, 0)
+            click("privacyScreen:display-off")
+            compare(privacySpy.count, 1)
+            compare(privacySpy.signalArguments[0][0], "display-off")
+            verify(off.selected)
+            verify(!displayOff.selected)
+
+            chrome.privacyScreen = ({mode: "display-off", writable: false})
+            verify(displayOff.selected)
+            verify(!off.enabled)
+            verify(!displayOff.enabled)
+            verify(!screensaver.enabled)
+            click("privacyScreen:screensaver")
+            compare(privacySpy.count, 1)
+
+            chrome.privacyScreen = ({mode: "display-off", writable: true})
+            click("privacyScreen:screensaver")
+            compare(privacySpy.count, 2)
+            compare(privacySpy.signalArguments[1][0], "screensaver")
+            verify(displayOff.selected)
+
+            chrome.privacyScreen = ({mode: "screensaver", writable: true})
+            verify(screensaver.selected)
+            click("privacyScreen:off")
+            compare(privacySpy.count, 3)
+            compare(privacySpy.signalArguments[2][0], "off")
+            verify(screensaver.selected)
+        }
+
         function test_immediateControls() {
             menu("input")
             click("mouseMode:relative")
             compare(mouseSpy.signalArguments[0][0], "relative")
             verify(lookup("mouseMode:desktop").selected)
-            click("controlBack")
-            click("controlPage:safety")
-            verify(!lookup("privacyScreen").enabled)
-            chrome.privacyScreen = ({value: false, writable: true})
-            click("privacyScreen")
-            compare(privacySpy.signalArguments[0][0], true)
-            compare(chrome.privacyScreen.value, false)
-            chrome.privacyScreen = ({value: true, writable: false})
-            click("privacyScreen")
-            compare(privacySpy.count, 1)
             click("controlBack")
             click("fullScreen")
             compare(fullscreenSpy.signalArguments[0][0], true)

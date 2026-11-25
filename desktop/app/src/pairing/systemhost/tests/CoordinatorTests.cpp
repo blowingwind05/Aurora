@@ -5,7 +5,7 @@
 #include "PairingWire.h"
 #include "SystemPairingCoordinator.h"
 #include "WindowsTransport.h"
-#include "../../sunshine/lifecycle/tests/LoopbackFixture.h"
+#include "../../../adaptors/sunshine/lifecycle/tests/LoopbackFixture.h"
 
 #include <QCoreApplication>
 #include <QDir>
@@ -66,7 +66,7 @@ void writeFile(const QString &path, const QByteArray &value)
     CHECK(file.write(value) == value.size());
 }
 
-QByteArray hello(const QString &source)
+QByteArray hello(const QString &source, RequestKind kind)
 {
     const QHostAddress peer(source);
     const bool v6 = peer.protocol() == QAbstractSocket::IPv6Protocol;
@@ -85,7 +85,7 @@ QByteArray hello(const QString &source)
     qToBigEndian<quint16>(Port, body.data() + 2 * length + 2);
     char size[2];
     qToBigEndian<quint16>(quint16(body.size()), size);
-    return bytes.append(size, 2) + body + requestFrame();
+    return bytes.append(size, 2) + body + requestFrame(kind);
 }
 
 QJsonObject row(const Offer &offer, const QString &source = ipv4)
@@ -191,7 +191,7 @@ struct Fixture
         CHECK(layout);
         const QDir payload(layout->payloadDirectory());
         for (const auto &file : {layout->executable(), payload.filePath("zlib1.dll"),
-                 payload.filePath("assets/apps.json"), payload.filePath("assets/web/index.html")}) {
+                 payload.filePath("assets/apps.json"), payload.filePath("assets/box.png")}) {
             CHECK(QDir().mkpath(QFileInfo(file).absolutePath()));
             writeFile(file, "synthetic fixture");
         }
@@ -244,7 +244,7 @@ struct Fixture
         CHECK(waitFor([&] { return coordinator->phase() == Phase::Listening; }));
     }
 
-    void dial(QTcpSocket &socket, const QString &source = ipv4)
+    void dial(QTcpSocket &socket, const QString &source = ipv4, RequestKind kind = RequestKind::Pair)
     {
         QFile log(path("relay-port"));
         CHECK(log.open(QIODevice::ReadOnly));
@@ -253,7 +253,7 @@ struct Fixture
         CHECK(ok && port);
         socket.setProxy(QNetworkProxy::NoProxy);
         socket.connectToHost(QHostAddress::LocalHost, port);
-        CHECK(socket.waitForConnected(2000) && socket.write(hello(source)) > 0);
+        CHECK(socket.waitForConnected(2000) && socket.write(hello(source, kind)) > 0);
     }
 
     Offer offer(QTcpSocket &socket, Offer::State expected = Offer::State::Ready)
@@ -303,6 +303,20 @@ void approved(const QString &cli, const QDir &tls)
     test.start();
 
     for (const auto &source : {ipv4, ipv6}) {
+        QTcpSocket identity;
+        const auto approvals = test.server.approvals.size();
+        test.dial(identity, source, RequestKind::HostIdentity);
+        CHECK(waitFor([&] { return identity.bytesAvailable() == HostIdentityFrameSize; }));
+        CHECK(parseHostIdentityFrame(identity.readAll()) == test.context->scope.certificateSha256);
+        CHECK(test.server.approvals.size() == approvals);
+
+        QTcpSocket candidates;
+        test.dial(candidates, source, RequestKind::HostRoutes);
+        CHECK(waitFor([&] { return candidates.bytesAvailable() == HostRoutesFrameSize; }));
+        const auto routes = parseHostRoutesFrame(candidates.readAll());
+        CHECK(routes && routes->certificateSha256 == test.context->scope.certificateSha256);
+        CHECK(test.server.approvals.size() == approvals);
+
         test.server.pairings = {};
         QTcpSocket client;
         test.dial(client, source);

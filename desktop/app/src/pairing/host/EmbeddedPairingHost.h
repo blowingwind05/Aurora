@@ -98,6 +98,7 @@ private:
     void sourceFinished(quint64 generation, quint64 request, const aurora::tailscale::PairSourceResult &result);
     void approve(Attempt *attempt);
     void finish(Attempt *attempt, bool reject = false);
+    void finishWithReply(Attempt *attempt, const QByteArray &reply);
 
     QPointer<aurora::tailscale::EmbeddedStatusClient> client_;
     HostSunshine sunshine_;
@@ -113,6 +114,7 @@ private:
     quint64 openingRequest_ = 0;
     quint64 rpcGeneration_ = 0;
     bool pendingCompatibility_ = false;
+    bool supportsClientGrant_ = false;
     std::shared_ptr<aurora::tailscale::PairingLease> lease_;
     QSet<Attempt *> attempts_;
     Attempt *pairing_ = nullptr;

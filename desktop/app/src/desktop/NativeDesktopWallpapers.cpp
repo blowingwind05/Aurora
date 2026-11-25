@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "NativeDesktop.h"
-#include "pairing/client/MoonlightPin.h"
+#include "adaptors/moonlight/MoonlightPin.h"
 
 #include <QFileInfo>
 #include <QUrl>
@@ -69,7 +69,7 @@ void NativeDesktop::initializeDeviceWallpapers(const QString &runtime)
         request.route = route;
         request.wallpaperRevision = QStringLiteral("-");
         const auto command = Aurora::Stream::makeCommand(wallpaperMoonlight, request);
-        if (!command.command || Aurora::Pairing::Client::Detail::readPin(*command.command, host.id).isEmpty()) {
+        if (!command.command || Aurora::Stream::readPin(*command.command, host.id).isEmpty()) {
             tryWallpaperRoute();
             return;
         }

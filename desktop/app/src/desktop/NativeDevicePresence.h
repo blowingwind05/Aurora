@@ -4,7 +4,7 @@
 #include "discovery/Discovery.h"
 #include "discovery/serverinfo/ServerInfoClient.h"
 #include "presence/UdpPresenceTransport.h"
-#include "tailscale/EmbeddedStatusClient.h"
+#include "adaptors/tailscale/EmbeddedStatusClient.h"
 
 #include <QObject>
 #include <QPointer>
@@ -30,9 +30,12 @@ public:
     const Aurora::Discovery::TailnetSnapshot &tailnet() const { return tailnetDevices; }
     Aurora::Discovery::ServerInfo::Client &routeClient() { return serverInfo; }
     void setSessionActive(bool active);
+    quint64 probeSessionLan(const QString &peerId);
+    void cancelSessionLanProbe(quint64 request);
 
 signals:
     void changed();
+    void sessionLanProbed(quint64 request, const QList<QHostAddress> &addresses);
 
 private:
     void receiveScan(quint64 request, const Aurora::Presence::ScanResult &result);
@@ -65,6 +68,7 @@ private:
     std::optional<aurora::tailscale::AccountIdentity> account;
     quint64 accountGeneration = 0;
     quint64 lanRequest = 0;
+    QString sessionLanPeer;
     quint64 peersRequest = 0;
     bool hosting = false;
     bool embeddedMode = false;

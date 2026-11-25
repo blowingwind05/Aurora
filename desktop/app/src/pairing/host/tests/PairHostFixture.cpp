@@ -61,11 +61,11 @@ int run(const QDir &dir)
         } else if (method == "pair-source") {
             const auto port = params.value("sourcePort").toInt();
             if (!leased || !account || params.value("peerId").toString() != node ||
-                params.value("address").toString() != "100.76.1.20" || port <= 0 || port > 65535)
+                params.value("address").toString() != "100.76.1.20" || port < 0 || port > 65535)
                 return 6;
             if (!append(dir.filePath("proofs"), QByteArray::number(port) + '\n'))
                 return 7;
-            result = {{"verified", port == 51007}};
+            result = {{"verified", port == 0 || port == 51007}};
         } else if (method == "close") {
             if (!leased || params.value("leaseId") != QJsonValue("00000000000000000000000000000001"))
                 return 8;

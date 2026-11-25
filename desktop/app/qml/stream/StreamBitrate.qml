@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-only
 import QtQuick 2.15
 import QtQuick.Controls 2.15
-import ".." as Aurora
+import "../common" as Aurora
 
 Column {
     id: field
     property var setting: null
+    property int liveLimit: 0
     readonly property bool hasValue: setting !== null && typeof setting.value === "number"
     readonly property bool hasRange: hasValue && setting.maximum > setting.minimum && setting.step > 0
     readonly property int confirmed: hasValue ? setting.value : 0
@@ -86,5 +87,13 @@ Column {
             border.width: slider.visualFocus ? 2 : 0
             border.color: Aurora.AuroraTheme.ink
         }
+    }
+
+    StreamText {
+        width: parent.width
+        visible: field.hasRange && field.liveLimit > 0
+        text: qsTr("%1 Mbps 以内即时生效").arg((field.liveLimit / 1000).toLocaleString(Qt.locale(), "g", 6))
+        color: Aurora.AuroraTheme.muted
+        font.pixelSize: 11
     }
 }

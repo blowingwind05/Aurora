@@ -84,6 +84,7 @@ private:
     quint64 run_ = 0;
     quint64 host_ = 0;
     quint64 pendingApproval_ = 0;
+    bool supportsClientGrant_ = false;
     QString approvalSession_;
 };
 

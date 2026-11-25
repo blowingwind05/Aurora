@@ -1,10 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-only
 import QtQuick 2.15
 import QtQuick.Window 2.15
+import "common"
+import "shell"
+import "pages" as Pages
+import "pages/tailscale" as Tailscale
 
 AuroraMainWindow {
     id: shell
     visible: snapshot.windowVisible !== false
+    nativeWindowsFrame: typeof auroraNativeWindowsFrame !== "undefined" && auroraNativeWindowsFrame
     deviceModel: devices
     deviceEpoch: Number.isInteger(snapshot.deviceEpoch) ? snapshot.deviceEpoch : -1
     hostState: snapshot.host || ({})
@@ -22,7 +27,7 @@ AuroraMainWindow {
     moreFeedbackAddress: auroraMore.feedbackAddress
     checkingUpdates: auroraMore.checking
 
-    readonly property var snapshot: auroraBridge.state
+    readonly property var snapshot: auroraBridge ? auroraBridge.state : ({})
 
     readonly property var generalSettings: snapshot.generalSettings || null
     property int nextPreferenceRequestId: 0
@@ -48,7 +53,7 @@ AuroraMainWindow {
             tailscaleToastTimer.restart()
     }
 
-    TailscaleConfirmation {
+    Tailscale.TailscaleConfirmation {
         confirmation: shell.tailscaleAccount.confirmation || null
         returnFocusItem: shell.tailscaleActionFocus
         hostBusy: shell.tailscaleAccount.busy === true
@@ -83,7 +88,7 @@ AuroraMainWindow {
 
     Component {
         id: tailscalePage
-        TailscaleAccountPage {
+        Tailscale.TailscaleAccountPage {
             account: shell.tailscaleAccount
             avatarPhoto: shell.accountAvatar
             compact: shell.compact
@@ -107,7 +112,7 @@ AuroraMainWindow {
     Component {
         id: generalPage
 
-        GeneralSettingsPage {
+        Pages.GeneralSettingsPage {
             objectName: "liveGeneralSettings"
             compact: shell.compact
             narrow: shell.narrow
@@ -120,6 +125,9 @@ AuroraMainWindow {
             onCloseToTrayRequested: function(enabled) { shell.requestPreference("set-close-to-tray", enabled) }
             onStartupEnabledRequested: function(enabled) { shell.requestPreference("set-startup-enabled", enabled) }
             onSleepModeRequested: function(mode) { shell.requestPreference("set-sleep-mode", mode) }
+            onPrivacyUiAccessTestRequested: function(enabled) {
+                shell.requestPreference("set-privacy-uiaccess-test", enabled)
+            }
         }
     }
 
@@ -153,6 +161,8 @@ AuroraMainWindow {
     }
 
     onSnapshotChanged: {
+        if (!auroraBridge)
+            return
         syncDevices()
         const activation = snapshot.windowActivation || 0
         if (activation === lastWindowActivation)

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "NativeDesktop.h"
-#include "stream/control/ControlAdapter.h"
+#include "adaptors/moonlight/control/ControlAdapter.h"
 
 #include <algorithm>
 #include <utility>

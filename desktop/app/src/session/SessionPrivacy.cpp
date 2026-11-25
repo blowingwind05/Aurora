@@ -22,20 +22,27 @@ bool sameEndpoint(const Endpoint &a, const Endpoint &b)
 
 } // namespace
 
-bool SessionSupervisor::matchesPrivacyRoute(const SessionPrivacyRoute &route) const
+bool SessionSupervisor::matchesControlRoute(const SessionControlRoute &route) const
 {
     const auto &checked = route.revalidated;
     const auto &selected = route.selected;
-    if (checked.status != Discovery::ServerInfo::Status::Complete || !checked.current ||
-        !checked.current->supportsSessionPrivacy || selected.viaEmbeddedTailnet != resolved_.viaEmbeddedTailnet ||
-        checked.current->viaEmbeddedTailnet != selected.viaEmbeddedTailnet ||
-        !Discovery::sameHostIdentity(selected.id, resolved_.hostId) ||
-        !Discovery::sameHostIdentity(selected.id, checked.current->id) ||
-        !sameEndpoint(selected.endpoint, checked.current->endpoint)) {
+    if (selected.viaEmbeddedTailnet != resolved_.viaEmbeddedTailnet ||
+        !Discovery::sameHostIdentity(selected.id, resolved_.hostId)) {
         return false;
     }
 
     const Endpoint workerEndpoint{resolved_.address, quint16(resolved_.port)};
+    if (!checked) {
+        return selected.publicIpv6 && !selected.viaEmbeddedTailnet && !route.checkedRelay &&
+            workerEndpoint.address.protocol() == QAbstractSocket::IPv6Protocol &&
+            resolved_.certificateSha256.size() == 32 && sameEndpoint(selected.endpoint, workerEndpoint);
+    }
+    if (checked->status != Discovery::ServerInfo::Status::Complete || !checked->current ||
+        checked->current->viaEmbeddedTailnet != selected.viaEmbeddedTailnet ||
+        !Discovery::sameHostIdentity(selected.id, checked->current->id) ||
+        !sameEndpoint(selected.endpoint, checked->current->endpoint)) {
+        return false;
+    }
     if (const auto *embedded = std::get_if<EmbeddedRoute>(&candidate_.route)) {
         return lease_ && lease_->isValid() && route.checkedRelay &&
             sameEndpoint(*route.checkedRelay, workerEndpoint) &&
@@ -44,26 +51,48 @@ bool SessionSupervisor::matchesPrivacyRoute(const SessionPrivacyRoute &route) co
     return !route.checkedRelay && sameEndpoint(selected.endpoint, workerEndpoint);
 }
 
+bool SessionSupervisor::canUseSessionControls() const
+{
+    return controlRoute_ && (controlRoute_->revalidated || pinnedControlAvailable_);
+}
+
+bool SessionSupervisor::canQueryPrivacy() const
+{
+    return canUseSessionControls() && (!controlRoute_->revalidated ||
+        controlRoute_->revalidated->current->supportsSessionPrivacy);
+}
+
+bool SessionSupervisor::privacyAllowsPlaybackReplacement() const
+{
+    return privacyRequest_.isNull() && (!canQueryPrivacy() || privacyState_ == PrivacyState::Off ||
+        privacyState_ == PrivacyState::Unsupported);
+}
+
 QVariant SessionSupervisor::privacyScreen() const
 {
-    if (phase_ != Phase::Streaming || !privacyRoute_ || !privacyState_ ||
-        *privacyState_ == PrivacyState::Unavailable) {
+    if (phase_ != Phase::Streaming || !canQueryPrivacy() || !privacyState_ ||
+        *privacyState_ == PrivacyState::Unavailable || *privacyState_ == PrivacyState::Unsupported) {
         return {};
     }
-    return QVariantMap{{QStringLiteral("value"), *privacyState_ == PrivacyState::On},
+    const auto mode = privacyState_ == PrivacyState::DisplayOff ? QStringLiteral("display-off")
+        : privacyState_ == PrivacyState::On ? QStringLiteral("screensaver") : QStringLiteral("off");
+    return QVariantMap{{QStringLiteral("value"), *privacyState_ != PrivacyState::Off},
+                       {QStringLiteral("mode"), mode},
                        {QStringLiteral("writable"), privacyRequest_.isNull()}};
 }
 
 QString SessionSupervisor::privacyScreenMessage() const
 {
-    if (phase_ != Phase::Streaming || !privacyRoute_)
+    if (phase_ != Phase::Streaming || !canQueryPrivacy())
         return {};
     if (!privacyRequest_.isNull())
-        return privacyChanging_ ? tr("正在切换隐私屏保…") : tr("正在检查隐私屏保…");
-    if (!privacyState_)
-        return tr("隐私屏保状态未确认，重新打开控制中心可重试。");
-    if (*privacyState_ == PrivacyState::Unavailable)
-        return tr("当前会话不支持隐私屏保");
+        return privacyTarget_ ? tr("正在切换隐私保护…") : tr("正在检查隐私保护…");
+    if (!privacyFeedback_.isEmpty())
+        return privacyFeedback_;
+    if (!privacyState_ || *privacyState_ == PrivacyState::Unavailable)
+        return tr("隐私保护状态未确认，重新打开控制中心可重试。");
+    if (*privacyState_ == PrivacyState::Unsupported)
+        return tr("当前会话不支持隐私保护");
     return {};
 }
 
@@ -74,29 +103,44 @@ void SessionSupervisor::refreshPrivacyScreen()
 
 void SessionSupervisor::setPrivacyScreen(bool enabled)
 {
-    if (privacyState_ == PrivacyState::Off && enabled)
+    setPrivacyMode(enabled ? QStringLiteral("screensaver") : QStringLiteral("off"));
+}
+
+void SessionSupervisor::setPrivacyMode(const QString &mode)
+{
+    if (!privacyState_ || privacyState_ == PrivacyState::Unavailable || privacyState_ == PrivacyState::Unsupported)
+        return;
+    if (mode == QLatin1String("screensaver") && privacyState_ != PrivacyState::On)
         startPrivacy(Operation::PrivacyOn);
-    else if (privacyState_ == PrivacyState::On && !enabled)
+    else if (mode == QLatin1String("display-off") && privacyState_ != PrivacyState::DisplayOff)
+        startPrivacy(Operation::PrivacyDisplayOff);
+    else if (mode == QLatin1String("off") && privacyState_ != PrivacyState::Off)
         startPrivacy(Operation::PrivacyOff);
 }
 
 void SessionSupervisor::startPrivacy(Operation operation)
 {
-    if (phase_ != Phase::Streaming || !privacyRoute_ || !privacyRequest_.isNull() ||
+    if (phase_ != Phase::Streaming || videoSettingsPending() || !canQueryPrivacy() || !privacyRequest_.isNull() ||
         !worker_ || worker_->state() != QProcess::Running || !surface_.videoReady()) {
         return;
     }
 
     const auto token = QUuid::createUuid();
     const auto attempt = attempt_;
-    Control::Authorization grant{token, operation, executable_, privacyRoute_->selected, privacyRoute_->revalidated,
-        privacyRoute_->checkedRelay, lease_, [this, attempt](const QUuid &current) {
-            return attempt_ == attempt && privacyRequest_ == current && privacyRoute_ &&
+    Control::Authorization grant{token, operation, executable_, controlRoute_->selected, controlRoute_->revalidated,
+        controlRoute_->checkedRelay, lease_, [this, attempt](const QUuid &current) {
+            return attempt_ == attempt && privacyRequest_ == current && canQueryPrivacy() &&
                 phase_ == Phase::Streaming && surface_.videoReady() && worker_ && worker_->state() == QProcess::Running;
-        }};
+        }, {}, resolved_.certificateSha256};
     if (privacyControl_->start(std::move(grant))) {
         privacyRequest_ = token;
-        privacyChanging_ = operation != Operation::PrivacyStatus;
+        privacyFeedback_.clear();
+        switch (operation) {
+        case Operation::PrivacyOn: privacyTarget_ = PrivacyState::On; break;
+        case Operation::PrivacyOff: privacyTarget_ = PrivacyState::Off; break;
+        case Operation::PrivacyDisplayOff: privacyTarget_ = PrivacyState::DisplayOff; break;
+        default: privacyTarget_.reset(); break;
+        }
         emit privacyScreenChanged();
     }
 }
@@ -106,23 +150,29 @@ void SessionSupervisor::privacyFinished(const QUuid &token, const Control::Resul
     if (token != privacyRequest_)
         return;
     privacyRequest_ = {};
+    const auto requestedMode = std::exchange(privacyTarget_, std::nullopt);
     if (pendingFinish_) {
         completeFinish();
         return;
     }
-    if (phase_ == Phase::Streaming && privacyRoute_ && surface_.videoReady() &&
+    if (phase_ == Phase::Streaming && canQueryPrivacy() && surface_.videoReady() &&
         worker_ && worker_->state() == QProcess::Running) {
         privacyState_ = result.status == Control::Status::PrivacyReported ? result.privacy : std::nullopt;
+        if (requestedMode && requestedMode != privacyState_) {
+            privacyFeedback_ = *requestedMode == PrivacyState::DisplayOff
+                ? tr("被控端未能准备好用于关屏的虚拟显示器。")
+                : tr("被控端未能确认新的隐私保护状态。");
+        }
         emit privacyScreenChanged();
     }
 }
 
 void SessionSupervisor::revokePrivacy()
 {
-    if (!privacyRoute_)
+    if (!canQueryPrivacy())
         return;
-    privacyRoute_.reset();
     privacyState_.reset();
+    privacyFeedback_.clear();
     if (!privacyRequest_.isNull())
         privacyControl_->cancel(privacyRequest_);
     emit privacyScreenChanged();

@@ -33,5 +33,61 @@ int main()
         parseOffer(QByteArray(1, 0)).state != Offer::State::Rejected ||
         parseOffer(accepted.chopped(1) + "x").state != Offer::State::Invalid)
         return 4;
+    const auto identity = hostIdentityFrame(key);
+    if (requestFrame().size() != requestFrame(RequestKind::HostIdentity).size() ||
+        parseRequestFrame(requestFrame()) != RequestKind::Pair ||
+        parseRequestFrame(requestFrame(RequestKind::HostIdentity)) != RequestKind::HostIdentity ||
+        parseRequestFrame(requestFrame(RequestKind::HostIdentity) + "x") ||
+        parseHostIdentityFrame(identity) != key ||
+        !parseHostIdentityFrame(accepted).isEmpty() ||
+        !parseHostIdentityFrame(identity + "x").isEmpty() ||
+        !hostIdentityFrame(key.chopped(1)).isEmpty())
+        return 5;
+    const QHostAddress global(QStringLiteral("2001:db8::56"));
+    const auto advertised = hostRoutesFrame(key, {QHostAddress::LocalHostIPv6, QHostAddress(QStringLiteral("fe80::1")),
+        QHostAddress(QStringLiteral("fd7a:115c:a1e0::21")), global, global});
+    const auto routes = parseHostRoutesFrame(advertised);
+    auto invalid = advertised;
+    invalid[HostIdentityFrameSize] = char(HostRouteLimit + 1);
+    if (!routes || routes->certificateSha256 != key || routes->publicIpv6 != QList<QHostAddress>{global} ||
+        parseHostRoutesFrame(invalid) || parseHostRoutesFrame(advertised.chopped(1)) ||
+        parseRequestFrame(requestFrame(RequestKind::HostRoutes)) != RequestKind::HostRoutes ||
+        requestFrame(RequestKind::HostRoutes).size() != requestFrame().size())
+        return 6;
+    const auto instance = clientGrantInstance(QStringLiteral("host-launch"));
+    const auto modern = parseHostRoutesFrame(hostRoutesFrame(key, {global}, true, instance));
+    if (!modern || !modern->supportsClientGrant || modern->publicIpv6 != QList<QHostAddress>{global} ||
+        modern->grantInstance != instance || instance == clientGrantInstance(QStringLiteral("new-launch")) ||
+        routes->supportsClientGrant || !routes->grantInstance.isEmpty())
+        return 9;
+    const auto threeRoutes = parseHostRoutesFrame(hostRoutesFrame(key, {global, QHostAddress("2001:db8::2"),
+        QHostAddress("2001:db8::3")}, true, instance));
+    if (!threeRoutes || !threeRoutes->supportsClientGrant || threeRoutes->publicIpv6.size() != 3 ||
+        !threeRoutes->grantInstance.isEmpty())
+        return 10;
+
+    const auto grant = grantChallenge(challenge, key, 42, QStringLiteral("network"),
+        QStringLiteral("host-node"), QStringLiteral("client-node"), {global}, instance);
+    const auto grantOffer = parseGrantChallenge(grant);
+    auto changedPin = grant;
+    if (changedPin.size() == GrantChallengeFrameSize)
+        changedPin[1 + int(Aurora::ClientProof::DigestSize)] = char(0xff);
+    if (!grantOffer || grantOffer->challenge.size() != Aurora::ClientProof::ChallengeSize ||
+        grantOffer->challenge.left(Aurora::ClientProof::DigestSize) != challenge ||
+        grantOffer->routes.certificateSha256 != key || grantOffer->routes.publicIpv6 != QList<QHostAddress>{global} ||
+        grantOffer->routes.grantInstance != instance ||
+        parseGrantChallenge(changedPin) || parseGrantChallenge(grant.chopped(1)) ||
+        parseRequestFrame(requestFrame(RequestKind::ClientGrant)) != RequestKind::ClientGrant)
+        return 7;
+
+    const auto proof = grantProofFrame({key, challenge});
+    const auto decoded = parseGrantProof(proof);
+    if (!decoded || decoded->certificate != key || decoded->signature != challenge ||
+        parseGrantProof(proof + "extra") || parseGrantProof(proof.chopped(1)) ||
+        grantProofFrame({key, QByteArray(Aurora::ClientProof::MaxSignatureBytes + 1, 'x')}).size() != 0 ||
+        parseGrantReply(grantReplyFrame(GrantReply::Accepted)) != GrantReply::Accepted ||
+        parseGrantReply(grantReplyFrame(GrantReply::Unsupported)) != GrantReply::Unsupported ||
+        parseGrantReply(accepted))
+        return 8;
     return 0;
 }

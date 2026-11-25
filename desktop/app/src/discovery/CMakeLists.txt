@@ -16,7 +16,7 @@ target_link_libraries(aurora_native_discovery PUBLIC Qt${QT_VERSION_MAJOR}::Core
 if(CMAKE_CURRENT_SOURCE_DIR STREQUAL CMAKE_SOURCE_DIR AND BUILD_TESTING)
     add_executable(AuroraDiscoveryFixtures DiscoveryFixtures.cpp)
     target_link_libraries(AuroraDiscoveryFixtures PRIVATE aurora_native_discovery)
-    foreach(fixture catalog trust routes consumer)
+    foreach(fixture catalog trust routes consumer session-lan)
         add_test(NAME discovery-${fixture} COMMAND AuroraDiscoveryFixtures ${fixture})
     endforeach()
     add_executable(AuroraKnownDevicesFixtures KnownDevicesFixtures.cpp)

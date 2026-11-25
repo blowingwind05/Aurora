@@ -287,9 +287,10 @@ void consumer()
     CHECK(visible.size() == 2);
     CHECK(visible[0].id == desk.id && visible[1].id == lap.id);
     const auto row = qtDeviceRow(visible[0], "file:///fixture.webp");
-    CHECK(row.size() == 7);
+    CHECK(row.size() == 8);
     CHECK(row.value("deviceId").toString() == desk.id && row.value("displayName").toString() == "studio");
     CHECK(row.value("online").toBool() && row.value("canConnect").toBool());
+    CHECK(row.value("supportsPower").isBool() && !row.value("supportsPower").toBool());
     CHECK(row.value("lanAddress").toString() == Near.toString());
     CHECK(row.value("tailscaleAddress").toString() == desk.alternateAddress.toString());
     CHECK(row.value("wallpaperUrl").toString() == "file:///fixture.webp");
@@ -303,13 +304,36 @@ void consumer()
     CHECK(qtDeviceRow(noLanPresence).value("lanAddress").toString() == Near.toString());
 }
 
+void sessionLan()
+{
+    const auto studio = peer("peer", "Studio", Far, Far6);
+    NetworkSnapshot network{QHostAddress("100.64.2.90"), 42, "current", {studio}};
+    const KnownIdentities known{{studio.id, StudioId}, {"revoked", StudioId}};
+    const QHostAddress moved("192.168.3.22");
+    const QHostAddress another("192.168.3.23");
+    const QHostAddress disabled("192.168.3.24");
+    auto notHosting = presence(StudioId, disabled);
+    notHosting.hosting = false;
+
+    CHECK(nearbyHostAddresses(network, known, studio.id, {}).isEmpty());
+    QList<PresentDevice> replies{presence(OtherId, Near), presence(StudioId, moved),
+        presence(StudioId, moved), notHosting, presence(StudioId, another)};
+    CHECK(nearbyHostAddresses(network, known, studio.id, replies) == (QList<QHostAddress>{moved, another}));
+    replies.append(presence(OtherId, moved));
+    CHECK(nearbyHostAddresses(network, known, studio.id, replies) == (QList<QHostAddress>{another}));
+    CHECK(nearbyHostAddresses(network, known, "revoked", replies).isEmpty());
+    CHECK(nearbyHostAddresses(network, {}, studio.id, replies).isEmpty());
+    network.owner = 0;
+    CHECK(nearbyHostAddresses(network, known, studio.id, replies).isEmpty());
+}
+
 } // namespace
 
 int main(int argc, char **argv)
 {
     const QCoreApplication app(argc, argv);
     const QHash<QString, void (*)()> fixtures{
-        {"catalog", catalog}, {"trust", trust}, {"routes", routes}, {"consumer", consumer}
+        {"catalog", catalog}, {"trust", trust}, {"routes", routes}, {"consumer", consumer}, {"session-lan", sessionLan}
     };
 
     try {
