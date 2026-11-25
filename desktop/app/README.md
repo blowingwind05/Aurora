@@ -11,7 +11,13 @@ Windows 和 macOS 共用的 Qt Quick 界面和 C++ 桌面应用。发布入口�
 | [src/platform](src/platform) | 窗体、单实例、托盘、开机启动和操作系统适配 |
 | [src](src) | 业务模块与可独立运行的测试 |
 
-QML 将动作交给同一进程的 `DesktopBridge`，并订阅 `NativeDesktop` 发布的状态。设备动作携带设备 ID 和目录版本。账号动作携带账号版本。Sunshine 设置按管理会话和请求 ID 确认写入。
+### QML 与 C++ 界面代码的分工
+
+- `qml/` 负责页面布局、样式、动画、键盘和鼠标交互，以及将现有状态显示给用户。
+- `src/ui/` 负责 QML 与应用的状态桥接、Qt 窗口生命周期，以及需要 C++ 支持的界面动作。`DesktopBridge` 接收 QML 动作并发布状态，`StreamSessionWindow` 创建和关闭 Qt 串流窗口。
+- `src/desktop/` 负责应用决策，例如设备核验、选路、配对和会话控制。操作系统特有的窗口、托盘和进程行为归 `src/platform/`。
+
+点击「连接」时，QML 提交设备 ID 和目录版本，`DesktopBridge` 转交动作，`NativeDesktop` 核验设备并发起串流。需要创建 Qt 串流外窗时，由 `StreamSessionWindow` 加载相应 QML。Sunshine 设置按管理会话和请求 ID 确认写入。
 
 在配置 Qt 的开发环境中构建。Windows 使用 Visual Studio x64 开发者 PowerShell。
 
