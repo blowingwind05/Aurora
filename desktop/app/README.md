@@ -4,8 +4,9 @@ Windows 和 macOS 共用的 Qt Quick 界面和 C++ 桌面应用。发布入口�
 
 | 目录 | 内容 |
 | --- | --- |
-| [src/main.cpp](src/main.cpp) | 进程入口与 QML 状态连接 |
+| [src/main.cpp](src/main.cpp) | Qt 进程入口和应用组装 |
 | [qml](qml) | `Main.qml`、设备卡、账户、设置与串流控制 |
+| [src/ui](src/ui) | QML 状态桥接、串流窗口适配和界面资源 |
 | [src/desktop](src/desktop) | 应用状态、设备连接、配对、宿主和壁纸协调 |
 | [src/platform](src/platform) | 窗体、单实例、托盘、开机启动和操作系统适配 |
 | [src](src) | 业务模块与可独立运行的测试 |

@@ -5,6 +5,10 @@ find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Quick QuickControls2 Netw
 add_executable(Aurora src/main.cpp src/ui/AuroraMore.cpp src/ui/AuroraMore.h)
 target_sources(Aurora PRIVATE
     src/ui/aurora-brand.qrc
+    src/ui/DesktopBridge.cpp src/ui/DesktopBridge.h
+    src/ui/StreamSessionWindow.cpp src/ui/StreamSessionWindow.h
+    src/ui/DesktopBridge.cpp src/ui/DesktopBridge.h
+    src/ui/StreamSessionWindow.cpp src/ui/StreamSessionWindow.h
     src/desktop/NativeDesktop.cpp src/desktop/NativeDesktop.h
     src/desktop/NativeDesktopSessions.cpp src/desktop/NativeDesktopPairing.cpp src/desktop/NativeDesktopPairingHost.cpp
     src/desktop/NativeDesktopWallpapers.cpp src/desktop/NativeDesktopPower.cpp

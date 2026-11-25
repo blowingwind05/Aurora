@@ -41,8 +41,9 @@ pwsh -File ./desktop/Build-Mac.ps1 -Architecture arm64 -TailscaleDirectory ./des
 
 | 目录 | 职责 |
 | --- | --- |
-| [desktop/app/src/main.cpp](desktop/app/src/main.cpp) | 进程入口和 QML 请求转发 |
+| [desktop/app/src/main.cpp](desktop/app/src/main.cpp) | Qt 进程入口和应用组装 |
 | [desktop/app/qml](desktop/app/qml) | `Main.qml`、界面、主题和会话控件 |
+| [desktop/app/src/ui](desktop/app/src/ui) | QML 状态桥接和串流窗口适配 |
 | [desktop/app/src/desktop](desktop/app/src/desktop) | 账号、设备、会话和被控功能的协调 |
 | [desktop/app/src/platform](desktop/app/src/platform) | 进程单实例、托盘、开机启动和系统适配 |
 | [desktop/app/src](desktop/app/src) | 串流、Sunshine、Tailscale、配对和壁纸模块 |

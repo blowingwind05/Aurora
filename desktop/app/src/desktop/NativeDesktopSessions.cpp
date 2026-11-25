@@ -1,10 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "NativeDesktop.h"
-
-#include <QQmlComponent>
-#include <QQmlEngine>
-#include <QWindow>
-#include <QDebug>
+#include "ui/StreamSessionWindow.h"
 
 #include <algorithm>
 #include <utility>
@@ -24,12 +20,6 @@ std::optional<Endpoint> relayEndpoint(const Aurora::Stream::Route &route)
         return {};
     return Endpoint{route.address, quint16(route.port)};
 }
-}
-
-void NativeDesktop::setSessionWindowSource(QQmlEngine &engine, const QUrl &source)
-{
-    sessionEngine = &engine;
-    sessionWindowSource = source;
 }
 
 void NativeDesktop::initializeStreamSessions(const QString &applicationDirectory)
@@ -267,53 +257,24 @@ void NativeDesktop::launchPreparedSession()
     view.sessionPreferences = selection.sessionControlSnapshot();
     view.startFullScreen = selection.value(QStringLiteral("display-mode")) == QLatin1String("fullscreen");
 #ifdef Q_OS_WIN
-    if (!sessionEngine) {
-        failRoute(tr("无法打开串流窗口。"), false);
+    const auto windowError = sessionWindow.prepare(attempt.attempt, connection->name, *sessionSupervisor, view);
+    if (!windowError.isEmpty()) {
+        failRoute(windowError, false);
         return;
     }
-    QQmlComponent component(sessionEngine, sessionWindowSource);
-    if (!component.isReady()) {
-        qWarning().noquote() << component.errorString();
-        failRoute(tr("无法加载串流窗口。"), false);
-        return;
-    }
-    std::unique_ptr<QObject> object(component.createWithInitialProperties({
-        {QStringLiteral("session"), QVariant::fromValue(static_cast<QObject *>(sessionSupervisor.get()))},
-        {QStringLiteral("deviceName"), connection->name}
-    }));
-    auto *window = qobject_cast<QWindow *>(object.get());
-    if (!window) {
-        failRoute(tr("无法创建串流窗口。"), false);
-        return;
-    }
-    object.release();
-    sessionWindow.reset(window);
-    sessionWindowAttempt = attempt.attempt;
-    const int top = window->property("videoTop").toInt();
-    view.owner = window;
-    view.viewport = QRect(0, top, window->width(), qMax(0, window->height() - top));
 #endif
     if (!sessionSupervisor->start({attempt.attempt, attempt.generation, connection->privacy}, std::move(view))) {
         failRoute(tr("无法启动串流会话。"), false);
         return;
     }
     connection->launched = true;
-    if (sessionWindow)
-        sessionWindow->show();
+    sessionWindow.show();
     reportConnection({}, false);
 }
 
 void NativeDesktop::sessionFinished(const QUuid &attempt, quint64, const SessionResult &result)
 {
-    if (sessionWindow && sessionWindowAttempt == attempt) {
-        auto *window = sessionWindow.release();
-        sessionWindowAttempt = {};
-        window->setProperty("finished", true);
-        QTimer::singleShot(0, window, [window] {
-            window->close();
-            window->deleteLater();
-        });
-    }
+    sessionWindow.close(attempt);
     if (exitAfterSession) {
         exitAfterSession = false;
         requestExit();

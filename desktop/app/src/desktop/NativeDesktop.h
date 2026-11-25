@@ -29,15 +29,15 @@
 
 class QJsonObject;
 class QMenuBar;
-class QQmlEngine;
 class QTcpSocket;
+class StreamSessionWindow;
 
 class NativeDesktop final : public QObject
 {
     Q_OBJECT
 
 public:
-    NativeDesktop(const QString &version, const QString &dataDirectory);
+    NativeDesktop(const QString &version, const QString &dataDirectory, StreamSessionWindow &streamWindow);
     ~NativeDesktop() override;
     static QString bundledEntryPoint();
     const QVariantMap &state() const { return snapshot; }
@@ -45,7 +45,6 @@ public:
     void start();
     void activate(const QString &page = {});
     void handleRequest(const QJsonObject &request);
-    void setSessionWindowSource(QQmlEngine &engine, const QUrl &source);
 
 signals:
     void stateChanged(const QVariantMap &next);
@@ -158,6 +157,7 @@ private:
     };
 
     const QString directory;
+    StreamSessionWindow &sessionWindow;
     Aurora::Preferences::GeneralPreferences preferences;
     Aurora::Preferences::StreamPreferences streamPreferences;
     Aurora::Platform::HostSleepPrevention sleepPrevention;
@@ -241,10 +241,6 @@ private:
     std::optional<PairingAttempt> pairingAttempt;
     QTimer pairingConnectRetry;
     QTimer connectionStatusRetry;
-    QPointer<QQmlEngine> sessionEngine;
-    QUrl sessionWindowSource;
-    std::unique_ptr<QWindow> sessionWindow;
-    QUuid sessionWindowAttempt;
     std::unique_ptr<Aurora::Stream::MoonlightProcess> trustCheck;
     QTimer trustDeadline;
     struct DevicePowerAttempt

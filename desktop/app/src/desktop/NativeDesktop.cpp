@@ -16,7 +16,6 @@
 #include <QKeySequence>
 #include <QMenuBar>
 #include <QTimer>
-#include <QWindow>
 
 #include <algorithm>
 #include <utility>
@@ -61,8 +60,8 @@ QString hostAddress(const QHostAddress &address)
 }
 }
 
-NativeDesktop::NativeDesktop(const QString &version, const QString &dataDirectory)
-    : directory(dataDirectory), preferences(directory), streamPreferences(directory),
+NativeDesktop::NativeDesktop(const QString &version, const QString &dataDirectory, StreamSessionWindow &streamWindow)
+    : directory(dataDirectory), sessionWindow(streamWindow), preferences(directory), streamPreferences(directory),
       sleepPrevention(Aurora::Platform::parseHostSleepMode(sleepModeName(preferences.sleepMode()))
                           .value_or(HostSleepMode::System)),
       snapshot{{QStringLiteral("applicationVersion"), version},
