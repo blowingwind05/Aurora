@@ -35,11 +35,15 @@ jobs:
           cache: false
 
       - uses: jurplel/install-qt-action@v4
+        env:
+          AQT_CONFIG: ${{ github.workspace }}/.github/aqt-macos.ini
         with:
           version: '6.6.3'
           host: mac
           target: desktop
           arch: clang_64
+          cache: true
+          cache-key-prefix: install-qt-action-macos-${{ matrix.architecture }}
 
       - uses: actions/setup-python@v5
         with:
@@ -47,13 +51,16 @@ jobs:
 
       - name: Install Sunshine build dependencies
         run: |
-          brew install cmake node pkgconf icu4c@78 miniupnpc openssl@3 opus
-          python -m venv "$RUNNER_TEMP/aurora-host-python"
-          "$RUNNER_TEMP/aurora-host-python/bin/python" -m pip install 'Jinja2==3.1.6'
-          echo "$RUNNER_TEMP/aurora-host-python/bin" >> "$GITHUB_PATH"
+          brew install node pkgconf icu4c@78 miniupnpc openssl@3 opus
+          host_tools="$RUNNER_TEMP/aurora-host-python"
+          python -m venv "$host_tools"
+          # Sunshine's Boost.Locale 1.89.0 fails to configure with CMake 4.5.
+          "$host_tools/bin/python" -m pip install 'cmake==4.3.1' 'Jinja2==3.1.6'
+          echo "$host_tools/bin" >> "$GITHUB_PATH"
 
       - name: Build and sign Aurora.app
         run: |
+          cmake --version
           pwsh -NoProfile -File ./desktop/upstream/tsnet/Build-Tailnet.ps1 -Runtime "osx-$AURORA_ARCHITECTURE" -OutputDirectory "$RUNNER_TEMP/aurora-tailnet" -RunTests
           pwsh -NoProfile -File ./desktop/Build-Mac.ps1 -Architecture "$AURORA_ARCHITECTURE" -Qmake "$QT_ROOT_DIR/bin/qmake" -TailscaleDirectory "$RUNNER_TEMP/aurora-tailnet"
 
