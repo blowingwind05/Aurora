@@ -2,6 +2,7 @@
 #pragma once
 
 #include <QFile>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QPointer>
@@ -9,6 +10,8 @@
 #include <QSslKey>
 #include <QSslSocket>
 #include <QTcpServer>
+
+#include <utility>
 
 class LoopbackFixture final : public QTcpServer
 {
@@ -31,11 +34,21 @@ public:
     QByteArray authorization;
     QJsonObject config;
     QList<QJsonObject> writes;
+    QJsonArray pairings;
+    QList<QJsonObject> approvals;
+    bool holdNextHandshake = false;
+    bool handshakeHeld = false;
     bool ignoreNameOnWrite = false;
     bool failReadback = false;
     bool refuseNextRead = false;
     bool holdNextRead = false;
     bool heldRead = false;
+
+    void releaseHandshake()
+    {
+        if (waitingHandshake_ != -1)
+            acceptTls(std::exchange(waitingHandshake_, -1));
+    }
 
     void releaseRead()
     {
@@ -48,6 +61,18 @@ protected:
     void incomingConnection(qintptr descriptor) override
     {
         ++connections;
+        if (holdNextHandshake) {
+            holdNextHandshake = false;
+            handshakeHeld = true;
+            waitingHandshake_ = descriptor;
+            return;
+        }
+        acceptTls(descriptor);
+    }
+
+private:
+    void acceptTls(qintptr descriptor)
+    {
         auto *socket = new QSslSocket(this);
         if (!socket->setSocketDescriptor(descriptor)) {
             delete socket;
@@ -86,7 +111,13 @@ protected:
 
             ++receivedRequests;
             handled = true;
-            if (request.startsWith("POST /api/config ")) {
+            if (request.startsWith("GET /api/pin ")) {
+                send(socket, "200 OK", QJsonDocument(QJsonObject{{QStringLiteral("pairings"), pairings}})
+                    .toJson(QJsonDocument::Compact));
+            } else if (request.startsWith("POST /api/pin ")) {
+                approvals.append(QJsonDocument::fromJson(request.mid(bodyOffset, length)).object());
+                send(socket, "200 OK", R"({"status":true})");
+            } else if (request.startsWith("POST /api/config ")) {
                 const auto payload = QJsonDocument::fromJson(request.mid(bodyOffset, length)).object();
                 writes.append(payload);
                 const auto name = config.value(QStringLiteral("sunshine_name"));
@@ -112,8 +143,6 @@ protected:
         });
         socket->startServerEncryption();
     }
-
-private:
     static void send(QSslSocket *socket, const QByteArray &status, const QByteArray &body)
     {
         socket->write("HTTP/1.1 " + status + "\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: " +
@@ -131,5 +160,6 @@ private:
     QSslCertificate certificate_;
     QSslKey key_;
     QPointer<QSslSocket> waiting_;
+    qintptr waitingHandshake_ = -1;
     bool failNextRead_ = false;
 };

@@ -417,11 +417,21 @@ class RealAdmin final : public ReadinessAdmin
 {
 public:
     explicit RealAdmin(std::unique_ptr<BundledAdmin> admin) : admin_(std::move(admin)) {}
+    AdminIdentity identity() const override { return admin_->identity(); }
     bool readConfig(BundledAdmin::Completion done) override { return admin_->readConfig(std::move(done)); }
     bool saveConfig(BundledAdmin::PreparePayload prepare, BundledAdmin::VerifyReadback verify,
                     BundledAdmin::Completion done) override
     {
         return admin_->saveConfig(std::move(prepare), std::move(verify), std::move(done));
+    }
+    bool readPendingPairings(BundledAdmin::PendingCompletion done) override
+    {
+        return admin_->readPendingPairings(std::move(done));
+    }
+    bool approvePairing(SupervisorPairingApproval approval, BundledAdmin::ApprovalCompletion done,
+                        BundledAdmin::ApprovalStillCurrent stillCurrent) override
+    {
+        return admin_->approvePairing(std::move(approval), std::move(done), std::move(stillCurrent));
     }
 private:
     std::unique_ptr<BundledAdmin> admin_;
@@ -643,6 +653,112 @@ void testSettings(const QDir &fixtures, const QDir &identities)
     shutdown(controller);
 }
 
+void testPairingForwarding(const QDir &fixtures, const QDir &identities)
+{
+    const auto cert = identities.filePath(QStringLiteral("pinned-cert.pem"));
+    LoopbackFixture server(cert, identities.filePath(QStringLiteral("pinned-key.pem")));
+    require(server.isListening(), QStringLiteral("Pairing fixture could not listen."));
+    const auto layout = layoutFor(fixtures, QStringLiteral("Pairing forwarding"));
+    require(QDir().mkpath(QFileInfo(layout.certificateFile()).absolutePath()) && QFile::copy(cert, layout.certificateFile()),
+            QStringLiteral("Could not stage a synthetic pairing certificate."));
+
+    const auto id = QStringLiteral("00112233445566778899aabbccddeeff");
+    const auto pin = QStringLiteral("0123");
+    const auto name = QStringLiteral("Offline fixture");
+    server.pairings.append(QJsonObject{{QStringLiteral("id"), id}, {QStringLiteral("name"), name},
+        {QStringLiteral("address"), QStringLiteral("127.0.0.1")}, {QStringLiteral("sourcePort"), 12345}});
+
+    const auto replay = std::make_shared<Replay>();
+    auto deps = fakeDependencies(replay);
+    deps.openAdmin = [replay, port = server.serverPort()](const QString &profile, const QByteArray &frame,
+        QString &error) -> std::unique_ptr<ReadinessAdmin> {
+        replay->onWorker();
+        ++replay->adminOpens;
+        auto admin = BundledAdminFixture::open(profile, frame, port, error);
+        if (!admin)
+            return {};
+        return std::make_unique<RealAdmin>(std::move(admin));
+    };
+    LifecycleController controller(layout, std::move(deps), {3500, 10, 30000});
+    require(!controller.approvePairing({}, SupervisorPairingApproval::authorized(id, pin, name),
+        [](BundledAdmin::ApprovalResult) {}), QStringLiteral("An unauthenticated launch accepted an approval."));
+    require(controller.start(), QStringLiteral("Pairing fixture could not launch."));
+    await([&] { return controller.state().phase == Phase::Ready; }, QStringLiteral("Pairing fixture was not ready."), 4000);
+    const auto session = controller.state().settingsSession;
+    const auto identity = controller.state().adminIdentity;
+    require(identity.port == server.serverPort() && identity.certificateSha256.size() == 32,
+            QStringLiteral("The ready host did not publish its pinned certificate identity."));
+    std::optional<BundledAdmin::PendingResult> pending;
+    require(controller.readPendingPairings(session, [&](BundledAdmin::PendingResult result) { pending = std::move(result); }) &&
+            controller.adminBusy() && !controller.readSettings([](SettingsReadResult) {}),
+            QStringLiteral("Pending lookup did not serialize with settings."));
+    await([&] { return pending.has_value(); }, QStringLiteral("Pending lookup did not complete."));
+    require(bool(*pending) && pending->pairings.size() == 1 && pending->pairings.first().id == id &&
+            pending->pairings.first().sourcePort == 12345 && server.approvals.isEmpty(),
+            QStringLiteral("Pending lookup changed its payload or implicitly issued an approval."));
+
+    const auto approve = [&](const QString &selectedSession) {
+        std::optional<BundledAdmin::ApprovalResult> result;
+        require(controller.approvePairing(selectedSession, SupervisorPairingApproval::authorized(id, pin, name),
+            [&](BundledAdmin::ApprovalResult value) { result = std::move(value); }),
+            QStringLiteral("Authorized pairing operation could not be queued."));
+        await([&] { return result.has_value(); }, QStringLiteral("Pairing approval did not complete."));
+        return *result;
+    };
+    require(bool(approve(session)) && server.approvals.size() == 1 && replay->adminOpens == 1 &&
+            server.approvals.first().value(QStringLiteral("pairing_id")).toString() == id &&
+            server.approvals.first().value(QStringLiteral("pin")).toString() == pin,
+            QStringLiteral("Approval did not use the launch's original authenticated client and exact payload."));
+
+    const auto request = controller.state().request;
+    replay->exitStatus = BundledHost::restartRequestedExitCode;
+    replay->exitLaunch = 1;
+    await([&] { return controller.state().phase == Phase::Ready && controller.state().settingsSession != session; },
+          QStringLiteral("Pairing fixture did not rotate its authenticated session."));
+    require(controller.state().request == request && approve(session).error == Error::StaleSession &&
+            server.approvals.size() == 1 && replay->adminOpens == 2,
+            QStringLiteral("Approval from a superseded launch reached POST."));
+
+    pending.reset();
+    const auto priorRequests = server.receivedRequests;
+    require(controller.readPendingPairings(session, [&](BundledAdmin::PendingResult value) { pending = std::move(value); }),
+            QStringLiteral("A stale pending lookup did not queue a result."));
+    await([&] { return pending.has_value(); }, QStringLiteral("Stale pending lookup did not complete."));
+    require(pending->error == Error::StaleSession && server.receivedRequests == priorRequests,
+            QStringLiteral("A stale pending lookup reached the replacement host."));
+
+    const auto newSession = controller.state().settingsSession;
+    const auto priorBytes = server.receivedBytes;
+    std::optional<BundledAdmin::ApprovalResult> cancelled;
+    auto authorization = std::make_shared<std::atomic<bool>>(true);
+    server.holdNextHandshake = true;
+    require(controller.approvePairing(newSession, SupervisorPairingApproval::authorized(id, pin, name),
+        [&](BundledAdmin::ApprovalResult result) { cancelled = std::move(result); },
+        [authorization] { return authorization->load(); }),
+        QStringLiteral("Externally authorized pairing could not be queued."));
+    await([&] { return server.handshakeHeld; }, QStringLiteral("Externally authorized pairing never reached TLS."));
+    authorization->store(false);
+    server.releaseHandshake();
+    await([&] { return cancelled.has_value(); }, QStringLiteral("Revoked pairing did not complete."));
+    require(cancelled->error == Error::Cancelled && server.receivedBytes == priorBytes &&
+            controller.state().phase == Phase::Ready, QStringLiteral("Revocation at TLS still sent an approval."));
+
+    cancelled.reset();
+    server.holdNextHandshake = true;
+    require(controller.approvePairing(newSession, SupervisorPairingApproval::authorized(id, pin, name),
+        [&](BundledAdmin::ApprovalResult result) { cancelled = std::move(result); }),
+        QStringLiteral("Held approval could not be queued."));
+    await([&] { return server.handshakeHeld; }, QStringLiteral("Approval did not reach the held handshake."));
+    require(controller.stop(), QStringLiteral("Stop could not revoke the queued approval."));
+    server.releaseHandshake();
+    awaitPhase(controller, Phase::Stopped);
+    await([&] { return cancelled.has_value(); }, QStringLiteral("Cancelled approval did not complete."));
+    require(cancelled->error == Error::Cancelled && server.approvals.size() == 1 && server.receivedBytes == priorBytes &&
+            controller.state().settingsSession.isEmpty(), QStringLiteral("Stopped generation still issued an approval."));
+    shutdown(controller);
+}
+
+
 } // namespace
 
 int main(int argc, char **argv)
@@ -661,6 +777,7 @@ int main(int argc, char **argv)
     testPinnedReadiness(fixtures, identities, true);
     testPinnedReadiness(fixtures, identities, false);
     testSettings(fixtures, identities);
+    testPairingForwarding(fixtures, identities);
     QTextStream(stdout) << "PASS: ephemeral port ownership and pinned admin, worker launch and cleanup, "
-                          "retry, restart, cancellation and stale-result protection, versioned settings read/save\n";
+                          "retry, restart, cancellation, versioned settings, and supervisor-authorized pairing\n";
 }

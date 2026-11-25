@@ -46,6 +46,7 @@ struct Status
     QString tailnetName;
     QHostAddress localAddress;
     QVector<Peer> peers;
+    QUrl avatarUrl;
 };
 
 enum class StatusError {
@@ -65,6 +66,9 @@ struct LoginResult
     std::optional<bool> pending;
 };
 
+// Canonical HTTPS URL from the same allowlist used for the desktop account avatar.
+QUrl vettedAvatarUrl(const QString &text);
+
 constexpr int maxStatusReplyBytes = 4 * 1024 * 1024;
 constexpr int maxActionReplyBytes = 4 * 1024;
 
@@ -72,6 +76,10 @@ constexpr int maxActionReplyBytes = 4 * 1024;
 StatusResult decodeStatusReply(const QByteArray &line, const QString &requestId);
 LoginResult decodeLoginReply(const QByteArray &line, const QString &requestId);
 StatusError decodeLogoutReply(const QByteArray &line, const QString &requestId);
+
+namespace detail {
+std::optional<quint16> decodePairLocalPort(const QByteArray &line);
+}
 
 } // namespace aurora::tailscale
 

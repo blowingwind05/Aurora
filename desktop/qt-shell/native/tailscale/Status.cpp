@@ -224,6 +224,7 @@ Status readStatus(const QJsonObject &data)
     if (userId.isUndefined() || integer(userId) == *owner) {
         status.displayName = label(user, "DisplayName");
         status.loginName = label(user, "LoginName");
+        status.avatarUrl = vettedAvatarUrl(label(user, "ProfilePicURL"));
     }
 
     auto local = nodeAddresses(data.value(QLatin1String("TailscaleIPs")));
@@ -272,6 +273,36 @@ Envelope decodeActionEnvelope(const QByteArray &line, const QString &requestId)
 
 } // namespace
 
+QUrl vettedAvatarUrl(const QString &text)
+{
+    auto url = QUrl(text.trimmed(), QUrl::StrictMode).adjusted(QUrl::NormalizePathSegments);
+    if (!url.isValid() || url.scheme() != QLatin1String("https") || url.port(443) != 443
+        || !url.userInfo().isEmpty() || url.hasFragment()) {
+        return {};
+    }
+    url.setPort(-1);
+    if (url.toEncoded().size() > 2048)
+        return {};
+
+    const auto host = url.host(QUrl::FullyEncoded);
+    const auto path = url.path(QUrl::FullyEncoded);
+    if (host == QLatin1String("lh3.googleusercontent.com") || host == QLatin1String("lh4.googleusercontent.com")) {
+        if (path.size() <= 1 || url.hasQuery())
+            return {};
+    } else if (host == QLatin1String("avatars.githubusercontent.com")) {
+        if (!path.startsWith(QLatin1String("/u/")) || path.size() <= 3
+            || (url.hasQuery() && url.query(QUrl::FullyEncoded) != QLatin1String("v=4"))
+            || !std::all_of(path.cbegin() + 3, path.cend(), [](QChar ch) {
+                return ch >= QLatin1Char('0') && ch <= QLatin1Char('9');
+            })) {
+            return {};
+        }
+    } else {
+        return {};
+    }
+    return url.adjusted(QUrl::RemoveUserInfo);
+}
+
 StatusResult decodeStatusReply(const QByteArray &line, const QString &requestId)
 {
     if (line.size() > maxStatusReplyBytes)
@@ -302,6 +333,15 @@ StatusError decodeLogoutReply(const QByteArray &line, const QString &requestId)
     if (reply.error != StatusError::None)
         return reply.error;
     return reply.result.isEmpty() ? StatusError::None : StatusError::InvalidResponse;
+}
+
+std::optional<quint16> detail::decodePairLocalPort(const QByteArray &line)
+{
+    const auto reply = exactIntegerObject(line);
+    const auto port = integer(reply.value(QLatin1String("result")).toObject().value(QLatin1String("localPort")));
+    if (!port || *port <= 0 || *port > 65535)
+        return std::nullopt;
+    return quint16(*port);
 }
 
 } // namespace aurora::tailscale

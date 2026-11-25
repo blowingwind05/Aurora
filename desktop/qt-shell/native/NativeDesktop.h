@@ -3,6 +3,7 @@
 
 #include "DesktopTray.h"
 #include "NativeDevicePresence.h"
+#include "pairing/client/PairingClient.h"
 #include "preferences/DesktopPreferences.h"
 #include "platform/HostSleepPrevention.h"
 #include "platform/StartupRegistration.h"
@@ -10,7 +11,10 @@
 #include "sunshine/lifecycle/LifecycleController.h"
 #include "stream/MoonlightProcess.h"
 #include "tailscale/EmbeddedStatusClient.h"
+#include "tailscale/avatar/AvatarLoader.h"
+#include "wallpaper/host/HostWallpaper.h"
 #ifdef Q_OS_WIN
+#include "tailscale/system/SystemPairingNc.h"
 #include "tailscale/system/SystemTailscaleClient.h"
 #endif
 
@@ -23,6 +27,7 @@
 class QJsonObject;
 class QMenuBar;
 class QQmlEngine;
+class QTcpSocket;
 
 class NativeDesktop final : public QObject
 {
@@ -46,6 +51,7 @@ private:
     void initializeStartup();
     void initializeTray();
     void initializeHost();
+    void refreshHostWallpaper();
     bool handleHostAction(const QString &action);
     bool handleSunshineAction(const QString &action, const QJsonObject &request);
     void readHostSettings();
@@ -74,6 +80,7 @@ private:
     void syncEmbeddedHost();
     void resumeTailnetAfterRetirement();
     void publishTailnetStatus(const aurora::tailscale::Status &status, bool refreshing = false);
+    void refreshAccountAvatar(const aurora::tailscale::Status &status);
     void updateDeviceCatalog(const aurora::tailscale::Status &status);
     void refreshPreferences(const QJsonObject &request);
     void initializeStreamSessions(const QString &applicationDirectory);
@@ -85,6 +92,17 @@ private:
     void routeChecked(quint64 request, const Aurora::Discovery::ServerInfo::CheckResult &result);
     void verifyMoonlightTrust();
     void trustCheckFinished(bool trusted);
+    void initializePairingClient();
+    bool beginPairing();
+    bool canPairOverRoute(const Aurora::Discovery::StreamHost &route) const;
+#ifdef Q_OS_WIN
+    void startSystemPairingExchange(quint64 request, QIODevice *channel);
+#endif
+    void requestEmbeddedPairing();
+    void receivePairingLease(quint64 generation, quint64 request, const aurora::tailscale::PairingLeaseResult &result);
+    void startPairingExchange();
+    void pairingFinished(quint64 request, const Aurora::Pairing::Client::Result &result);
+    void releasePairingTransport();
     void launchPreparedSession();
     void sessionFinished(const QUuid &attempt, quint64 generation, const Aurora::Session::SessionResult &result);
     void cancelConnection(const QString &reason = {});
@@ -104,8 +122,10 @@ private:
         bool waitingForEncoder = false;
         bool launched = false;
         bool retryRoute = false;
+        bool pairingAttempted = false;
         QQueue<Aurora::Discovery::StreamHost> routes;
         std::optional<Aurora::Discovery::StreamHost> selected;
+        std::optional<Aurora::Discovery::StreamHost> preferAfterPairing;
         std::optional<Aurora::Session::PreparedSession> prepared;
         QUuid attempt;
         quint64 probe = 0;
@@ -114,12 +134,15 @@ private:
 
     const QString directory;
     Aurora::Preferences::GeneralPreferences preferences;
+    Aurora::Preferences::StreamPreferences streamPreferences;
     Aurora::Platform::HostSleepPrevention sleepPrevention;
     QVariantMap snapshot;
     DesktopTray tray;
     std::unique_ptr<QMenuBar> applicationMenu;
     std::unique_ptr<Aurora::Platform::StartupRegistration> startup;
     std::unique_ptr<Aurora::Sunshine::LifecycleController> host;
+    std::unique_ptr<Aurora::Wallpaper::HostWallpaperUpdater> hostWallpaper;
+    bool devicesForeground = false;
     std::unique_ptr<NativeDevicePresence> localPresence;
     QString hostSettingsSession;
     std::optional<Aurora::Sunshine::SettingsSnapshot> hostSettings;
@@ -137,6 +160,8 @@ private:
     bool wantSystemProfiles = false;
 #endif
     aurora::tailscale::Status tailnetStatus;
+    std::unique_ptr<aurora::tailscale::AvatarLoader> accountAvatar;
+    bool avatarVisible = false;
     QTimer tailnetPoll;
     QString tailnetFeedback;
     std::optional<aurora::tailscale::AccountIdentity> catalogAccount;
@@ -165,6 +190,26 @@ private:
     bool refreshAfterRetirement = false;
     std::unique_ptr<Aurora::Session::SessionSupervisor> sessionSupervisor;
     std::optional<Connection> connection;
+    struct PairingAttempt
+    {
+        quint64 generation;
+        QByteArray key;
+        QDeadlineTimer connectDeadline{6000};
+        quint64 allocation = 0;
+        quint64 exchange = 0;
+        std::shared_ptr<aurora::tailscale::PairingLease> lease;
+        QPointer<QTcpSocket> socket;
+        std::optional<QString> cancellation;
+#ifdef Q_OS_WIN
+        quint64 systemRequest = 0;
+#endif
+    };
+    std::unique_ptr<Aurora::Pairing::Client::Coordinator> pairingClient;
+#ifdef Q_OS_WIN
+    std::unique_ptr<aurora::tailscale::system::SystemPairingNc> systemPairing;
+#endif
+    std::optional<PairingAttempt> pairingAttempt;
+    QTimer pairingConnectRetry;
     QTimer connectionStatusRetry;
     QPointer<QQmlEngine> sessionEngine;
     QUrl sessionWindowSource;

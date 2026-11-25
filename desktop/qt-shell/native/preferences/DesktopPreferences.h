@@ -1,8 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #pragma once
 
+#include <QJsonObject>
 #include <QMap>
 #include <QString>
+#include <QStringList>
+
+#include <optional>
 
 namespace Aurora::Preferences {
 
@@ -39,7 +43,23 @@ struct StreamPreferenceSnapshot
 
     // Returns the effective value, or an empty string for an unknown option.
     QString value(const QString &option) const;
+    // Overlay validated host values on this snapshot without changing the store.
+    StreamPreferenceSnapshot withHostOverrides(const QMap<QString, QString> &hostOverrides) const;
+    QStringList arguments(bool useViewerDefault = false, bool useBundledDefaults = false) const;
+    QJsonObject sessionControlSnapshot() const;
 };
+
+struct SessionControlChange
+{
+    QString option;
+    QString value;
+
+    // Parse a complete worker line without its line terminator.
+    static std::optional<SessionControlChange> fromLine(const QString &line);
+    bool isValid() const;
+};
+
+enum class SessionControlSaveResult { Ignored, Saved, SaveFailed };
 
 class StreamPreferences
 {
@@ -49,6 +69,7 @@ public:
     StreamPreferenceSnapshot read() const;
     bool set(const QString &option, const QString &value) const;
     bool reset() const;
+    SessionControlSaveResult applySessionControlChange(const SessionControlChange &change) const;
 
 private:
     QString path_;

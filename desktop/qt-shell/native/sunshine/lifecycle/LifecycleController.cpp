@@ -22,6 +22,8 @@ class BundledReadinessAdmin final : public ReadinessAdmin
 public:
     explicit BundledReadinessAdmin(std::unique_ptr<BundledAdmin> admin) : admin_(std::move(admin)) {}
 
+    AdminIdentity identity() const override { return admin_->identity(); }
+
     bool readConfig(BundledAdmin::Completion completion) override
     {
         return admin_->readConfig(std::move(completion));
@@ -31,6 +33,17 @@ public:
                     BundledAdmin::Completion completion) override
     {
         return admin_->saveConfig(std::move(prepare), std::move(verify), std::move(completion));
+    }
+
+    bool readPendingPairings(BundledAdmin::PendingCompletion completion) override
+    {
+        return admin_->readPendingPairings(std::move(completion));
+    }
+
+    bool approvePairing(SupervisorPairingApproval approval, BundledAdmin::ApprovalCompletion completion,
+                        BundledAdmin::ApprovalStillCurrent stillCurrent) override
+    {
+        return admin_->approvePairing(std::move(approval), std::move(completion), std::move(stillCurrent));
     }
 
 private:
@@ -51,6 +64,16 @@ bool canRetry(BundledAdmin::Error error)
     return error == Error::Network || error == Error::Tls || error == Error::Timeout;
 }
 
+QString stalePairingSession()
+{
+    return QStringLiteral("Sunshine 管理会话已变化，请重新确认配对请求。");
+}
+
+QString unavailablePairingOperation()
+{
+    return QStringLiteral("当前 Sunshine 管理会话无法处理配对请求。");
+}
+
 bool lostAuthentication(BundledAdmin::Error error)
 {
     return error == BundledAdmin::Error::Unauthorized || error == BundledAdmin::Error::Tls;
@@ -58,20 +81,26 @@ bool lostAuthentication(BundledAdmin::Error error)
 
 } // namespace
 
-struct LifecycleController::PendingSettings
+struct LifecycleController::PendingAdmin
 {
     quint64 operation = 0;
     QString session;
     std::optional<SettingsEdit> edit;
     SettingsReadCompletion read;
     SettingsSaveCompletion save;
+    BundledAdmin::PendingCompletion pending;
+    BundledAdmin::ApprovalCompletion approve;
 
     void cancel()
     {
         if (edit)
             save(rejectedSettingsEdit(*edit, SettingsStatus::Cancelled, cancelledSettingsMessage()));
-        else
+        else if (read)
             read({session, SettingsStatus::Cancelled, cancelledSettingsMessage(), std::nullopt});
+        else if (pending)
+            pending({BundledAdmin::Error::Cancelled, 0, stalePairingSession(), {}});
+        else
+            approve({BundledAdmin::Error::Cancelled, 0, stalePairingSession()});
     }
 };
 
@@ -158,10 +187,57 @@ public:
         });
     }
 
+private:
+    template <typename Result>
+    auto pairingCompletion(quint64 request, quint64 operation, const QString &session,
+                           void (LifecycleWorker::*signal)(quint64, const Result &))
+    {
+        return [this, request, operation, session, signal](Result result) {
+            QMetaObject::invokeMethod(this, [this, request, operation, session, signal, result = std::move(result)] {
+                if (!settingsCurrent(request, session))
+                    return;
+                (this->*signal)(operation, result);
+                if (lostAuthentication(result.error)) {
+                    publish(Phase::Stopping);
+                    fail(result.message);
+                }
+            }, Qt::QueuedConnection);
+        };
+    }
+
+public:
+    void readPendingPairings(quint64 request, quint64 operation, const QString &session)
+    {
+        if (!settingsCurrent(request, session)) {
+            emit pendingPairingsFinished(operation, {BundledAdmin::Error::StaleSession, 0, stalePairingSession(), {}});
+            return;
+        }
+        if (!admin_->readPendingPairings(pairingCompletion(request, operation, session, &LifecycleWorker::pendingPairingsFinished)))
+            emit pendingPairingsFinished(operation, {BundledAdmin::Error::Unavailable, 0, unavailablePairingOperation(), {}});
+    }
+
+    void approvePairing(quint64 request, quint64 operation, const QString &session, SupervisorPairingApproval approval,
+                        BundledAdmin::ApprovalStillCurrent stillCurrent)
+    {
+        if (!settingsCurrent(request, session)) {
+            emit pairingApprovalFinished(operation, {BundledAdmin::Error::StaleSession, 0, stalePairingSession()});
+            return;
+        }
+        if (!admin_->approvePairing(std::move(approval),
+                pairingCompletion(request, operation, session, &LifecycleWorker::pairingApprovalFinished),
+                [this, request, session, stillCurrent = std::move(stillCurrent)] {
+                    return settingsCurrent(request, session) && (!stillCurrent || stillCurrent());
+                }))
+            emit pairingApprovalFinished(operation, {BundledAdmin::Error::Unavailable, 0, unavailablePairingOperation()});
+    }
+
 signals:
-    void progressed(quint64 request, int phase, const QString &error, bool cleanupPending, const QString &settingsSession);
+    void progressed(quint64 request, int phase, const QString &error, bool cleanupPending, const QString &settingsSession,
+                    quint16 adminPort, const QByteArray &adminPin);
     void settingsReadFinished(quint64 operation, const Aurora::Sunshine::SettingsReadResult &result);
     void settingsSaveFinished(quint64 operation, const Aurora::Sunshine::SettingsSaveResult &result);
+    void pendingPairingsFinished(quint64 operation, const Aurora::Sunshine::BundledAdmin::PendingResult &result);
+    void pairingApprovalFinished(quint64 operation, const Aurora::Sunshine::BundledAdmin::ApprovalResult &result);
 
 private:
     bool current() const { return latest_->load() == request_; }
@@ -175,9 +251,12 @@ private:
     void publish(Phase phase, const QString &error = {}, bool cleanupPending = false)
     {
         phase_ = phase;
-        if (current())
+        if (current()) {
+            const bool ready = phase == Phase::Ready && settings_ && admin_;
+            const auto identity = ready ? admin_->identity() : AdminIdentity{};
             emit progressed(request_, int(phase), error, cleanupPending,
-                phase == Phase::Ready && settings_ ? settings_->id() : QString{});
+                            ready ? settings_->id() : QString{}, identity.port, identity.certificateSha256);
+        }
     }
 
     void cancelRead()
@@ -390,23 +469,40 @@ LifecycleController::LifecycleController(HostLayout layout, LifecycleDependencie
     worker_->moveToThread(workerThread);
     qRegisterMetaType<SettingsReadResult>();
     qRegisterMetaType<SettingsSaveResult>();
+    qRegisterMetaType<BundledAdmin::PendingResult>();
+    qRegisterMetaType<BundledAdmin::ApprovalResult>();
     connect(worker_, &LifecycleWorker::progressed, this,
-        [this](quint64 request, int phase, const QString &error, bool cleanupPending, const QString &settingsSession) {
+        [this](quint64 request, int phase, const QString &error, bool cleanupPending, const QString &settingsSession,
+              quint16 adminPort, const QByteArray &adminPin) {
             if (request == state_.request)
-                setState({request, Phase(phase), error, cleanupPending, settingsSession});
+                setState({request, Phase(phase), error, cleanupPending, settingsSession, {adminPort, adminPin}});
         }, Qt::QueuedConnection);
     connect(worker_, &LifecycleWorker::settingsReadFinished, this,
         [this](quint64 operation, const SettingsReadResult &result) {
-            if (pendingSettings_ && pendingSettings_->operation == operation) {
-                auto pending = std::move(pendingSettings_);
+            if (pendingAdmin_ && pendingAdmin_->operation == operation) {
+                auto pending = std::move(pendingAdmin_);
                 pending->read(result);
             }
         }, Qt::QueuedConnection);
     connect(worker_, &LifecycleWorker::settingsSaveFinished, this,
         [this](quint64 operation, const SettingsSaveResult &result) {
-            if (pendingSettings_ && pendingSettings_->operation == operation) {
-                auto pending = std::move(pendingSettings_);
+            if (pendingAdmin_ && pendingAdmin_->operation == operation) {
+                auto pending = std::move(pendingAdmin_);
                 pending->save(result);
+            }
+        }, Qt::QueuedConnection);
+    connect(worker_, &LifecycleWorker::pendingPairingsFinished, this,
+        [this](quint64 operation, const BundledAdmin::PendingResult &result) {
+            if (pendingAdmin_ && pendingAdmin_->operation == operation) {
+                auto pending = std::move(pendingAdmin_);
+                pending->pending(result);
+            }
+        }, Qt::QueuedConnection);
+    connect(worker_, &LifecycleWorker::pairingApprovalFinished, this,
+        [this](quint64 operation, const BundledAdmin::ApprovalResult &result) {
+            if (pendingAdmin_ && pendingAdmin_->operation == operation) {
+                auto pending = std::move(pendingAdmin_);
+                pending->approve(result);
             }
         }, Qt::QueuedConnection);
     connect(workerThread, &QThread::finished, worker_, &QObject::deleteLater);
@@ -462,13 +558,13 @@ bool LifecycleController::shutdown()
 
 bool LifecycleController::readSettings(SettingsReadCompletion completion)
 {
-    if (!acceptsRequests() || state_.phase != Phase::Ready || pendingSettings_ || !completion)
+    if (!acceptsRequests() || state_.phase != Phase::Ready || pendingAdmin_ || !completion)
         return false;
 
-    const auto operation = ++nextSettingsOperation_;
+    const auto operation = ++nextAdminOperation_;
     const auto session = state_.settingsSession;
-    pendingSettings_ = std::make_unique<PendingSettings>(
-        PendingSettings{operation, session, std::nullopt, std::move(completion), {}});
+    pendingAdmin_ = std::make_unique<PendingAdmin>(
+        PendingAdmin{operation, session, std::nullopt, std::move(completion), {}, {}, {}});
     auto *worker = worker_;
     QMetaObject::invokeMethod(worker, [worker, request = state_.request, operation, session] {
         worker->readSettings(request, operation, session);
@@ -478,15 +574,50 @@ bool LifecycleController::readSettings(SettingsReadCompletion completion)
 
 bool LifecycleController::saveSettings(SettingsEdit edit, SettingsSaveCompletion completion)
 {
-    if (!acceptsRequests() || state_.phase != Phase::Ready || pendingSettings_ || !completion)
+    if (!acceptsRequests() || state_.phase != Phase::Ready || pendingAdmin_ || !completion)
         return false;
 
-    const auto operation = ++nextSettingsOperation_;
-    pendingSettings_ = std::make_unique<PendingSettings>(
-        PendingSettings{operation, edit.version.session, edit, {}, std::move(completion)});
+    const auto operation = ++nextAdminOperation_;
+    pendingAdmin_ = std::make_unique<PendingAdmin>(
+        PendingAdmin{operation, edit.version.session, edit, {}, std::move(completion), {}, {}});
     auto *worker = worker_;
     QMetaObject::invokeMethod(worker, [worker, request = state_.request, operation, edit = std::move(edit)] {
         worker->saveSettings(request, operation, edit);
+    }, Qt::QueuedConnection);
+    return true;
+}
+
+bool LifecycleController::readPendingPairings(const QString &session, BundledAdmin::PendingCompletion completion)
+{
+    if (!acceptsRequests() || state_.phase != Phase::Ready || pendingAdmin_ || !completion)
+        return false;
+
+    const auto operation = ++nextAdminOperation_;
+    pendingAdmin_ = std::make_unique<PendingAdmin>();
+    pendingAdmin_->operation = operation;
+    pendingAdmin_->pending = std::move(completion);
+    auto *worker = worker_;
+    QMetaObject::invokeMethod(worker, [worker, request = state_.request, operation, session] {
+        worker->readPendingPairings(request, operation, session);
+    }, Qt::QueuedConnection);
+    return true;
+}
+
+bool LifecycleController::approvePairing(const QString &session, SupervisorPairingApproval approval,
+                                         BundledAdmin::ApprovalCompletion completion,
+                                         BundledAdmin::ApprovalStillCurrent stillCurrent)
+{
+    if (!acceptsRequests() || state_.phase != Phase::Ready || pendingAdmin_ || !completion)
+        return false;
+
+    const auto operation = ++nextAdminOperation_;
+    pendingAdmin_ = std::make_unique<PendingAdmin>();
+    pendingAdmin_->operation = operation;
+    pendingAdmin_->approve = std::move(completion);
+    auto *worker = worker_;
+    QMetaObject::invokeMethod(worker, [worker, request = state_.request, operation, session,
+                                      approval = std::move(approval), stillCurrent = std::move(stillCurrent)]() mutable {
+        worker->approvePairing(request, operation, session, std::move(approval), std::move(stillCurrent));
     }, Qt::QueuedConnection);
     return true;
 }
@@ -509,11 +640,12 @@ void LifecycleController::setState(State state)
 {
     if (state_.request == state.request && state_.phase == state.phase &&
         state_.error == state.error && state_.cleanupPending == state.cleanupPending &&
-        state_.settingsSession == state.settingsSession)
+        state_.settingsSession == state.settingsSession && state_.adminIdentity.port == state.adminIdentity.port &&
+        state_.adminIdentity.certificateSha256 == state.adminIdentity.certificateSha256)
         return;
 
-    if (pendingSettings_ && state.settingsSession != state_.settingsSession) {
-        auto cancelled = std::shared_ptr<PendingSettings>(std::move(pendingSettings_));
+    if (pendingAdmin_ && state.settingsSession != state_.settingsSession) {
+        auto cancelled = std::shared_ptr<PendingAdmin>(std::move(pendingAdmin_));
         QMetaObject::invokeMethod(this, [cancelled] { cancelled->cancel(); }, Qt::QueuedConnection);
     }
     state_ = std::move(state);

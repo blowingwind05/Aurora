@@ -43,6 +43,26 @@ This slice covers bundled config transport. The lifecycle owner, QML wiring,
 privacy transport, restart, pairing, and standalone Sunshine administration are
 separate integration work.
 
+## Bundled pairing
+
+- `readPendingPairings(PendingCompletion)` reads `GET /api/pin`. It returns
+  a typed list from the response's `pairings` array. Each entry has a 32-digit
+  hexadecimal ID and untrusted name and address text. `sourceIpv4` is present
+  only for strict dotted-decimal IPv4 or a valid IPv4-mapped IPv6 address.
+  `sourcePort` is present only for a JSON integer from 1 through 65535. Legacy
+  rows with missing source metadata remain available to callers that support them.
+- `approvePairing(SupervisorPairingApproval, ApprovalCompletion, stillCurrent)`
+  sends `POST /api/pin` with the exact `pairing_id`, four ASCII digit `pin`, and
+  `name`. Construct the approval with `SupervisorPairingApproval::authorized`
+  after the coordinator has approved that match. The optional `stillCurrent`
+  predicate runs on the admin thread at admission and during TLS before HTTP data
+  is sent. Approval requires an authenticated HTTP success with boolean
+  `status: true`.
+
+Both calls share the settings transport's loopback endpoint, leaf pin, credentials,
+deadline, and body limit. The coordinator owns supervisor authorization, whois,
+source-port attribution, and correlation with the selected pending request.
+
 ## Offline verification
 
 From the repository root, with a Qt 5.15 or Qt 6 development kit that supports TLS:

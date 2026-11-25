@@ -37,6 +37,38 @@ private:
     const quint16 relayPort;
 };
 
+// A host lease has no returned port. A dial lease listens only on IPv4 loopback.
+class PairingLease final
+{
+public:
+    ~PairingLease();
+    QHostAddress address() const { return QHostAddress::LocalHost; }
+    std::optional<quint16> localPort() const { return dialPort; }
+    bool isValid() const;
+    bool close();
+
+private:
+    friend class EmbeddedStatusClient;
+    PairingLease(EmbeddedStatusClient *client, quint64 token, std::optional<quint16> port);
+    Q_DISABLE_COPY(PairingLease)
+
+    const QPointer<EmbeddedStatusClient> client;
+    const quint64 token;
+    const std::optional<quint16> dialPort;
+};
+
+struct PairingLeaseResult
+{
+    StatusError error = StatusError::InvalidResponse;
+    std::shared_ptr<PairingLease> lease;
+};
+
+struct PairSourceResult
+{
+    StatusError error = StatusError::InvalidResponse;
+    bool verified = false;
+};
+
 struct PresenceResult
 {
     StatusError error = StatusError::InvalidResponse;
@@ -76,6 +108,13 @@ public:
     bool cancelOpen(quint64 requestId);
     bool requestClose(const StreamLease &lease);
 
+    quint64 requestPairHost(quint64 generation, const AccountIdentity &account, int localPort, const QByteArray &key);
+    quint64 requestPairOpen(quint64 generation, const QString &peerId, const QHostAddress &address, const QByteArray &key);
+    quint64 requestPairSource(quint64 generation, const AccountIdentity &account, const QString &peerId,
+                              const QHostAddress &address, int sourcePort);
+    bool cancelPairing(quint64 requestId);
+    bool requestClose(const PairingLease &lease);
+
 signals:
     void statusFinished(quint64 generation, const aurora::tailscale::StatusResult &result);
     void loginFinished(quint64 generation, const aurora::tailscale::LoginResult &result);
@@ -86,11 +125,23 @@ signals:
     void openFinished(quint64 generation, quint64 requestId, const aurora::tailscale::OpenResult &result);
     // The ID is the original open request ID, including canceled allocations.
     void closeFinished(quint64 generation, quint64 openRequestId, aurora::tailscale::StatusError error);
+    void pairHostFinished(quint64 generation, quint64 requestId, const aurora::tailscale::PairingLeaseResult &result);
+    void pairOpenFinished(quint64 generation, quint64 requestId, const aurora::tailscale::PairingLeaseResult &result);
+    void pairSourceFinished(quint64 generation, quint64 requestId, const aurora::tailscale::PairSourceResult &result);
+    void pairCloseFinished(quint64 generation, quint64 allocationRequestId, aurora::tailscale::StatusError error);
     void leasesInvalidated();
 
 private:
     friend class StreamLease;
-    enum class Operation { Status, Login, Logout, Host, Publish, Presence, Open, Close };
+    friend class PairingLease;
+    enum class Operation { Status, Login, Logout, Host, Publish, Presence, Open, Close, PairHost, PairOpen, PairSource, PairClose };
+    struct PairingContext
+    {
+        AccountIdentity account;
+        QHostAddress localAddress;
+        QString peerId;
+        QHostAddress peerAddress;
+    };
     struct Request
     {
         Operation operation;
@@ -98,6 +149,7 @@ private:
         qint64 expires = 0;
         QByteArray params = "{}";
         QByteArray nonce;
+        std::optional<PairingContext> pairing;
         quint64 openRequestId = 0;
         bool enabled = false;
         bool sent = false;
@@ -109,11 +161,20 @@ private:
         quint64 generation;
         QString remoteId;
         bool closing = false;
+        std::optional<PairingContext> pairing;
     };
     struct Reply;
 
     bool matchesAccount(quint64 generation) const;
     bool matchesPeer(quint64 generation, const QString &peerId, const QHostAddress &address) const;
+    std::optional<PairingContext> pairingContext(quint64 generation, const QString &peerId = {},
+                                                 const QHostAddress &address = {}) const;
+    bool matchesPairingContext(quint64 generation, const PairingContext &context) const;
+    bool matchesPairingLease(const Lease &lease) const;
+    void retireStalePairingLeases();
+    bool leaseIsLive(quint64 token, bool auxiliary) const;
+    bool closeOwnedLease(quint64 token, bool auxiliary);
+    int leaseCount(bool auxiliary) const;
     quint64 startRequest(Request request);
     void enqueueClose(quint64 openRequestId, const Lease &lease);
     void pump();
@@ -137,6 +198,7 @@ private:
     QQueue<Request> closes;
     QHash<quint64, Lease> leases;
     std::optional<Status> verifiedStatus;
+    std::optional<PairingContext> verifiedPairingHost;
     quint64 verifiedGeneration = 0;
     quint64 foreground = 0;
     quint64 serial = 0;
@@ -147,3 +209,5 @@ private:
 
 Q_DECLARE_METATYPE(aurora::tailscale::PresenceResult)
 Q_DECLARE_METATYPE(aurora::tailscale::OpenResult)
+Q_DECLARE_METATYPE(aurora::tailscale::PairingLeaseResult)
+Q_DECLARE_METATYPE(aurora::tailscale::PairSourceResult)

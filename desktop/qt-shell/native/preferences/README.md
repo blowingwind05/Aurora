@@ -38,6 +38,34 @@ Unreadable, malformed, and oversized files give effective defaults. An explicit
 `reset()` can replace an invalid file with an empty JSON object. A caller that
 wants a session-only change after a failed save can keep that value in memory.
 
+## Playback and session controls
+
+Take one snapshot for both launch outputs. Pass coordinator-owned per-host
+values to `withHostOverrides()`. Valid host values take precedence over
+persisted values. Invalid entries leave the base value in effect, and the
+merge takes place in memory.
+
+```cpp
+const auto playback = streamPreferences.read().withHostOverrides(hostOverrides);
+view.preferenceArguments = [playback](auto defaults) {
+    return playback.arguments(defaults.useViewerDefault, defaults.useBundledDefaults);
+};
+view.sessionPreferences = playback.sessionControlSnapshot();
+```
+
+`arguments()` applies the legacy viewer and bundled default selectors.
+Following the host leaves resolution negotiation to Moonlight. The V-Sync
+and HDR compatibility rules affect only the launch arguments. The session
+JSON is the original control subset with string-valued preferences and the
+effective bitrate estimate when no explicit bitrate is set.
+
+For a complete worker line, call `SessionControlChange::fromLine(line)` with
+its line terminator removed. For the supervisor's option/value signal, pass
+`{option, value}` directly to `StreamPreferences::applySessionControlChange()`
+to save to the base file. The result distinguishes `Ignored`, `Saved`, and
+`SaveFailed`. To keep a valid change in a host or session scope, use
+`SessionControlChange::isValid()` and update the coordinator's override map.
+
 ## Coexistence
 
 Migration uses the existing files directly. Reads leave files untouched and
@@ -63,6 +91,8 @@ cmake -E chdir build/preferences ctest -C Release --output-on-failure
 
 The fixtures create and remove temporary profiles in the build directory. They
 check defaults without writes, legacy marker/text/JSON contents, round trips,
-startup claims, changes after construction, and blocked or invalid writes. They
-use Qt Core only and require no installed Aurora instance, startup registration,
+startup claims, changes after construction, and blocked or invalid writes.
+The playback fixtures also check launch selectors, per-host precedence,
+the session JSON schema, and the worker change protocol. They use Qt Core
+only and require no installed Aurora instance, startup registration,
 account, or running host.

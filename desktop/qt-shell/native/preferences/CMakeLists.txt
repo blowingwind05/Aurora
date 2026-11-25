@@ -10,6 +10,6 @@ target_compile_features(AuroraPreferenceFixtures PRIVATE cxx_std_17)
 target_link_libraries(AuroraPreferenceFixtures PRIVATE Qt${QT_VERSION_MAJOR}::Core)
 
 enable_testing()
-foreach(fixture fresh migrated coexistence failures)
+foreach(fixture fresh migrated coexistence failures arguments session-control)
     add_test(NAME preferences-${fixture} COMMAND AuroraPreferenceFixtures ${fixture})
 endforeach()

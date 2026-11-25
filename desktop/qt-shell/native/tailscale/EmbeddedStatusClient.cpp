@@ -19,8 +19,11 @@ namespace {
 
 constexpr int requestTimeoutMs = 12000;
 constexpr int presenceTimeoutMs = 900;
+constexpr int pairCloseTimeoutMs = 3000;
 constexpr int maxPresenceRequests = 8;
 constexpr int maxStreamLeases = 32;
+constexpr int maxPairingLeases = 16;
+constexpr int pairingKeyBytes = 32;
 constexpr int maxRequestBytes = 256 * 1024;
 constexpr int sunshinePort = 48989;
 constexpr int presenceSize = 192;
@@ -37,12 +40,24 @@ QByteArray json(QJsonObject object)
     return QJsonDocument(std::move(object)).toJson(QJsonDocument::Compact);
 }
 
-QByteArray publishParams(const AccountIdentity &account, const QByteArray &packet)
+QByteArray accountParams(QJsonObject fields, const AccountIdentity &account)
 {
-    auto encoded = json({{"enabled", true}, {"nodeId", account.nodeId}, {"packet", QString::fromLatin1(packet.toBase64())}});
+    fields.insert(QStringLiteral("nodeId"), account.nodeId);
+    auto encoded = json(std::move(fields));
     // Serialize the Go UserID as a decimal JSON number even on Qt 5.
     encoded.chop(1);
     return encoded + ",\"owner\":" + QByteArray::number(account.ownerId) + '}';
+}
+
+bool tailnetIpv4(const QHostAddress &address)
+{
+    static const QHostAddress subnet(QStringLiteral("100.64.0.0"));
+    return address.protocol() == QAbstractSocket::IPv4Protocol && address.scopeId().isEmpty() && address.isInSubnet(subnet, 10);
+}
+
+bool validPort(int port)
+{
+    return port > 0 && port <= 65535;
 }
 
 bool validLeaseId(const QString &id)
@@ -66,6 +81,7 @@ struct EmbeddedStatusClient::Reply
     QByteArray packet;
     QString remoteId;
     quint16 port = 0;
+    bool verified = false;
 };
 
 StreamLease::StreamLease(EmbeddedStatusClient *client, quint64 token, quint16 port)
@@ -80,14 +96,30 @@ StreamLease::~StreamLease()
 
 bool StreamLease::isValid() const
 {
-    if (!client)
-        return false;
-    Q_ASSERT(client->thread() == QThread::currentThread());
-    const auto lease = client->leases.constFind(token);
-    return lease != client->leases.cend() && !lease->closing && client->process.state() == QProcess::Running;
+    return client && client->leaseIsLive(token, false);
 }
 
 bool StreamLease::close()
+{
+    return client && client->requestClose(*this);
+}
+
+PairingLease::PairingLease(EmbeddedStatusClient *client, quint64 token, std::optional<quint16> port)
+    : client(client), token(token), dialPort(port)
+{
+}
+
+PairingLease::~PairingLease()
+{
+    close();
+}
+
+bool PairingLease::isValid() const
+{
+    return client && client->leaseIsLive(token, true);
+}
+
+bool PairingLease::close()
 {
     return client && client->requestClose(*this);
 }
@@ -100,6 +132,8 @@ EmbeddedStatusClient::EmbeddedStatusClient(QString executable, QString stateDire
     qRegisterMetaType<LoginResult>();
     qRegisterMetaType<PresenceResult>();
     qRegisterMetaType<OpenResult>();
+    qRegisterMetaType<PairingLeaseResult>();
+    qRegisterMetaType<PairSourceResult>();
     process.setStandardErrorFile(QProcess::nullDevice());
 #ifdef Q_OS_WIN
     process.setCreateProcessArgumentsModifier([](QProcess::CreateProcessArguments *arguments) {
@@ -160,8 +194,10 @@ bool EmbeddedStatusClient::requestStatus(quint64 generation)
 {
     if (!startRequest({Operation::Status, generation}))
         return false;
-    if (verifiedGeneration != generation)
+    if (verifiedGeneration != generation) {
         verifiedStatus.reset();
+        retireStalePairingLeases();
+    }
     return true;
 }
 
@@ -170,6 +206,8 @@ bool EmbeddedStatusClient::requestLogin(quint64 generation)
     if (!startRequest({Operation::Login, generation}))
         return false;
     verifiedStatus.reset();
+    verifiedPairingHost.reset();
+    retireStalePairingLeases();
     return true;
 }
 
@@ -178,6 +216,8 @@ bool EmbeddedStatusClient::requestLogout(quint64 generation)
     if (!startRequest({Operation::Logout, generation}))
         return false;
     verifiedStatus.reset();
+    verifiedPairingHost.reset();
+    retireStalePairingLeases();
     return true;
 }
 
@@ -216,7 +256,7 @@ bool EmbeddedStatusClient::requestPublish(quint64 generation, bool enabled, std:
     if (enabled) {
         if (!matchesAccount(generation) || !account || !(*account == *verifiedStatus->account) || !validPresence(packet, 2))
             return false;
-        request.params = publishParams(*account, packet);
+        request.params = accountParams({{"enabled", true}, {"packet", QString::fromLatin1(packet.toBase64())}}, *account);
     } else {
         request.params = json({{"enabled", false}});
     }
@@ -238,7 +278,7 @@ quint64 EmbeddedStatusClient::requestPresence(quint64 generation, const QString 
 quint64 EmbeddedStatusClient::requestOpen(quint64 generation, const QString &peerId, const QHostAddress &address)
 {
     if (address.protocol() != QAbstractSocket::IPv4Protocol || !matchesPeer(generation, peerId, address)
-        || leases.size() >= maxStreamLeases) {
+        || leaseCount(false) >= maxStreamLeases) {
         return 0;
     }
     // The Go RPC checks the current account's peer by address and accepts only this port.
@@ -257,22 +297,137 @@ bool EmbeddedStatusClient::cancelOpen(quint64 requestId)
     return true;
 }
 
-bool EmbeddedStatusClient::requestClose(const StreamLease &lease)
+std::optional<EmbeddedStatusClient::PairingContext> EmbeddedStatusClient::pairingContext(
+    quint64 generation, const QString &peerId, const QHostAddress &address) const
+{
+    if (!matchesAccount(generation) || !tailnetIpv4(verifiedStatus->localAddress))
+        return std::nullopt;
+    if (!peerId.isEmpty() && (!tailnetIpv4(address) || !matchesPeer(generation, peerId, address)))
+        return std::nullopt;
+    return PairingContext{*verifiedStatus->account, verifiedStatus->localAddress, peerId, address};
+}
+
+bool EmbeddedStatusClient::matchesPairingContext(quint64 generation, const PairingContext &context) const
+{
+    const auto current = pairingContext(generation, context.peerId, context.peerAddress);
+    return current && current->account == context.account && current->localAddress == context.localAddress;
+}
+
+bool EmbeddedStatusClient::matchesPairingLease(const Lease &lease) const
+{
+    const auto &context = *lease.pairing;
+    if (!context.peerId.isEmpty())
+        return matchesPairingContext(lease.generation, context);
+    // Status polling advances the request generation. Keep the already-registered
+    // listener alive until a status reply changes its verified account or address.
+    // Every new pair-source request still requires the current generation.
+    return verifiedPairingHost && verifiedPairingHost->account == context.account &&
+        verifiedPairingHost->localAddress == context.localAddress;
+}
+
+quint64 EmbeddedStatusClient::requestPairHost(quint64 generation, const AccountIdentity &account, int localPort,
+                                               const QByteArray &key)
+{
+    auto context = pairingContext(generation);
+    if (!context || !(context->account == account) || !validPort(localPort) || localPort == sunshinePort + 1
+        || key.size() != pairingKeyBytes || leaseCount(true) >= maxPairingLeases) {
+        return 0;
+    }
+    Request request{Operation::PairHost, generation};
+    request.params = accountParams({{"localPort", localPort}, {"key", QString::fromLatin1(key.toBase64())}}, account);
+    request.pairing = std::move(context);
+    return startRequest(std::move(request));
+}
+
+quint64 EmbeddedStatusClient::requestPairOpen(quint64 generation, const QString &peerId, const QHostAddress &address,
+                                               const QByteArray &key)
+{
+    auto context = pairingContext(generation, peerId, address);
+    if (peerId.isEmpty() || !context || key.size() != pairingKeyBytes || leaseCount(true) >= maxPairingLeases)
+        return 0;
+    Request request{Operation::PairOpen, generation};
+    request.params = json({{"peerId", peerId}, {"address", address.toString()}, {"key", QString::fromLatin1(key.toBase64())}});
+    request.pairing = std::move(context);
+    return startRequest(std::move(request));
+}
+
+quint64 EmbeddedStatusClient::requestPairSource(quint64 generation, const AccountIdentity &account, const QString &peerId,
+                                                 const QHostAddress &address, int sourcePort)
+{
+    auto context = pairingContext(generation, peerId, address);
+    if (peerId.isEmpty() || !context || !(context->account == account) || !validPort(sourcePort))
+        return 0;
+    Request request{Operation::PairSource, generation};
+    request.params = accountParams({{"peerId", peerId}, {"address", address.toString()}, {"sourcePort", sourcePort}}, account);
+    request.pairing = std::move(context);
+    return startRequest(std::move(request));
+}
+
+bool EmbeddedStatusClient::cancelPairing(quint64 requestId)
+{
+    const auto request = requests.find(requestId);
+    if (request == requests.end() || (request->operation != Operation::PairHost
+            && request->operation != Operation::PairOpen && request->operation != Operation::PairSource))
+        return false;
+    request->cancelled = true;
+    dispatch.start(0);
+    return true;
+}
+
+int EmbeddedStatusClient::leaseCount(bool auxiliary) const
+{
+    return int(std::count_if(leases.cbegin(), leases.cend(), [auxiliary](const Lease &lease) {
+        return lease.pairing.has_value() == auxiliary;
+    }));
+}
+
+bool EmbeddedStatusClient::leaseIsLive(quint64 token, bool auxiliary) const
 {
     Q_ASSERT(thread() == QThread::currentThread());
-    if (lease.client != this || !lease.isValid())
+    const auto lease = leases.constFind(token);
+    return lease != leases.cend() && lease->pairing.has_value() == auxiliary && !lease->closing
+        && process.state() == QProcess::Running
+        && (!auxiliary || matchesPairingLease(*lease));
+}
+
+bool EmbeddedStatusClient::requestClose(const StreamLease &lease)
+{
+    return lease.client == this && closeOwnedLease(lease.token, false);
+}
+
+bool EmbeddedStatusClient::requestClose(const PairingLease &lease)
+{
+    return lease.client == this && closeOwnedLease(lease.token, true);
+}
+
+bool EmbeddedStatusClient::closeOwnedLease(quint64 token, bool auxiliary)
+{
+    Q_ASSERT(thread() == QThread::currentThread());
+    const auto lease = leases.find(token);
+    if (lease == leases.end() || lease->pairing.has_value() != auxiliary || lease->closing
+        || process.state() != QProcess::Running)
         return false;
-    auto &owned = leases[lease.token];
-    owned.closing = true;
-    enqueueClose(lease.token, owned);
+    lease->closing = true;
+    enqueueClose(token, *lease);
     return true;
+}
+
+void EmbeddedStatusClient::retireStalePairingLeases()
+{
+    for (auto lease = leases.begin(); lease != leases.end(); ++lease) {
+        if (lease->pairing && !lease->closing && !matchesPairingLease(*lease)) {
+            lease->closing = true;
+            enqueueClose(lease.key(), lease.value());
+        }
+    }
 }
 
 void EmbeddedStatusClient::enqueueClose(quint64 openRequestId, const Lease &lease)
 {
-    Request close{Operation::Close, lease.generation};
-    close.params = json({{"lease", lease.remoteId}});
-    close.expires = clock.elapsed() + requestTimeoutMs;
+    const bool auxiliary = lease.pairing.has_value();
+    Request close{auxiliary ? Operation::PairClose : Operation::Close, lease.generation};
+    close.params = json({{auxiliary ? "leaseId" : "lease", lease.remoteId}});
+    close.expires = clock.elapsed() + (auxiliary ? pairCloseTimeoutMs : requestTimeoutMs);
     close.openRequestId = openRequestId;
     closes.enqueue(std::move(close));
     scheduleDeadline();
@@ -320,6 +475,11 @@ void EmbeddedStatusClient::pump()
     if (requests.isEmpty())
         return;
     if (process.state() == QProcess::NotRunning) {
+        const auto pending = requests.constFind(foreground);
+        if (pending != requests.cend() && (pending->pairing || pending->operation == Operation::PairClose
+                || pending->operation == Operation::Close)) {
+            return fail(StatusError::Transport);
+        }
         if (!isAvailable())
             return fail(StatusError::Unavailable);
         if (!QDir::isAbsolutePath(stateDirectory) || QDir(stateDirectory).isRoot())
@@ -343,10 +503,15 @@ void EmbeddedStatusClient::pump()
         case Operation::Publish: method = "publish"; break;
         case Operation::Presence: method = "presence"; break;
         case Operation::Open: method = "open"; break;
-        case Operation::Close: method = "close"; break;
+        case Operation::PairHost: method = "pair-host"; break;
+        case Operation::PairOpen: method = "pair-open"; break;
+        case Operation::PairSource: method = "pair-source"; break;
+        case Operation::Close:
+        case Operation::PairClose: method = "close"; break;
         }
         const auto bytes = "{\"id\":\"" + QByteArray::number(id) + "\",\"method\":\"" + method
             + "\",\"params\":" + request->params + "}\n";
+        request->params.clear();
         request->sent = true;
         if (process.write(bytes) != bytes.size())
             return fail(StatusError::Transport);
@@ -430,7 +595,8 @@ void EmbeddedStatusClient::receive()
         if (clock.elapsed() >= request->expires)
             return fail(StatusError::Timeout);
         if (reply.error == StatusError::InvalidResponse || reply.error == StatusError::ResponseTooLarge
-            || (request->operation == Operation::Close && reply.error != StatusError::None)) {
+            || ((request->operation == Operation::Close || request->operation == Operation::PairClose)
+                && reply.error != StatusError::None)) {
             return fail(reply.error);
         }
         complete(id, std::move(reply));
@@ -452,7 +618,7 @@ EmbeddedStatusClient::Reply EmbeddedStatusClient::decode(const Request &request,
         reply.loginPending = result.pending;
         return reply;
     }
-    if (request.operation == Operation::Logout || request.operation == Operation::Close)
+    if (request.operation == Operation::Logout || request.operation == Operation::Close || request.operation == Operation::PairClose)
         return decodeLogoutReply(line, id);
 
     const auto ok = frame.value("ok");
@@ -482,11 +648,33 @@ EmbeddedStatusClient::Reply EmbeddedStatusClient::decode(const Request &request,
         reply.remoteId = lease.value("lease").toString();
         if (lease.size() != 2 || !validLeaseId(reply.remoteId) || port.toDouble() != number || number <= 5
             || number > 65535 - 21 || std::any_of(leases.cbegin(), leases.cend(), [&](const Lease &owned) {
-                return owned.remoteId == reply.remoteId;
+                return !owned.pairing && owned.remoteId == reply.remoteId;
             })) {
             return StatusError::InvalidResponse;
         }
         reply.port = quint16(number);
+    } else if (request.operation == Operation::PairHost || request.operation == Operation::PairOpen) {
+        const auto lease = result.toObject();
+        const bool dial = request.operation == Operation::PairOpen;
+        reply.remoteId = lease.value("leaseId").toString();
+        if (lease.size() != (dial ? 2 : 1) || !validLeaseId(reply.remoteId)
+            || std::any_of(leases.cbegin(), leases.cend(), [&](const Lease &owned) {
+                return owned.pairing && owned.remoteId == reply.remoteId;
+            })) {
+            return StatusError::InvalidResponse;
+        }
+        if (dial) {
+            const auto port = detail::decodePairLocalPort(line);
+            if (!port)
+                return StatusError::InvalidResponse;
+            reply.port = *port;
+        }
+    } else if (request.operation == Operation::PairSource) {
+        const auto state = result.toObject();
+        const auto verified = state.value("verified");
+        if (state.size() != 1 || !verified.isBool())
+            return StatusError::InvalidResponse;
+        reply.verified = verified.toBool();
     } else {
         const auto state = result.toObject();
         const auto enabled = state.value("enabled");
@@ -518,6 +706,8 @@ void EmbeddedStatusClient::notify(quint64 id, const Request &completed, Reply re
         } else {
             verifiedStatus.reset();
         }
+        verifiedPairingHost = pairingContext(completed.generation);
+        retireStalePairingLeases();
         emit statusFinished(completed.generation, {reply.error, std::move(reply.status)});
         break;
     case Operation::Login:
@@ -553,6 +743,40 @@ void EmbeddedStatusClient::notify(quint64 id, const Request &completed, Reply re
         emit openFinished(completed.generation, id, result);
         break;
     }
+    case Operation::PairHost:
+    case Operation::PairOpen: {
+        PairingLeaseResult result{reply.error, {}};
+        const bool cancelled = completed.cancelled || (reply.error == StatusError::None
+            && !matchesPairingContext(completed.generation, *completed.pairing));
+        if (reply.error == StatusError::None) {
+            const Lease lease{completed.generation, std::move(reply.remoteId), cancelled, completed.pairing};
+            leases.insert(id, lease);
+            if (cancelled) {
+                enqueueClose(id, lease);
+            } else {
+                const auto port = completed.operation == Operation::PairOpen ? std::optional<quint16>(reply.port) : std::nullopt;
+                result.lease.reset(new PairingLease(this, id, port));
+            }
+        }
+        if (cancelled)
+            result.error = StatusError::Cancelled;
+        if (completed.operation == Operation::PairHost)
+            emit pairHostFinished(completed.generation, id, result);
+        else
+            emit pairOpenFinished(completed.generation, id, result);
+        break;
+    }
+    case Operation::PairSource:
+        if (completed.cancelled || (reply.error == StatusError::None
+                && !matchesPairingContext(completed.generation, *completed.pairing))) {
+            reply.error = StatusError::Cancelled;
+        }
+        emit pairSourceFinished(completed.generation, id, {reply.error, reply.error == StatusError::None && reply.verified});
+        break;
+    case Operation::PairClose:
+        leases.remove(completed.openRequestId);
+        emit pairCloseFinished(completed.generation, completed.openRequestId, reply.error);
+        break;
     case Operation::Close:
         leases.remove(completed.openRequestId);
         emit closeFinished(completed.generation, completed.openRequestId, reply.error);
@@ -575,6 +799,7 @@ void EmbeddedStatusClient::fail(StatusError error)
     foreground = 0;
     output.clear();
     verifiedStatus.reset();
+    verifiedPairingHost.reset();
     dispatch.stop();
     deadline.stop();
     if (!stopping && process.state() != QProcess::NotRunning) {

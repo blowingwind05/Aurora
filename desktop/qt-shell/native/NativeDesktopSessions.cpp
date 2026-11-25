@@ -38,6 +38,14 @@ void NativeDesktop::initializeStreamSessions(const QString &applicationDirectory
                                                             tailnet.get());
     connect(sessionSupervisor.get(), &SessionSupervisor::prepared, this, &NativeDesktop::receivePrepared);
     connect(sessionSupervisor.get(), &SessionSupervisor::finished, this, &NativeDesktop::sessionFinished);
+    connect(sessionSupervisor.get(), &SessionSupervisor::preferenceChangeRequested, this,
+            [this](const QString &option, const QString &value) {
+        if (!ownsConnection() || !connection->launched)
+            return;
+        const auto saved = streamPreferences.applySessionControlChange({option, value});
+        if (saved == Aurora::Preferences::SessionControlSaveResult::SaveFailed)
+            reportConnection(tr("无法保存串流设置。"), true);
+    });
     connect(&localPresence->routeClient(), &ServerInfo::Client::checkFinished, this, &NativeDesktop::routeChecked);
     connectionStatusRetry.setInterval(120);
     connect(&connectionStatusRetry, &QTimer::timeout, this, &NativeDesktop::requestConnectionStatus);
@@ -45,6 +53,7 @@ void NativeDesktop::initializeStreamSessions(const QString &applicationDirectory
     connect(&trustDeadline, &QTimer::timeout, this, [this] {
         failRoute(tr("等待串流组件验证配对超时。"), true);
     });
+    initializePairingClient();
 }
 
 bool NativeDesktop::handleConnectAction(const QString &action, const QJsonObject &request)
@@ -229,6 +238,8 @@ void NativeDesktop::trustCheckFinished(bool trusted)
         return;
     }
     if (!trusted) {
+        if (beginPairing())
+            return;
         failRoute(tr("当前路径未通过配对验证。"), true);
         return;
     }
@@ -239,6 +250,12 @@ void NativeDesktop::launchPreparedSession()
 {
     const auto &attempt = *connection->prepared;
     SessionView view;
+    const auto selection = streamPreferences.read();
+    view.preferenceArguments = [selection](Aurora::Stream::PreferenceDefaults defaults) {
+        return selection.arguments(defaults.useViewerDefault, defaults.useBundledDefaults);
+    };
+    view.sessionPreferences = selection.sessionControlSnapshot();
+    view.startFullScreen = selection.value(QStringLiteral("display-mode")) == QLatin1String("fullscreen");
 #ifdef Q_OS_WIN
     if (!sessionEngine) {
         failRoute(tr("无法打开串流窗口。"), false);
@@ -320,6 +337,13 @@ void NativeDesktop::sessionFinished(const QUuid &attempt, quint64, const Session
 
 void NativeDesktop::cancelConnection(const QString &reason)
 {
+    if (pairingAttempt && pairingAttempt->exchange) {
+        if (!pairingAttempt->cancellation)
+            pairingAttempt->cancellation = reason;
+        pairingClient->cancel(pairingAttempt->exchange);
+        return;
+    }
+    releasePairingTransport();
     const auto prior = std::exchange(connection, std::nullopt);
     if (!prior)
         return;

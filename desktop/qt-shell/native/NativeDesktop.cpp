@@ -61,7 +61,7 @@ QString hostAddress(const QHostAddress &address)
 }
 
 NativeDesktop::NativeDesktop(const QString &version, const QString &dataDirectory)
-    : directory(dataDirectory), preferences(directory),
+    : directory(dataDirectory), preferences(directory), streamPreferences(directory),
       sleepPrevention(Aurora::Platform::parseHostSleepMode(sleepModeName(preferences.sleepMode()))
                           .value_or(HostSleepMode::System)),
       snapshot{{QStringLiteral("applicationVersion"), version},
@@ -88,6 +88,11 @@ void NativeDesktop::start()
     quit->setShortcut(QKeySequence::Quit);
 #endif
     if (!directory.isEmpty()) {
+        accountAvatar = std::make_unique<aurora::tailscale::AvatarLoader>();
+        connect(accountAvatar.get(), &aurora::tailscale::AvatarLoader::dataUriChanged, this, [this] {
+            snapshot.insert(QStringLiteral("accountAvatar"), accountAvatar->dataUri());
+            emit stateChanged(snapshot);
+        });
         localPresence = std::make_unique<NativeDevicePresence>(directory);
         connect(localPresence.get(), &NativeDevicePresence::changed, this, [this] {
             updateDeviceCatalog(tailnetStatus);
@@ -210,12 +215,19 @@ void NativeDesktop::initializeHost()
     const auto layout = HostLayout::installed();
     if (layout && layout->hasPayload()) {
         host = std::make_unique<LifecycleController>(*layout);
+        hostWallpaper = std::make_unique<Aurora::Wallpaper::HostWallpaperUpdater>(layout->profileDirectory());
         connect(host.get(), &LifecycleController::stateChanged, this, &NativeDesktop::publishHostState);
         connect(host.get(), &LifecycleController::shutdownFinished, this, &quitDesktop);
         if (preferences.managedHostAllowed())
             host->start();
     }
     publishHostState();
+}
+
+void NativeDesktop::refreshHostWallpaper()
+{
+    if (hostWallpaper && devicesForeground && snapshot.value(QStringLiteral("windowVisible")).toBool())
+        hostWallpaper->refreshIfAllowed(host->state().phase == LifecycleController::Phase::Ready);
 }
 
 void NativeDesktop::publishHostState()
@@ -279,6 +291,7 @@ void NativeDesktop::publishHostState()
     sleepPrevention.setHostActive(ready);
     if (localPresence)
         localPresence->setHosting(ready);
+    refreshHostWallpaper();
     syncEmbeddedHost();
     emit stateChanged(snapshot);
 }
@@ -391,11 +404,13 @@ bool NativeDesktop::handleSunshineAction(const QString &action, const QJsonObjec
 
 void NativeDesktop::requestExit()
 {
-    if (sessionSupervisor && sessionSupervisor->phase() != Aurora::Session::SessionSupervisor::Phase::Idle) {
+    if ((sessionSupervisor && sessionSupervisor->phase() != Aurora::Session::SessionSupervisor::Phase::Idle) ||
+        (pairingAttempt && pairingAttempt->exchange)) {
         exitAfterSession = true;
         cancelConnection();
         return;
     }
+    exitAfterSession = false;
     cancelConnection();
     if (host)
         host->shutdown();
@@ -828,7 +843,16 @@ void NativeDesktop::publishTailnetStatus(const aurora::tailscale::Status &status
         {QStringLiteral("profiles"), profileRows},
     });
     updateDeviceCatalog(status);
+    refreshAccountAvatar(status);
     emit stateChanged(snapshot);
+}
+
+void NativeDesktop::refreshAccountAvatar(const aurora::tailscale::Status &status)
+{
+    if (accountAvatar) {
+        const bool visible = avatarVisible && snapshot.value(QStringLiteral("windowVisible")).toBool();
+        accountAvatar->setContext(quint64(accountRevision), status, visible);
+    }
 }
 
 void NativeDesktop::updateDeviceCatalog(const aurora::tailscale::Status &status)
@@ -887,6 +911,16 @@ void NativeDesktop::activate(const QString &page)
 void NativeDesktop::handleRequest(const QJsonObject &request)
 {
     const auto action = request.value(QStringLiteral("action")).toString();
+    if (action == QLatin1String("avatar-visible") || action == QLatin1String("avatar-hidden")) {
+        avatarVisible = action == QLatin1String("avatar-visible");
+        refreshAccountAvatar(tailnetStatus);
+        return;
+    }
+    if (action == QLatin1String("devices-foreground") || action == QLatin1String("devices-background")) {
+        devicesForeground = action == QLatin1String("devices-foreground");
+        refreshHostWallpaper();
+        return;
+    }
     if (handleTailnetAction(action, request))
         return;
     if (handleHostAction(action))

@@ -20,12 +20,16 @@ class ReadinessAdmin
 {
 public:
     virtual ~ReadinessAdmin() = default;
-    // Completion belongs to the worker thread. Destruction cancels a pending read.
+    virtual AdminIdentity identity() const { return {}; }
+    // Completions belong to the worker thread. Destruction cancels pending work.
     virtual bool readConfig(BundledAdmin::Completion completion) = 0;
     virtual bool saveConfig(BundledAdmin::PreparePayload, BundledAdmin::VerifyReadback, BundledAdmin::Completion)
     {
         return false;
     }
+    virtual bool readPendingPairings(BundledAdmin::PendingCompletion) { return false; }
+    virtual bool approvePairing(SupervisorPairingApproval, BundledAdmin::ApprovalCompletion,
+                                BundledAdmin::ApprovalStillCurrent) { return false; }
 };
 
 struct LifecycleDependencies
@@ -57,6 +61,7 @@ public:
         QString error;
         bool cleanupPending = false;
         QString settingsSession;
+        AdminIdentity adminIdentity;
     };
 
     explicit LifecycleController(HostLayout layout, QObject *parent = nullptr);
@@ -73,16 +78,23 @@ public:
 
     // Accepts one settings operation at a time while Ready. An accepted operation
     // completes asynchronously on this thread while the controller lives.
-    bool settingsBusy() const { return bool(pendingSettings_); }
+    bool adminBusy() const { return bool(pendingAdmin_); }
+    bool settingsBusy() const { return adminBusy(); }
     bool readSettings(SettingsReadCompletion completion);
     bool saveSettings(SettingsEdit edit, SettingsSaveCompletion completion);
+
+    // Pass the authenticated session captured by the coordinator for this request.
+    bool readPendingPairings(const QString &session, BundledAdmin::PendingCompletion completion);
+    // The optional guard must safely read the caller's authorization on the worker thread.
+    bool approvePairing(const QString &session, SupervisorPairingApproval approval,
+                        BundledAdmin::ApprovalCompletion completion, BundledAdmin::ApprovalStillCurrent stillCurrent = {});
 
 signals:
     void stateChanged();
     void shutdownFinished();
 
 private:
-    struct PendingSettings;
+    struct PendingAdmin;
     friend class LifecycleWorker;
     enum class Action { Start, Restart, Stop, Shutdown };
 
@@ -94,9 +106,12 @@ private:
     std::shared_ptr<std::atomic<quint64>> latest_;
     LifecycleWorker *worker_ = nullptr;
     State state_;
-    std::unique_ptr<PendingSettings> pendingSettings_;
-    quint64 nextSettingsOperation_ = 0;
+    std::unique_ptr<PendingAdmin> pendingAdmin_;
+    quint64 nextAdminOperation_ = 0;
     bool closing_ = false;
 };
 
 } // namespace Aurora::Sunshine
+
+Q_DECLARE_METATYPE(Aurora::Sunshine::BundledAdmin::PendingResult)
+Q_DECLARE_METATYPE(Aurora::Sunshine::BundledAdmin::ApprovalResult)

@@ -110,11 +110,29 @@ public:
     QList<Request> requests;
     qint64 decryptedBytes = 0;
     int connections = 0;
+    bool holdHandshake = false;
+    qintptr waitingHandshake = -1;
+
+    void releaseHandshake()
+    {
+        if (waitingHandshake != -1)
+            acceptTls(std::exchange(waitingHandshake, -1));
+    }
 
 protected:
     void incomingConnection(qintptr descriptor) override
     {
         ++connections;
+        if (holdHandshake) {
+            waitingHandshake = descriptor;
+            return;
+        }
+        acceptTls(descriptor);
+    }
+
+private:
+    void acceptTls(qintptr descriptor)
+    {
         auto *socket = new QSslSocket(this);
         require(socket->setSocketDescriptor(descriptor), QStringLiteral("Fixture socket initialization failed."));
         socket->setLocalCertificate(identity.certificate);
@@ -180,15 +198,15 @@ std::unique_ptr<BundledAdmin> openFixture(const QString &profile, const HttpsFix
     return admin;
 }
 
-template <typename Start>
-Result waitFor(Start start)
+template <typename T = Result, typename Start>
+T waitFor(Start start)
 {
     QEventLoop loop;
     QTimer watchdog;
     watchdog.setSingleShot(true);
     QObject::connect(&watchdog, &QTimer::timeout, &loop, &QEventLoop::quit);
-    std::optional<Result> result;
-    require(start([&](Result value) {
+    std::optional<T> result;
+    require(start([&](T value) {
         require(!result, QStringLiteral("Completion ran twice."));
         result = std::move(value);
         loop.quit();
@@ -426,6 +444,120 @@ void testWrongPinAndCancellation(const QString &profile, const Identity &pinned,
     expect(result, Error::None, 200, QStringLiteral("Completion can release the client"));
 }
 
+void testPairing(const QString &profile, const Identity &pinned, const Identity &other)
+{
+    using PendingResult = BundledAdmin::PendingResult;
+    using ApprovalResult = BundledAdmin::ApprovalResult;
+    using Aurora::Sunshine::SupervisorPairingApproval;
+    HttpsFixture server(pinned);
+    auto admin = openFixture(profile, server);
+    const auto id = QStringLiteral("00112233445566778899aAbBcCdDeEfF");
+    const auto pin = QStringLiteral("0123");
+    const auto name = QStringLiteral("Offline fixture");
+
+    server.responses.enqueue(reply(200, R"json({"pairings":[
+        {"id":"00112233445566778899aAbBcCdDeEfF","name":"device 1.0","address":"::ffff:127.0.0.1","sourcePort":65535},
+        {"id":"00112233445566778899aAbBcCdDeEfF","name":"other","address":"192.0.2.10","sourcePort":1},
+        {"id":"00112233445566778899aAbBcCdDeEfF","address":"127.1","sourcePort":1e2},
+        {"id":"00112233445566778899aAbBcCdDeEfF","address":"127.00.0.1","sourcePort":42.0},
+        {"id":"00112233445566778899aAbBcCdDeEfF","address":"2001:db8::1","sourcePort":"443"},
+        {"id":"00112233445566778899aAbBcCdDeEfF","address":"127.0.0.1:55","sourcePort":65536},
+        {"id":"00112233445566778899aAbBcCdDeEfF","name":42,"address":false,"sourcePort":0},
+        {"id":"00112233445566778899aAbBcCdDeEfF","address":"127.0.0.1"},
+        {"id":"00112233445566778899aAbBcCdDeEfF","sourcePort":-1},
+        {"id":"00112233445566778899aAbBcCdDeEfF","sourcePort":12.5},
+        {"id":"00112233445566778899aAbBcCdDeEfF","sourcePort":true},
+        {"id":"bad","sourcePort":1234}, false
+    ]})json"));
+    const auto list = waitFor<PendingResult>([&](BundledAdmin::PendingCompletion done) {
+        return admin->readPendingPairings(std::move(done));
+    });
+    require(bool(list) && list.pairings.size() == 11 && server.requests.size() == 1 &&
+            server.requests.first().startLine == "GET /api/pin HTTP/1.1",
+            QStringLiteral("Pending GET did not return the legacy array, or it wrote to the host."));
+    require(list.pairings.at(0).id == id && list.pairings.at(0).name == QStringLiteral("device 1.0") &&
+            list.pairings.at(0).sourceIpv4 == QHostAddress(QHostAddress::LocalHost) && list.pairings.at(0).sourcePort == 65535 &&
+            list.pairings.at(1).sourceIpv4 == QHostAddress(QStringLiteral("192.0.2.10")) && list.pairings.at(1).sourcePort == 1,
+            QStringLiteral("Strict IPv4, mapped IPv4, duplicate IDs, or integer boundary ports were lost."));
+    for (int i = 2; i < list.pairings.size(); ++i)
+        require(!list.pairings.at(i).sourcePort, QStringLiteral("An invalid or missing source port was trusted."));
+    require(!list.pairings.at(2).sourceIpv4 && !list.pairings.at(3).sourceIpv4 &&
+            !list.pairings.at(4).sourceIpv4 && list.pairings.at(4).address == QStringLiteral("2001:db8::1") &&
+            !list.pairings.at(5).sourceIpv4 && list.pairings.at(6).address.isEmpty() && list.pairings.at(6).name.isEmpty(),
+            QStringLiteral("An ambiguous address or wrong JSON field type was promoted to a typed IPv4 source."));
+
+    const auto getPending = [&] {
+        return waitFor<PendingResult>([&](BundledAdmin::PendingCompletion done) {
+            return admin->readPendingPairings(std::move(done));
+        });
+    };
+    server.responses.enqueue(reply(200, R"({"status":true,"pairings":{}})"));
+    require(getPending().error == Error::InvalidResponse, QStringLiteral("Pending lookup accepted a non-array."));
+    server.responses.enqueue(reply(401, R"({"pairings":[]})"));
+    require(getPending().error == Error::Unauthorized, QStringLiteral("Pending lookup accepted missing authorization."));
+
+    const auto approve = [&](QString pairingId, QString enteredPin, QString deviceName) {
+        return waitFor<ApprovalResult>([&](BundledAdmin::ApprovalCompletion done) {
+            return admin->approvePairing(SupervisorPairingApproval::authorized(pairingId, enteredPin, deviceName),
+                                         std::move(done));
+        });
+    };
+    const auto beforeApproval = server.requests.size();
+    for (const auto &badPin : {QStringLiteral("123"), QStringLiteral("12345"), QStringLiteral(" 123"), QStringLiteral("\uff11\uff12\uff13\uff14")})
+        require(approve(id, badPin, name).error == Error::InvalidPayload, QStringLiteral("Invalid PIN was accepted."));
+    require(approve(id + QStringLiteral("\n"), pin, name).error == Error::InvalidPayload &&
+            approve(id, pin, QStringLiteral("\u3000")).error == Error::InvalidPayload &&
+            approve(id, pin, QStringLiteral("name#")).error == Error::InvalidPayload &&
+            approve(id, pin, QStringLiteral("name\r")).error == Error::InvalidPayload &&
+            approve(id, pin, QString(43, QChar(0x754c))).error == Error::InvalidPayload &&
+            server.requests.size() == beforeApproval, QStringLiteral("An invalid approval reached the wire."));
+
+    server.responses.enqueue(reply(200, R"({"status":true})"));
+    require(bool(approve(id, pin, name)), QStringLiteral("The synthetic approval was refused."));
+    const auto request = server.requests.last();
+    const auto expected = QJsonObject{{QStringLiteral("pairing_id"), id}, {QStringLiteral("pin"), pin},
+                                      {QStringLiteral("name"), name}};
+    require(request.startLine == "POST /api/pin HTTP/1.1" && QJsonDocument::fromJson(request.body).object() == expected &&
+            request.authorization == "Basic " + (QByteArray("aurora-local:") + fixturePassword).toBase64(),
+            QStringLiteral("Approval must submit the exact ID, PIN, and name over pinned authenticated HTTPS."));
+
+    server.responses.enqueue(reply(200, R"({"status":false})"));
+    require(approve(id, pin, name).error == Error::Rejected, QStringLiteral("An unacknowledged approval succeeded."));
+    server.responses.enqueue(reply(200, R"({"status":"true"})"));
+    require(approve(id, pin, name).error == Error::Rejected, QStringLiteral("A non-boolean status acknowledged approval."));
+
+    server.responses.enqueue(reply(401, R"({"status":true})"));
+    require(approve(id, pin, name).error == Error::Unauthorized, QStringLiteral("An unauthorized response acknowledged approval."));
+
+    HttpsFixture held(pinned);
+    held.holdHandshake = true;
+    auto delayed = openFixture(profile, held);
+    bool authorized = true;
+    std::optional<ApprovalResult> outcome;
+    require(delayed->approvePairing(SupervisorPairingApproval::authorized(id, pin, name),
+        [&](ApprovalResult result) { outcome = std::move(result); },
+        [&] { return authorized; }), QStringLiteral("Approval with a test guard did not start."));
+    for (int i = 0; i < 100 && held.waitingHandshake == -1; ++i)
+        spinFor(5);
+    require(held.waitingHandshake != -1, QStringLiteral("Approval did not reach the held TLS handshake."));
+    authorized = false;
+    held.releaseHandshake();
+    for (int i = 0; i < 100 && !outcome; ++i)
+        spinFor(5);
+    require(outcome && outcome->error == Error::Cancelled && held.decryptedBytes == 0,
+            QStringLiteral("TLS guard returned error %1 with %2 HTTP bytes received.")
+                .arg(outcome ? int(outcome->error) : -1).arg(held.decryptedBytes));
+
+    HttpsFixture wrong(other);
+    auto wrongAdmin = openFixture(profile, wrong);
+    const auto refused = waitFor<ApprovalResult>([&](BundledAdmin::ApprovalCompletion done) {
+        return wrongAdmin->approvePairing(SupervisorPairingApproval::authorized(id, pin, name), std::move(done));
+    });
+    require(refused.error == Error::Tls && wrong.decryptedBytes == 0,
+            QStringLiteral("A wrong pin received approval data."));
+}
+
+
 } // namespace
 
 int main(int argc, char **argv)
@@ -446,6 +578,7 @@ int main(int argc, char **argv)
     testReadAndErrors(profile.path(), pinned, other);
     testSave(profile.path(), pinned);
     testWrongPinAndCancellation(profile.path(), pinned, other);
+    testPairing(profile.path(), pinned, other);
     QTextStream(stdout) << "PASS: loopback TLS pin and credential isolation, bounded HTTPS config read/save, "
-                          "readback, timeout, and cancellation\n";
+                          "readback, timeout, cancellation, and exact pairing approval\n";
 }

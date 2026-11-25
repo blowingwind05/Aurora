@@ -83,6 +83,24 @@ match authenticated readback. Unsupported or invalid fields have per-field error
 Bundled config transport currently projects `privacy: null`; the display privacy
 controls require the separate privacy endpoint.
 
+## Forwarding a supervisor-approved pairing
+
+On the controller thread, capture `state().settingsSession` for the authenticated
+launch and pass it to both calls.
+
+- `readPendingPairings(session, PendingCompletion)` performs the read-only lookup.
+  Correlate its untrusted metadata in the coordinator.
+- `approvePairing(session, SupervisorPairingApproval::authorized(id, pin, name),
+  ApprovalCompletion)` dispatches the exact approval after the coordinator's
+  supervisor authorization. Reuse the session captured for that approval.
+
+These calls share `adminBusy()` with settings and reuse the authenticated client.
+A stale session returns `StaleSession` without sending HTTP. Stop or restart
+invalidates the session, cancels pending completion, and fences approvals that
+have yet to transmit. An approval already sent to the server can have taken
+effect when cancellation is reported. The caller owns enrollment decisions and
+any retry or reconciliation.
+
 ## Offline verification
 
 From a checkout with the catalog, admin, host, and lifecycle slices applied:

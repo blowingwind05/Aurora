@@ -17,6 +17,7 @@ endif()
 
 add_library(AuroraSystemTailscale STATIC
     SystemTailscaleClient.cpp SystemTailscaleClient.h
+    SystemPairingNc.cpp SystemPairingNc.h
     SystemStatus.cpp SystemStatus.h
     WindowsInstallation.cpp WindowsInstallation.h)
 set_target_properties(AuroraSystemTailscale PROPERTIES AUTOMOC ON)

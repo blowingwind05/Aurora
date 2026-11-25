@@ -12,3 +12,12 @@ add_dependencies(AuroraSystemTailnetTests AuroraSystemTailnetFixture)
 
 add_test(NAME AuroraSystemTailscaleRead COMMAND AuroraSystemTailnetTests)
 set_tests_properties(AuroraSystemTailscaleRead PROPERTIES TIMEOUT 50)
+
+add_executable(AuroraPairNcFakeCli PairNcFakeCli.cpp)
+target_compile_features(AuroraPairNcFakeCli PRIVATE cxx_std_17)
+add_executable(AuroraPairNcTests PairNcTests.cpp)
+target_link_libraries(AuroraPairNcTests PRIVATE AuroraSystemTailscale)
+foreach(fixture exchange guards lifecycle limits)
+    add_test(NAME system-pair-nc-${fixture} COMMAND AuroraPairNcTests ${fixture} $<TARGET_FILE:AuroraPairNcFakeCli>)
+    set_tests_properties(system-pair-nc-${fixture} PROPERTIES TIMEOUT 15)
+endforeach()

@@ -5,12 +5,14 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QNetworkAccessManager>
 #include <QNetworkProxy>
 #include <QNetworkReply>
 #include <QNetworkRequest>
 #include <QPointer>
+#include <QRegularExpression>
 #include <QSslCertificate>
 #include <QSslConfiguration>
 #include <QSslError>
@@ -100,17 +102,137 @@ bool matchesPin(const QByteArray &expected, const QSslCertificate &peer)
     return difference == 0;
 }
 
-class ConfigExchange final : public QObject
+bool isPairingId(const QString &id)
+{
+    static const QRegularExpression hex(QStringLiteral(R"(\A[0-9a-fA-F]{32}\z)"));
+    return hex.match(id).hasMatch();
+}
+
+QString validateApproval(const QString &id, const QString &pin, const QString &name)
+{
+    if (!isPairingId(id))
+        return QStringLiteral("请选择一条待确认的配对请求。");
+    if (pin.size() != 4 || !std::all_of(pin.cbegin(), pin.cend(), [](QChar digit) {
+            return digit >= QLatin1Char('0') && digit <= QLatin1Char('9');
+        }))
+        return QStringLiteral("请输入主控端显示的 4 位数字 PIN。");
+    if (name.trimmed().isEmpty() || name.toUtf8().size() > 128 ||
+        std::any_of(name.cbegin(), name.cend(), [](QChar ch) {
+            return ch == QLatin1Char('#') || ch.category() == QChar::Other_Control;
+        }))
+        return QStringLiteral("名称最多 128 字节，不能含 # 或控制字符。");
+    return {};
+}
+
+std::optional<quint32> dottedIpv4(const QString &text)
+{
+    const auto octets = text.split(QLatin1Char('.'));
+    if (octets.size() != 4)
+        return std::nullopt;
+
+    quint32 address = 0;
+    for (const auto &octet : octets) {
+        if (octet.isEmpty() || octet.size() > 3 || (octet.size() > 1 && octet.front() == QLatin1Char('0')))
+            return std::nullopt;
+        quint32 value = 0;
+        for (const auto digit : octet) {
+            if (digit < QLatin1Char('0') || digit > QLatin1Char('9'))
+                return std::nullopt;
+            value = 10 * value + quint32(digit.unicode() - '0');
+        }
+        if (value > 255)
+            return std::nullopt;
+        address = (address << 8) | value;
+    }
+    return address;
+}
+
+std::optional<QHostAddress> pairingIpv4(const QString &text)
+{
+    if (!text.contains(QLatin1Char(':'))) {
+        const auto address = dottedIpv4(text);
+        return address ? std::optional<QHostAddress>(QHostAddress(*address)) : std::nullopt;
+    }
+
+    // Legacy pairing correlation also understood IPv4-mapped IPv6.
+    static const QRegularExpression ipv6Text(QStringLiteral(R"(\A[0-9a-fA-F:.]{1,45}\z)"));
+    if (!ipv6Text.match(text).hasMatch() ||
+        (text.contains(QLatin1Char('.')) && !dottedIpv4(text.mid(text.lastIndexOf(QLatin1Char(':')) + 1))))
+        return std::nullopt;
+
+    QHostAddress mapped;
+    if (!mapped.setAddress(text) || mapped.protocol() != QAbstractSocket::IPv6Protocol)
+        return std::nullopt;
+    const auto address = mapped.toIPv6Address();
+    if (!std::all_of(address.c, address.c + 10, [](quint8 byte) { return byte == 0; }) ||
+        address[10] != 0xff || address[11] != 0xff)
+        return std::nullopt;
+    return QHostAddress((quint32(address[12]) << 24) | (quint32(address[13]) << 16) |
+                        (quint32(address[14]) << 8) | quint32(address[15]));
+}
+
+QJsonObject pendingObject(const QByteArray &body, QJsonObject object)
+{
+    // QJsonValue does not retain the numeric spelling. Like TryGetInt32, accept
+    // source ports written as JSON integers only. Keep quoted strings intact.
+    static const QRegularExpression tokens(QStringLiteral(
+        R"json("(?:[^"\\]++|\\.)*+"|-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?)json"));
+    const auto source = QString::fromUtf8(body);
+    auto normalized = source;
+    auto matches = tokens.globalMatch(source);
+    bool changed = false;
+    while (matches.hasNext()) {
+        const auto token = matches.next();
+        const auto value = token.captured();
+        if (value.front() == QLatin1Char('"') ||
+            (!value.contains(QLatin1Char('.')) && !value.contains(QLatin1Char('e'), Qt::CaseInsensitive)))
+            continue;
+        const auto start = token.capturedStart();
+        normalized[start] = QLatin1Char('0');
+        for (auto i = start + 1; i < token.capturedEnd(); ++i)
+            normalized[i] = QLatin1Char(' ');
+        changed = true;
+    }
+    return changed ? QJsonDocument::fromJson(normalized.toUtf8()).object() : std::move(object);
+}
+
+std::optional<PendingPairing> parsePendingPairing(const QJsonValue &entry)
+{
+    if (!entry.isObject())
+        return std::nullopt;
+    const auto object = entry.toObject();
+    const auto id = object.value(QStringLiteral("id")).toString();
+    if (!isPairingId(id))
+        return std::nullopt;
+
+    const auto address = object.value(QStringLiteral("address")).toString();
+    const auto port = object.value(QStringLiteral("sourcePort")).toDouble();
+    std::optional<quint16> sourcePort;
+    if (port >= 1 && port <= 65535 && port == quint16(port))
+        sourcePort = quint16(port);
+    return PendingPairing{id, object.value(QStringLiteral("name")).toString(), address, pairingIpv4(address), sourcePort};
+}
+
+QString pairingCancelledMessage()
+{
+    return QStringLiteral("Sunshine 配对授权已取消。");
+}
+
+} // namespace
+
+class BundledAdmin::Exchange final : public QObject
 {
 public:
-    ConfigExchange(QObject *parent, quint16 port, const QByteArray &pin, const QByteArray &authorization,
-                   const std::optional<QByteArray> &body, BundledAdmin::Completion completion)
-        : QObject(parent), pin_(pin), completion_(std::move(completion))
+    Exchange(QObject *parent, quint16 port, const QByteArray &pin, const QByteArray &authorization,
+             Endpoint endpoint, const std::optional<QByteArray> &body, Completion completion,
+             ApprovalStillCurrent stillCurrent)
+        : QObject(parent), endpoint_(endpoint), pin_(pin), completion_(std::move(completion)),
+          stillCurrent_(std::move(stillCurrent))
     {
         url_.setScheme(QStringLiteral("https"));
         url_.setHost(QStringLiteral("127.0.0.1"));
         url_.setPort(port);
-        url_.setPath(QStringLiteral("/api/config"));
+        url_.setPath(endpoint == Endpoint::Config ? QStringLiteral("/api/config") : QStringLiteral("/api/pin"));
 
         // A private manager per exchange makes every request perform its own pin check.
         network_.setProxy(QNetworkProxy(QNetworkProxy::NoProxy));
@@ -156,6 +278,8 @@ public:
             pinChecked_ = verifiedPeer();
             if (!pinChecked_)
                 finish(tlsFailure());
+            else if (stillCurrent_ && !stillCurrent_())
+                finish(failure(Error::Cancelled, pairingCancelledMessage()));
         });
         connect(reply_, &QNetworkReply::metaDataChanged, this, [this] { checkHeaders(); });
         connect(reply_, &QIODevice::readyRead, this, [this] { readBody(); });
@@ -169,7 +293,7 @@ public:
         deadline_.start(deadlineMs);
     }
 
-    ~ConfigExchange() override
+    ~Exchange() override
     {
         disconnect(reply_, nullptr, this, nullptr);
         if (reply_->isRunning())
@@ -192,7 +316,7 @@ private:
         if (finished_)
             return false;
         if (reply_->header(QNetworkRequest::ContentLengthHeader).toLongLong() > bodyLimit) {
-            finish(failure(Error::ResponseTooLarge, QStringLiteral("Sunshine 返回的配置响应过大。"), statusCode()));
+            finish(failure(Error::ResponseTooLarge, QStringLiteral("Sunshine 返回的响应过大。"), statusCode()));
             return false;
         }
         const auto encoding = reply_->rawHeader("Content-Encoding").trimmed().toLower();
@@ -209,7 +333,7 @@ private:
             return false;
         response_ += reply_->read(bodyLimit + 1 - response_.size());
         if (response_.size() > bodyLimit) {
-            finish(failure(Error::ResponseTooLarge, QStringLiteral("Sunshine 返回的配置响应过大。"), statusCode()));
+            finish(failure(Error::ResponseTooLarge, QStringLiteral("Sunshine 返回的响应过大。"), statusCode()));
             return false;
         }
         return true;
@@ -234,12 +358,14 @@ private:
 
         const auto document = QJsonDocument::fromJson(response_);
         if (!document.isObject())
-            return finish(failure(Error::InvalidResponse, QStringLiteral("Sunshine 返回的配置响应不是有效的 JSON 对象。"), status));
-        const auto config = document.object();
-        if (config.value(QStringLiteral("status")) != QJsonValue(true))
+            return finish(failure(Error::InvalidResponse, QStringLiteral("Sunshine 返回的响应不是有效的 JSON 对象。"), status));
+        auto config = document.object();
+        if (endpoint_ == Endpoint::PendingPairings)
+            config = pendingObject(response_, std::move(config));
+        else if (config.value(QStringLiteral("status")) != QJsonValue(true))
             return finish(failure(Error::Rejected, QStringLiteral("Sunshine 未接受这项操作。"), status));
 
-        finish({Error::None, status, {}, config});
+        finish({Error::None, status, {}, std::move(config)});
     }
 
     void finish(Result result)
@@ -263,15 +389,25 @@ private:
     QNetworkAccessManager network_;
     QTimer deadline_;
     QUrl url_;
+    const Endpoint endpoint_;
     QByteArray pin_;
-    BundledAdmin::Completion completion_;
+    Completion completion_;
+    ApprovalStillCurrent stillCurrent_;
     QNetworkReply *reply_ = nullptr;
     QByteArray response_;
     bool pinChecked_ = false;
     bool finished_ = false;
 };
 
-} // namespace
+SupervisorPairingApproval SupervisorPairingApproval::authorized(QString pairingId, QString pin, QString name)
+{
+    return SupervisorPairingApproval(std::move(pairingId), std::move(pin), std::move(name));
+}
+
+SupervisorPairingApproval::SupervisorPairingApproval(QString pairingId, QString pin, QString name)
+    : id_(std::move(pairingId)), pin_(std::move(pin)), name_(std::move(name))
+{
+}
 
 std::unique_ptr<BundledAdmin> BundledAdmin::open(const QString &profileDirectory,
     const QByteArray &launchPassword, QString &error)
@@ -313,9 +449,10 @@ BundledAdmin::~BundledAdmin()
     authorization_.fill('\0');
 }
 
-void BundledAdmin::sendConfig(std::optional<QByteArray> body, Completion completion)
+void BundledAdmin::send(Endpoint endpoint, std::optional<QByteArray> body, Completion completion,
+                        ApprovalStillCurrent stillCurrent)
 {
-    new ConfigExchange(this, port_, pin_, authorization_, body, std::move(completion));
+    new Exchange(this, port_, pin_, authorization_, endpoint, body, std::move(completion), std::move(stillCurrent));
 }
 
 void BundledAdmin::finishOperation(Completion &completion, Result result)
@@ -330,7 +467,7 @@ bool BundledAdmin::readConfig(Completion completion)
         return false;
 
     busy_ = true;
-    sendConfig(std::nullopt, [this, completion = std::move(completion)](Result result) mutable {
+    send(Endpoint::Config, std::nullopt, [this, completion = std::move(completion)](Result result) mutable {
         finishOperation(completion, std::move(result));
     });
     return true;
@@ -342,7 +479,7 @@ bool BundledAdmin::saveConfig(PreparePayload prepare, VerifyReadback verify, Com
         return false;
 
     busy_ = true;
-    sendConfig(std::nullopt,
+    send(Endpoint::Config, std::nullopt,
         [this, prepare = std::move(prepare), verify = std::move(verify),
          completion = std::move(completion)](Result current) mutable {
         if (!current)
@@ -361,12 +498,12 @@ bool BundledAdmin::saveConfig(PreparePayload prepare, VerifyReadback verify, Com
         if (body.size() > bodyLimit)
             return finishOperation(completion, failure(Error::InvalidPayload, QStringLiteral("待提交的 Sunshine 配置过大。")));
 
-        sendConfig(std::move(body), [this, verify = std::move(verify),
+        send(Endpoint::Config, std::move(body), [this, verify = std::move(verify),
                                      completion = std::move(completion)](Result posted) mutable {
             if (!posted)
                 return finishOperation(completion, std::move(posted));
 
-            sendConfig(std::nullopt, [this, verify = std::move(verify),
+            send(Endpoint::Config, std::nullopt, [this, verify = std::move(verify),
                                       completion = std::move(completion)](Result actual) mutable {
                 if (actual) {
                     const QPointer<BundledAdmin> alive(this);
@@ -380,6 +517,63 @@ bool BundledAdmin::saveConfig(PreparePayload prepare, VerifyReadback verify, Com
             });
         });
     });
+    return true;
+}
+
+bool BundledAdmin::readPendingPairings(PendingCompletion done)
+{
+    if (QThread::currentThread() != thread() || busy_ || !done)
+        return false;
+
+    busy_ = true;
+    send(Endpoint::PendingPairings, std::nullopt, [this, done = std::move(done)](Result reply) {
+        PendingResult result{reply.error, reply.httpStatus, std::move(reply.message), {}};
+        if (reply) {
+            const auto entries = reply.config.value(QStringLiteral("pairings"));
+            if (!entries.isArray()) {
+                result.error = Error::InvalidResponse;
+                result.message = QStringLiteral("当前 Sunshine 不支持在 Aurora 内选择待确认的配对。");
+            } else {
+                for (const auto &entry : entries.toArray()) {
+                    if (auto pending = parsePendingPairing(entry))
+                        result.pairings.append(std::move(*pending));
+                }
+            }
+        }
+
+        busy_ = false;
+        done(std::move(result));
+    });
+    return true;
+}
+
+bool BundledAdmin::approvePairing(SupervisorPairingApproval approval, ApprovalCompletion done,
+                                  ApprovalStillCurrent stillCurrent)
+{
+    if (QThread::currentThread() != thread() || busy_ || !done)
+        return false;
+
+    auto error = validateApproval(approval.id_, approval.pin_, approval.name_);
+    busy_ = true;
+    if (!error.isEmpty() || (stillCurrent && !stillCurrent())) {
+        const auto code = error.isEmpty() ? Error::Cancelled : Error::InvalidPayload;
+        if (error.isEmpty())
+            error = pairingCancelledMessage();
+        QTimer::singleShot(0, this, [this, done = std::move(done), code, error = std::move(error)] {
+            busy_ = false;
+            done({code, 0, error});
+        });
+        return true;
+    }
+
+    const QJsonObject payload{{QStringLiteral("pairing_id"), approval.id_},
+                              {QStringLiteral("pin"), approval.pin_},
+                              {QStringLiteral("name"), approval.name_}};
+    send(Endpoint::PairApproval, QJsonDocument(payload).toJson(QJsonDocument::Compact),
+        [this, done = std::move(done)](Result reply) {
+            busy_ = false;
+            done({reply.error, reply.httpStatus, std::move(reply.message)});
+        }, std::move(stillCurrent));
     return true;
 }
 

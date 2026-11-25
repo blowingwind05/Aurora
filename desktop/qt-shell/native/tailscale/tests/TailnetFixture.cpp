@@ -27,12 +27,14 @@ QByteArray reply(const QString &id, const QJsonValue &result)
 
 int runRpcFixture(const QString &scenario)
 {
-    QSet<QString> ids, leases;
+    QSet<QString> ids, leases, auxiliary;
     QList<QByteArray> probes;
     QByteArray delayedOpen;
     int nextLease = 0;
+    int nextAux = 0;
+    int statuses = 0;
     bool deferredBatch = scenario == "rpc-batch" || scenario == "rpc-late";
-    bool cancelScenario = scenario == "rpc-cancel";
+    bool cancelScenario = scenario == "rpc-cancel" || scenario.startsWith("rpc-pair-cancel");
     char input[1024];
     while (std::fgets(input, sizeof input, stdin)) {
         const QByteArray line(input);
@@ -46,11 +48,15 @@ int runRpcFixture(const QString &scenario)
         }
         ids.insert(id);
         if (method == "status") {
-            const auto state = QByteArrayLiteral(R"({"BackendState":"Running","TailscaleIPs":["100.76.1.10"],)"
+            auto state = QByteArrayLiteral(R"({"BackendState":"Running","TailscaleIPs":["100.76.1.10"],)"
                 R"("Self":{"ID":"self","UserID":9223372036854775807},)"
                 R"("CurrentTailnet":{"StableID":"tailnet"},)"
                 R"("Peer":{"key":{"ID":"peer","Online":true,"UserID":9223372036854775807,)"
                 R"("TailscaleIPs":["100.76.1.20","fd7a:115c:a1e0::20"]}}})");
+            if (++statuses > 1 && scenario == "rpc-pair-changed")
+                state.replace("100.76.1.20", "100.76.1.21");
+            if (statuses > 2 && scenario == "rpc-pair-host-account-change")
+                state.replace("9223372036854775807", "9223372036854775806");
             write("{\"id\":\"" + id.toLatin1() + "\",\"ok\":true,\"result\":" + state + ",\"error\":null}\n");
         } else if (method == "presence") {
             const auto address = params.value("address").toString();
@@ -113,13 +119,60 @@ int runRpcFixture(const QString &scenario)
             } else {
                 write(response);
             }
+        } else if (method == "pair-host" || method == "pair-open" || method == "pair-source") {
+            const auto key = QString::fromLatin1(QByteArray(32, 'k').toBase64());
+            const bool account = params.value("nodeId") == QJsonValue("self") && line.contains("\"owner\":9223372036854775807");
+            const bool peer = params.value("peerId") == QJsonValue("peer") && params.value("address") == QJsonValue("100.76.1.20");
+            const bool hosting = method == "pair-host";
+            const bool source = method == "pair-source";
+            QByteArray response;
+            if (source) {
+                const auto port = params.value("sourcePort");
+                if (params.size() != 5 || !account || !peer || (port != QJsonValue(51007) && port != QJsonValue(51008)))
+                    return 22;
+                if (scenario == "rpc-pair-bad-source") {
+                    response = reply(id, QJsonObject{{"verified", "true"}});
+                } else if (scenario == "rpc-pair-reject") {
+                    response = "{\"id\":\"" + id.toLatin1() + "\",\"ok\":false,\"result\":null,\"error\":\"fixture\"}\n";
+                } else {
+                    response = reply(id, QJsonObject{{"verified", port == QJsonValue(51007)}});
+                }
+            } else {
+                if (params.value("key").toString() != key || (hosting
+                        ? (params.size() != 4 || !account || params.value("localPort") != QJsonValue(54801))
+                        : (params.size() != 3 || !peer)) || auxiliary.size() >= 16) {
+                    return 23;
+                }
+                const auto lease = QString::number(++nextAux, 16).rightJustified(32, QLatin1Char('0'));
+                auxiliary.insert(lease);
+                QJsonObject payload{{"leaseId", lease}};
+                if (!hosting || scenario == "rpc-pair-bad-host")
+                    payload.insert("localPort", 55011);
+                response = reply(id, payload);
+                if (scenario == "rpc-pair-bad-port")
+                    response.replace("55011", "55011.000000000000001");
+            }
+            if (cancelScenario) {
+                if (probes.size() != 1)
+                    return 24;
+                delayedOpen = response;
+                write(probes.takeFirst());
+            } else {
+                write(response);
+            }
         } else if (method == "close") {
-            if (params.size() != 1 || !leases.remove(params.value("lease").toString()))
+            const bool pair = params.contains("leaseId");
+            if (params.size() != 1 || (pair ? !auxiliary.remove(params.value("leaseId").toString())
+                                           : !leases.remove(params.value("lease").toString())))
                 return 19;
             if (scenario == "rpc-close-fault")
                 return 20;
+            if (pair && scenario == "rpc-pair-close-silent") {
+                QThread::msleep(6000);
+                return 25;
+            }
             cancelScenario = false;
-            write(reply(id, QJsonObject{}));
+            write(reply(id, pair && scenario == "rpc-pair-close-invalid" ? QJsonObject{{"closed", true}} : QJsonObject{}));
         } else {
             return 21;
         }

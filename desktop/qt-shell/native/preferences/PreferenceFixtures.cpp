@@ -221,13 +221,126 @@ void failures(const QString &directory)
     CHECK(profile.entryList(QDir::AllEntries | QDir::Hidden | QDir::NoDotAndDotDot).size() == 5);
 }
 
+void arguments(const QString &directory)
+{
+    const StreamPreferences stream(directory);
+    const auto fresh = stream.read();
+    CHECK(fresh.arguments().join('|') == "--absolute-mouse");
+    CHECK(fresh.arguments(true, false).join('|') == "--absolute-mouse|--display-mode|windowed");
+    CHECK(fresh.arguments(false, true).join('|') == "--absolute-mouse|--no-frame-pacing|--keep-awake|--vsync");
+    CHECK(fresh.arguments(true, true).join('|') ==
+          "--absolute-mouse|--display-mode|windowed|--no-frame-pacing|--keep-awake|--vsync");
+    CHECK(!QFileInfo::exists(directory));
+
+    CHECK(QDir().mkpath(directory));
+    const auto path = QDir(directory).filePath("stream-preferences.json");
+    const QByteArray saved = R"({"resolution":"3840x2160","fps":"30","display-mode":"borderless",
+        "video-decoder":"software","hdr":"on","vsync":"off","frame-pacing":"on","absolute-mouse":"off",
+        "bitrate":"040000","unknown":"on","audio-on-host":true,"video-codec":"HEVC","keep-awake":"off"})";
+    writeFile(path, saved);
+    const auto base = stream.read();
+    const auto baseArgs = base.arguments(true, true).join('|');
+    CHECK(baseArgs == "--no-absolute-mouse|--display-mode|borderless|--fps|30|--no-frame-pacing|--hdr|"
+                       "--no-keep-awake|--resolution|3840x2160|--video-codec|HEVC|--video-decoder|auto|--no-vsync");
+    CHECK(base.value("bitrate") == "40000");
+    CHECK(base.value("video-decoder") == "software" && base.value("frame-pacing") == "on");
+    CHECK(base.arguments().contains("--no-frame-pacing"));
+
+    const auto host = base.withHostOverrides({{"resolution", "host"}, {"vsync", "on"}, {"hdr", "off"},
+        {"fps", "060"}, {"bitrate", "+500"}, {"video-codec", "--untrusted"}, {"unknown", "off"}});
+    const auto hostArgs = host.arguments(true, false).join('|');
+    CHECK(hostArgs == "--no-absolute-mouse|--display-mode|borderless|--fps|30|--frame-pacing|--no-hdr|"
+                      "--no-keep-awake|--video-codec|HEVC|--video-decoder|software|--vsync");
+    CHECK(host.value("bitrate") == "5000");
+    CHECK(base.value("resolution") == "3840x2160" && base.value("vsync") == "off");
+    CHECK(base.arguments(true, true).join('|') == baseArgs);
+
+    const auto negotiated = host.withHostOverrides({{"resolution", "2560x1440"}, {"fps", "60"}, {"bitrate", "150000"}});
+    const auto negotiatedArgs = negotiated.arguments().join('|');
+    CHECK(negotiatedArgs.contains("--resolution|2560x1440"));
+    CHECK(negotiatedArgs.contains("--bitrate|150000"));
+    CHECK(negotiatedArgs.contains("--fps|60"));
+    CHECK(negotiated.value("bitrate") == "150000");
+    CHECK(readFile(path) == saved);
+
+    const StreamPreferenceSnapshot unvalidated{{{"--aurora-runtime", "on"}, {"fps", " 30"}}};
+    CHECK(unvalidated.value("--aurora-runtime").isEmpty());
+    CHECK(unvalidated.value("fps") == "60");
+    CHECK(unvalidated.arguments().join('|') == "--absolute-mouse");
+}
+
+void sessionControl(const QString &directory)
+{
+    const StreamPreferences stream(directory);
+    const auto fresh = stream.read();
+    const QJsonObject defaults{
+        {"resolution", "host"}, {"fps", "60"}, {"bitrate", "10000"}, {"video-codec", "auto"},
+        {"hdr", "off"}, {"performance-overlay", "off"}, {"audio-config", "stereo"},
+        {"audio-on-host", "off"}, {"mute-on-focus-loss", "off"}, {"absolute-mouse", "on"},
+        {"mouse-buttons-swap", "off"}, {"reverse-scroll-direction", "off"}
+    };
+    CHECK(fresh.sessionControlSnapshot() == defaults);
+    CHECK(!QFileInfo::exists(directory));
+
+    for (const auto &line : {QString(), QStringLiteral("aurora-stream-setting/2\tfps\t30"),
+            QStringLiteral("aurora-stream-setting/1\tfps\t 30"), QStringLiteral("aurora-stream-setting/1\tfps\t"),
+            QStringLiteral("aurora-stream-setting/1\tfps\t30\tz"), QStringLiteral("aurora-stream-setting/1\tfps\t30\r\n"),
+            QStringLiteral("aurora-stream-setting/1\tvsync\tOff"), QStringLiteral("aurora-stream-setting/1\tvsync\toff"),
+            QStringLiteral("aurora-stream-setting/1\tvideo-decoder\tauto"), QStringLiteral("aurora-stream-setting/1\tfps"),
+            QStringLiteral("aurora-stream-setting/1\tbitrate\t") + QString(128, QLatin1Char('0'))}) {
+        CHECK(!SessionControlChange::fromLine(line));
+    }
+    CHECK(stream.applySessionControlChange({"fps", "--pin"}) == SessionControlSaveResult::Ignored);
+    CHECK(stream.applySessionControlChange({"vsync", "on"}) == SessionControlSaveResult::Ignored);
+    CHECK(stream.applySessionControlChange({"bitrate", "0500"}) == SessionControlSaveResult::Ignored);
+    CHECK(!QFileInfo::exists(directory));
+
+    CHECK(QDir().mkpath(directory));
+    const auto path = QDir(directory).filePath("stream-preferences.json");
+    writeFile(path, R"({"resolution":"1920x1080","hdr":"on","audio-on-host":"off","unrelated":{"value":4}})");
+    const auto base = stream.read();
+    auto expected = defaults;
+    expected.insert("resolution", "1920x1080");
+    expected.insert("hdr", "on");
+    expected.insert("bitrate", "20000");
+    CHECK(base.sessionControlSnapshot() == expected);
+
+    const auto host = base.withHostOverrides({{"fps", "30"}, {"audio-on-host", "on"}, {"resolution", "3840x2160"}});
+    auto hostExpected = expected;
+    hostExpected.insert("fps", "30");
+    hostExpected.insert("resolution", "3840x2160");
+    hostExpected.insert("bitrate", "40000");
+    hostExpected.insert("audio-on-host", "on");
+    CHECK(host.sessionControlSnapshot() == hostExpected);
+
+    const auto change = SessionControlChange::fromLine(QStringLiteral("aurora-stream-setting/1\tfps\t30"));
+    CHECK(change && change->option == "fps" && change->value == "30");
+    CHECK(stream.applySessionControlChange(*change) == SessionControlSaveResult::Saved);
+    CHECK(base.sessionControlSnapshot() == expected);
+    expected.insert("fps", "30");
+    expected.insert("bitrate", "10000");
+    CHECK(stream.read().sessionControlSnapshot() == expected);
+    const auto saved = QJsonDocument::fromJson(readFile(path)).object();
+    CHECK(saved.value("unrelated").toObject().value("value").toInt() == 4);
+    CHECK(saved.value("fps").toString() == "30" && saved.value("resolution").toString() == "1920x1080");
+
+    QLockFile otherWriter(path + ".lock");
+    CHECK(otherWriter.tryLock(0));
+    const auto before = readFile(path);
+    const SessionControlChange blocked{"bitrate", "500"};
+    CHECK(blocked.isValid());
+    CHECK(stream.applySessionControlChange(blocked) == SessionControlSaveResult::SaveFailed);
+    CHECK(readFile(path) == before);
+}
+
 } // namespace
 
 int main(int argc, char **argv)
 {
     QCoreApplication app(argc, argv);
     const QMap<QString, void (*)(const QString &)> fixtures{
-        {"fresh", fresh}, {"migrated", migrated}, {"coexistence", coexistence}, {"failures", failures}
+        {"fresh", fresh}, {"migrated", migrated}, {"coexistence", coexistence}, {"failures", failures},
+        {"arguments", arguments}, {"session-control", sessionControl}
     };
 
     try {

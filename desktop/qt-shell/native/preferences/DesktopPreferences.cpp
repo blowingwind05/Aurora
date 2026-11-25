@@ -121,6 +121,17 @@ bool validStreamValue(const QString &option, const QString &value)
     return entry != options.cend() && entry->contains(value);
 }
 
+const QStringList &sessionControlOptions()
+{
+    static const QStringList options{
+        QStringLiteral("resolution"), QStringLiteral("fps"), Bitrate, QStringLiteral("video-codec"),
+        QStringLiteral("hdr"), QStringLiteral("performance-overlay"), QStringLiteral("audio-config"),
+        QStringLiteral("audio-on-host"), QStringLiteral("mute-on-focus-loss"), QStringLiteral("absolute-mouse"),
+        QStringLiteral("mouse-buttons-swap"), QStringLiteral("reverse-scroll-direction")
+    };
+    return options;
+}
+
 std::optional<QJsonObject> readStreamFile(const QString &path)
 {
     if (path.isEmpty())
@@ -225,7 +236,7 @@ StartupClaim GeneralPreferences::claimStartupInitialization() const
 QString StreamPreferenceSnapshot::value(const QString &option) const
 {
     const auto entry = overrides.constFind(option);
-    if (entry != overrides.cend())
+    if (entry != overrides.cend() && validStreamValue(option, entry.value()))
         return entry.value();
 
     if (option == Bitrate) {
@@ -243,6 +254,78 @@ QString StreamPreferenceSnapshot::value(const QString &option) const
     const auto &options = streamOptions();
     const auto defaults = options.constFind(option);
     return defaults == options.cend() ? QString() : defaults->first();
+}
+
+StreamPreferenceSnapshot StreamPreferenceSnapshot::withHostOverrides(const QMap<QString, QString> &hostOverrides) const
+{
+    auto snapshot = *this;
+    for (auto entry = hostOverrides.cbegin(); entry != hostOverrides.cend(); ++entry) {
+        if (validStreamValue(entry.key(), entry.value()))
+            snapshot.overrides.insert(entry.key(), entry.value());
+    }
+    return snapshot;
+}
+
+QStringList StreamPreferenceSnapshot::arguments(bool useViewerDefault, bool useBundledDefaults) const
+{
+    QMap<QString, QString> effective;
+    for (auto entry = overrides.cbegin(); entry != overrides.cend(); ++entry) {
+        if (validStreamValue(entry.key(), entry.value()))
+            effective.insert(entry.key(), entry.value());
+    }
+    if (effective.value(QStringLiteral("resolution")) == QLatin1String("host"))
+        effective.remove(QStringLiteral("resolution"));
+
+    const auto addDefault = [&effective](const QString &option) {
+        if (!effective.contains(option))
+            effective.insert(option, streamOptions().constFind(option)->first());
+    };
+    if (useViewerDefault)
+        addDefault(QStringLiteral("display-mode"));
+    addDefault(QStringLiteral("absolute-mouse"));
+    if (useBundledDefaults) {
+        addDefault(QStringLiteral("vsync"));
+        addDefault(QStringLiteral("frame-pacing"));
+        addDefault(QStringLiteral("keep-awake"));
+    }
+    if (effective.value(QStringLiteral("vsync")) == QLatin1String("off"))
+        effective.insert(QStringLiteral("frame-pacing"), QStringLiteral("off"));
+    if (effective.value(QStringLiteral("hdr")) == QLatin1String("on"))
+        effective.insert(QStringLiteral("video-decoder"), QStringLiteral("auto"));
+
+    QStringList arguments;
+    for (auto entry = effective.cbegin(); entry != effective.cend(); ++entry) {
+        const bool off = entry.value() == QLatin1String("off");
+        arguments.append((off ? QStringLiteral("--no-") : QStringLiteral("--")) + entry.key());
+        if (!off && entry.value() != QLatin1String("on"))
+            arguments.append(entry.value());
+    }
+    return arguments;
+}
+
+QJsonObject StreamPreferenceSnapshot::sessionControlSnapshot() const
+{
+    QJsonObject snapshot;
+    for (const auto &option : sessionControlOptions())
+        snapshot.insert(option, value(option));
+    return snapshot;
+}
+
+std::optional<SessionControlChange> SessionControlChange::fromLine(const QString &line)
+{
+    static const auto prefix = QStringLiteral("aurora-stream-setting/1\t");
+    if (line.size() > 128 || !line.startsWith(prefix))
+        return std::nullopt;
+    const auto fields = line.mid(prefix.size()).split(QLatin1Char('\t'));
+    if (fields.size() != 2)
+        return std::nullopt;
+    SessionControlChange change{fields.at(0), fields.at(1)};
+    return change.isValid() ? std::optional<SessionControlChange>(change) : std::nullopt;
+}
+
+bool SessionControlChange::isValid() const
+{
+    return sessionControlOptions().contains(option) && validStreamValue(option, value);
 }
 
 StreamPreferences::StreamPreferences(const QString &directory)
@@ -286,6 +369,13 @@ bool StreamPreferences::reset() const
         return false;
     QLockFile lock(path_ + QStringLiteral(".lock"));
     return lock.tryLock(0) && saveAtomically(path_, "{}");
+}
+
+SessionControlSaveResult StreamPreferences::applySessionControlChange(const SessionControlChange &change) const
+{
+    if (!change.isValid())
+        return SessionControlSaveResult::Ignored;
+    return set(change.option, change.value) ? SessionControlSaveResult::Saved : SessionControlSaveResult::SaveFailed;
 }
 
 } // namespace Aurora::Preferences

@@ -51,6 +51,59 @@ class StatusTests final : public QObject
     Q_OBJECT
 
 private slots:
+
+    void avatarStatusIsBoundToTheExactOwner()
+    {
+        auto bytes = connectedFixture();
+        bytes.replace("\"DisplayName\": \"Fixture owner\"", "\"ProfilePicURL\": \"https://avatars.githubusercontent.com/u/1?v=4\", \"DisplayName\": \"Fixture owner\"");
+        bytes.replace("\"DisplayName\": \"Different owner\"", "\"ProfilePicURL\": \"https://avatars.githubusercontent.com/u/2\", \"DisplayName\": \"Different owner\"");
+        const auto own = decodeStatusReply(bytes, "fixture");
+        QVERIFY(own.status && own.status->account);
+        QCOMPARE(own.status->avatarUrl, QUrl(QStringLiteral("https://avatars.githubusercontent.com/u/1?v=4")));
+
+        const auto wrong = decodeStatusReply(
+            QByteArray(bytes).replace("\"9007199254740992\": {\"ID\": 9007199254740992", "\"9007199254740992\": {\"ID\": 9007199254740993"),
+            "fixture");
+        QVERIFY(wrong.status && wrong.status->avatarUrl.isEmpty());
+        const auto tagged = decodeStatusReply(QByteArray(bytes).replace("\"Tags\": null", "\"Tags\": [\"tag:fixture\"]"), "fixture");
+        QVERIFY(tagged.status && tagged.status->avatarUrl.isEmpty());
+        const auto stopped = decodeStatusReply(
+            QByteArray(bytes).replace("\"BackendState\": \"Running\"", "\"BackendState\": \"Stopped\""), "fixture");
+        QVERIFY(stopped.status && stopped.status->avatarUrl.isEmpty());
+        const auto unvetted = decodeStatusReply(QByteArray(bytes).replace("avatars.githubusercontent.com/u/1",
+            "avatars.githubusercontent.com.invalid/u/1"), "fixture");
+        QVERIFY(unvetted.status && unvetted.status->avatarUrl.isEmpty());
+    }
+
+    void avatarUrlAllowlist()
+    {
+        for (const auto *text : {"https://lh3.googleusercontent.com/fixture", "https://lh4.googleusercontent.com/a/b",
+                                "HTTPS://AVATARS.GITHUBUSERCONTENT.COM:443/u/123?v=4",
+                                "https://avatars.githubusercontent.com/u/%31%32%33",
+                                "https://avatars.githubusercontent.com/a/../u/123?%76=%34",
+                                "https://@avatars.githubusercontent.com/u/123"}) {
+            const auto url = vettedAvatarUrl(QString::fromLatin1(text));
+            QVERIFY2(!url.isEmpty(), text);
+            QVERIFY(!url.authority(QUrl::FullyEncoded).contains(QLatin1Char('@')));
+        }
+        for (const auto *text : {"https://lh3.googleusercontent.com", "https://lh4.googleusercontent.com/",
+                                "https://lh3.googleusercontent.com/a?", "https://lh3.googleusercontent.com/a?x=1",
+                                "https://avatars.githubusercontent.com/u/123?", "https://avatars.githubusercontent.com/u/123#",
+                                "https://avatars.githubusercontent.com/u/123?v=04", "https://avatars.githubusercontent.com/u/123?v=4&x=1",
+                                "https://avatars.githubusercontent.com/u/abc", "https://avatars.githubusercontent.com/u/123/",
+                                "https://avatars.githubusercontent.com/u/%2F123", "https://avatars.githubusercontent.com/%2Fu/123",
+                                "https://avatars.githubusercontent.com:444/u/123", "http://avatars.githubusercontent.com/u/123",
+                                "https://avatars.githubusercontent.com.invalid/u/123", "https://x@lh3.googleusercontent.com/a",
+                                "https://:secret@avatars.githubusercontent.com/u/123", "https://lh5.googleusercontent.com/a",
+                                "//lh3.googleusercontent.com/a"}) {
+            QVERIFY2(vettedAvatarUrl(QString::fromLatin1(text)).isEmpty(), text);
+        }
+        const auto origin = QStringLiteral("https://lh3.googleusercontent.com/");
+        const auto maximum = origin + QString(2048 - origin.size(), QLatin1Char('a'));
+        QVERIFY(!vettedAvatarUrl(maximum).isEmpty());
+        QVERIFY(vettedAvatarUrl(maximum + QLatin1Char('a')).isEmpty());
+    }
+
     void exactIdentityAndPeers()
     {
         const auto original = decodeStatusReply(connectedFixture(), "fixture");
