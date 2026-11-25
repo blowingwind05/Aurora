@@ -29,10 +29,6 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: actions/setup-dotnet@v5
-        with:
-          dotnet-version: 9.0.x
-
       - uses: actions/setup-go@v5
         with:
           go-version: '1.27.4'
@@ -61,24 +57,31 @@ jobs:
           pwsh -NoProfile -File ./desktop/upstream/tsnet/Build-Tailnet.ps1 -Runtime "osx-$AURORA_ARCHITECTURE" -OutputDirectory "$RUNNER_TEMP/aurora-tailnet" -RunTests
           pwsh -NoProfile -File ./desktop/Build-Mac.ps1 -Architecture "$AURORA_ARCHITECTURE" -Qmake "$QT_ROOT_DIR/bin/qmake" -TailscaleDirectory "$RUNNER_TEMP/aurora-tailnet"
 
-      - name: Verify the packaged streamer and host
+      - name: Verify the packaged launcher and runtimes
         run: |
           zip="dist/Aurora-macOS-${AURORA_ARCHITECTURE}-integrated.zip"
+          (cd dist && shasum -a 256 -c "$(basename "$zip").sha256")
           check="$(mktemp -d)"
           ditto -x -k "$zip" "$check"
           app="$check/Aurora.app"
           codesign --verify --deep --strict "$app"
+          python3 tests/Check-NativeDesktopPackage.py "$app"
+          clean_env=(/usr/bin/env -i "HOME=$HOME" "TMPDIR=${TMPDIR:-/tmp}" PATH=/usr/bin:/bin QT_QPA_PLATFORM=cocoa)
+          launcher="$app/Contents/MacOS/Aurora"
+          test -x "$launcher"
+          "${clean_env[@]}" "$launcher" --check-native
           runtime="$app/Contents/MacOS/AuroraStream"
           test -x "$runtime"
-          test "$("$runtime" --aurora-runtime-info)" = aurora-stream/1
-          test "$("$runtime" --aurora-gamestream-relay-info)" = aurora-gamestream-relay/1
+          test "$("${clean_env[@]}" "$runtime" --aurora-runtime-info)" = aurora-stream/1
+          test "$("${clean_env[@]}" "$runtime" --aurora-gamestream-relay-info)" = aurora-gamestream-relay/1
+          test -f "$app/Contents/Resources/ThirdParty/Moonlight/SOURCE.txt"
           tailnet="$app/Contents/MacOS/AuroraTailnet"
           test -x "$tailnet"
-          test "$("$tailnet" --aurora-runtime-info)" = aurora-tailnet/1
+          test "$("${clean_env[@]}" "$tailnet" --aurora-runtime-info)" = aurora-tailnet/1
           test -f "$app/Contents/Resources/Tailscale/licenses/SOURCE.txt"
           host="$app/Contents/Helpers/AuroraHost.app"
           test -x "$host/Contents/MacOS/AuroraHost"
-          test "$("$host/Contents/MacOS/AuroraHost" --aurora-runtime-info)" = aurora-host/1
+          test "$("${clean_env[@]}" "$host/Contents/MacOS/AuroraHost" --aurora-runtime-info)" = aurora-host/1
           codesign --verify --deep --strict "$host"
           test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$host/Contents/Info.plist")" = org.aurora-remote.desktop.host
           test -f "$host/Contents/Resources/licenses/SOURCE.txt"
@@ -86,6 +89,29 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: Aurora-macOS-${{ matrix.architecture }}-integrated
-          path: dist/Aurora-macOS-${{ matrix.architecture }}-integrated.zip
+          path: |
+            dist/Aurora-macOS-${{ matrix.architecture }}-integrated.zip
+            dist/Aurora-macOS-${{ matrix.architecture }}-integrated.zip.sha256
           if-no-files-found: error
           compression-level: 0
+
+  attest:
+    name: Attest macOS artifacts
+    needs: build
+    if: ${{ !github.event.repository.private }}
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: Aurora-macOS-*-integrated
+          path: artifacts
+
+      - name: Generate build provenance
+        uses: actions/attest@v4
+        with:
+          subject-path: 'artifacts/Aurora-macOS-*-integrated/Aurora-macOS-*-integrated.zip'

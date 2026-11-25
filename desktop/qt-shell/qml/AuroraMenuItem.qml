@@ -10,6 +10,7 @@ MenuItem {
     leftPadding: 8
     rightPadding: 8
     spacing: 8
+    hoverEnabled: true
     font.family: AuroraTheme.font
     font.pixelSize: 13
     icon.width: 16
@@ -21,7 +22,7 @@ MenuItem {
 
     background: Rectangle {
         radius: item.cornerRadius
-        color: item.enabled && item.highlighted ? AuroraTheme.hover : "transparent"
+        color: item.enabled && (item.hovered || item.down) ? AuroraTheme.hover : "transparent"
         border.width: item.visualFocus ? 2 : 0
         border.color: AuroraTheme.blue
     }

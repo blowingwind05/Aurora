@@ -94,15 +94,13 @@ def copy_tree(source, target, ignore=None):
     shutil.copytree(require_directory(source), target, symlinks=True, ignore=ignore)
 
 
-def stage_preview(preview, windows):
+def stage_preview(preview):
     shell = DESKTOP / "qt-shell"
     assets = DESKTOP / "Assets"
     design = REPOSITORY / "docs/visual-design/assets"
     target_shell = preview / "desktop/qt-shell"
     copy_tree(shell / "qml", target_shell / "qml")
     copy_file(shell / "bridge/Live.qml", target_shell / "bridge/Live.qml")
-    if windows:
-        copy_file(shell / "bridge/WindowsSessionPopup.qml", target_shell / "bridge/WindowsSessionPopup.qml")
     for name in ("Aurora.png", "Aurora-Windows-32.png", "tailscale-dot.svg", "panel-top-tight.svg"):
         copy_file(assets / name, preview / "desktop/Assets" / name)
     copy_tree(assets / "Wallpapers", preview / "desktop/Assets/Wallpapers")
@@ -118,7 +116,9 @@ def stage_windows(destination, launcher, streamer, sunshine, tailscale):
     pe_executable(tailscale / "AuroraTailnet.exe")
     require_file(streamer / "licenses/SOURCE.txt")
     require_file(sunshine / "licenses/SOURCE.txt")
+    require_file(sunshine / "zlib1.dll")
     require_file(sunshine / "assets/apps.json")
+    require_file(sunshine / "assets/web/index.html")
     require_file(tailscale / "licenses/SOURCE.txt")
 
     major_versions = [n for n in (5, 6) if (streamer / f"Qt{n}Core.dll").is_file()]
@@ -155,58 +155,73 @@ def stage_windows(destination, launcher, streamer, sunshine, tailscale):
         + ("\n[Platforms]\nWindowsArguments = darkmode=1\n" if major == 5 else ""),
         encoding="utf-8",
     )
-    stage_preview(destination / "QtPreview", windows=True)
+    stage_preview(destination / "QtPreview")
     for notice in ("LICENSE", "THIRD-PARTY-NOTICES.txt"):
         copy_file(REPOSITORY / notice, destination / notice)
 
 
 def stage_macos(destination, launcher, runtime_app, architecture, deploy_qt):
-    donor = require_directory(runtime_app / "Contents")
-    donor_resources = donor / "Resources"
-    host = donor / "Helpers/AuroraHost.app"
-    for executable in (launcher, donor / "MacOS/AuroraStream", donor / "MacOS/AuroraTailnet",
-                       host / "Contents/MacOS/AuroraHost"):
-        macho_executable(executable, architecture)
-    with require_file(host / "Contents/Info.plist").open("rb") as info:
-        host_info = plistlib.load(info)
-    if (host_info.get("CFBundleExecutable") != "AuroraHost" or
-            host_info.get("CFBundleIdentifier") != "org.aurora-remote.desktop.host"):
-        raise ValueError("Supply the staged AuroraHost.app with its Aurora host bundle identity.")
-    require_file(host / "Contents/Resources/assets/apps.json")
-    require_file(host / "Contents/Resources/assets/web/index.html")
-    require_file(host / "Contents/Resources/licenses/SOURCE.txt")
-    require_file(donor / "PlugIns/platforms/libqcocoa.dylib")
-    require_file(donor_resources / "ThirdParty/Moonlight/SOURCE.txt")
-    require_file(donor_resources / "Tailscale/licenses/SOURCE.txt")
+    contents = runtime_app / "Contents"
+    stage_macos_components(destination, launcher, contents, contents / "Helpers/AuroraHost.app",
+                           contents / "MacOS/AuroraTailnet", contents / "Resources/Tailscale/licenses",
+                           architecture, deploy_qt)
+
+
+def stage_macos_components(destination, launcher, streamer_contents, host, tailnet, tailnet_licenses,
+                           architecture, deploy_qt):
+    macho_executable(launcher, architecture)
+    if streamer_contents:
+        streamer_resources = streamer_contents / "Resources"
+        macho_executable(streamer_contents / "MacOS/AuroraStream", architecture)
+        require_file(streamer_contents / "PlugIns/platforms/libqcocoa.dylib")
+        require_file(streamer_resources / "ThirdParty/Moonlight/SOURCE.txt")
+    if tailnet:
+        macho_executable(tailnet, architecture)
+        require_file(tailnet_licenses / "SOURCE.txt")
+    if host:
+        macho_executable(host / "Contents/MacOS/AuroraHost", architecture)
+        with require_file(host / "Contents/Info.plist").open("rb") as info:
+            host_info = plistlib.load(info)
+        if (host_info.get("CFBundleExecutable") != "AuroraHost" or
+                host_info.get("CFBundleIdentifier") != "org.aurora-remote.desktop.host"):
+            raise ValueError("Supply the staged AuroraHost.app with its Aurora host bundle identity.")
+        require_file(host / "Contents/Resources/assets/apps.json")
+        require_file(host / "Contents/Resources/assets/web/index.html")
+        require_file(host / "Contents/Resources/licenses/SOURCE.txt")
 
     contents = destination / "Contents"
     resources = contents / "Resources"
     copy_file(DESKTOP / "Info.plist", contents / "Info.plist")
     copy_file(launcher, contents / "MacOS/Aurora")
-    copy_file(donor / "MacOS/AuroraStream", contents / "MacOS/AuroraStream")
-    copy_tree(donor / "Frameworks", contents / "Frameworks")
-    copy_tree(donor / "PlugIns", contents / "PlugIns")
-    copy_tree(donor_resources / "qml", resources / "qml")
-    copy_file(donor_resources / "qt.conf", resources / "qt.conf")
-    stage_preview(resources / "QtPreview", windows=False)
+    if streamer_contents:
+        copy_file(streamer_contents / "MacOS/AuroraStream", contents / "MacOS/AuroraStream")
+        copy_tree(streamer_contents / "Frameworks", contents / "Frameworks")
+        copy_tree(streamer_contents / "PlugIns", contents / "PlugIns")
+        copy_tree(streamer_resources / "qml", resources / "qml")
+        copy_file(streamer_resources / "qt.conf", resources / "qt.conf")
+    stage_preview(resources / "QtPreview")
 
-    deploy_qt(destination)
+    if deploy_qt:
+        deploy_qt(destination)
 
-    copy_file(donor / "MacOS/AuroraTailnet", contents / "MacOS/AuroraTailnet")
-    for relative in ("ThirdParty/Moonlight", "Tailscale/licenses"):
-        copy_tree(donor_resources / relative, resources / relative)
-    copy_file(donor_resources / "AuroraStreamBrand.png", resources / "AuroraStreamBrand.png")
-    copy_file(DESKTOP / "Platform/Mac/Assets/Aurora.icns", resources / "Aurora.icns")
-    if (donor_resources / "moonlight.icns").is_file():
-        copy_file(donor_resources / "moonlight.icns", resources / "moonlight.icns")
+    if tailnet:
+        copy_file(tailnet, contents / "MacOS/AuroraTailnet")
+        copy_tree(tailnet_licenses, resources / "Tailscale/licenses")
+    if streamer_contents:
+        copy_tree(streamer_resources / "ThirdParty/Moonlight", resources / "ThirdParty/Moonlight")
+        copy_file(streamer_resources / "AuroraStreamBrand.png", resources / "AuroraStreamBrand.png")
+        if (streamer_resources / "moonlight.icns").is_file():
+            copy_file(streamer_resources / "moonlight.icns", resources / "moonlight.icns")
+    copy_file(DESKTOP / "Assets/Aurora.icns", resources / "Aurora.icns")
     for notice in ("LICENSE", "THIRD-PARTY-NOTICES.txt"):
         copy_file(REPOSITORY / notice, resources / notice)
-    host_target = contents / "Helpers/AuroraHost.app"
-    if sys.platform == "darwin":
-        host_target.parent.mkdir()
-        subprocess.run(["/usr/bin/ditto", str(host), str(host_target)], check=True)
-    else:
-        copy_tree(host, host_target)
+    if host:
+        host_target = contents / "Helpers/AuroraHost.app"
+        if sys.platform == "darwin":
+            host_target.parent.mkdir()
+            subprocess.run(["/usr/bin/ditto", str(host), str(host_target)], check=True)
+        else:
+            copy_tree(host, host_target)
 
 
 def deploy_mac_qt(bundle, qt_bin):
@@ -214,12 +229,23 @@ def deploy_mac_qt(bundle, qt_bin):
     qmake = require_file(qt_bin / "qmake")
     deploy = require_file(qt_bin / "macdeployqt")
     version = subprocess.check_output([str(qmake), "-query", "QT_VERSION"], text=True).strip()
-    with require_file(contents / "Frameworks/QtCore.framework/Resources/Info.plist").open("rb") as info:
-        donor_version = plistlib.load(info).get("CFBundleVersion")
-    if not version.startswith("6.") or version != donor_version:
-        raise ValueError(f"The macOS deployment tool must match the donor Qt version {donor_version}.")
+    if not version.startswith("6."):
+        raise ValueError("Use macdeployqt from the macOS Qt 6 SDK.")
+    has_frameworks = (contents / "Frameworks").exists()
+    if has_frameworks:
+        with require_file(contents / "Frameworks/QtCore.framework/Resources/Info.plist").open("rb") as info:
+            streamer_version = plistlib.load(info).get("CFBundleVersion")
+        if version != streamer_version:
+            raise ValueError(f"The macOS deployment tool must match the streamer Qt version {streamer_version}.")
+
     subprocess.run([str(deploy), str(bundle), "-codesign=-", "-no-strip", "-appstore-compliant",
                     f"-qmldir={contents / 'Resources/QtPreview/desktop/qt-shell'}"], check=True)
+    if not has_frameworks:
+        qt_prefix = Path(subprocess.check_output([str(qmake), "-query", "QT_INSTALL_PREFIX"], text=True).strip())
+        notices = contents / "Resources/ThirdParty/Qt"
+        for license_file in (*qt_prefix.glob("LICENSE.*"), *qt_prefix.glob("LICENSES/*")):
+            if license_file.is_file():
+                copy_file(license_file, notices / license_file.name)
 
 
 def validate_package(package):
@@ -269,10 +295,25 @@ def main():
     for flag in ("launcher", "streamer-directory", "sunshine-directory", "tailscale-directory", "output"):
         windows.add_argument("--" + flag, type=Path, required=True)
     mac = platform.add_parser("macos")
-    for flag in ("launcher", "runtime-app", "qt-bin", "output"):
-        mac.add_argument("--" + flag, type=Path, required=True)
+    mac.add_argument("--output", type=Path, required=True)
     mac.add_argument("--architecture", choices=("arm64", "x64"), required=True)
+    mac_source = mac.add_mutually_exclusive_group(required=True)
+    mac_source.add_argument("--runtime-app", type=Path, help="Integrated Aurora.app for donor verification")
+    mac_source.add_argument("--streamer-contents", type=Path, help="Contents directory from Build-Mac-Streamer.sh")
+    mac_source.add_argument("--without-streamer", action="store_true", help="Deploy a launcher-only Qt bundle")
+    mac.add_argument("--launcher", type=Path, help="Custom Qt launcher (defaults to the streamer's deployed launcher)")
+    mac.add_argument("--qt-bin", type=Path, help="Qt SDK bin directory for deploying a custom launcher")
+    mac.add_argument("--host-app", type=Path, help="AuroraHost.app from Build-Mac-Sunshine.sh")
+    mac.add_argument("--tailscale-directory", type=Path, help="Output directory from Build-Tailnet.ps1")
     args = parser.parse_args()
+
+    if args.platform == "macos":
+        if args.host_app and not args.streamer_contents:
+            mac.error("--host-app requires --streamer-contents")
+        if args.runtime_app and args.tailscale_directory:
+            mac.error("--runtime-app already supplies Tailnet")
+        if bool(args.launcher) != bool(args.qt_bin) or (not args.streamer_contents and not args.launcher):
+            mac.error("Supply --launcher and --qt-bin together, or use the launcher from --streamer-contents")
 
     try:
         if args.platform == "windows":
@@ -284,9 +325,26 @@ def main():
         else:
             if sys.platform != "darwin" or args.output.name != "Aurora.app":
                 raise ValueError("Stage Aurora.app on macOS.")
-            check_output_location(args.output, args.runtime_app)
-            assemble(args.output, lambda bundle: stage_macos(bundle, args.launcher, args.runtime_app,
-                args.architecture, lambda app: deploy_mac_qt(app, args.qt_bin)))
+
+            deploy_qt = None
+            if args.qt_bin:
+                def deploy_qt(bundle):
+                    deploy_mac_qt(bundle, args.qt_bin)
+
+            if args.runtime_app:
+                check_output_location(args.output, args.runtime_app)
+                assemble(args.output, lambda bundle: stage_macos(
+                    bundle, args.launcher, args.runtime_app, args.architecture, deploy_qt))
+            else:
+                input_trees = (args.streamer_contents, args.host_app, args.tailscale_directory)
+                check_output_location(args.output, *(path for path in input_trees if path is not None))
+                # The streamer builder deploys its launcher alongside the shared Qt runtime.
+                launcher = args.launcher or args.streamer_contents / "MacOS/AuroraQtShell"
+                tailnet = args.tailscale_directory
+                assemble(args.output, lambda bundle: stage_macos_components(
+                    bundle, launcher, args.streamer_contents, args.host_app,
+                    tailnet / "AuroraTailnet" if tailnet else None, tailnet / "licenses" if tailnet else None,
+                    args.architecture, deploy_qt))
     except (OSError, ValueError, RuntimeError, subprocess.CalledProcessError) as error:
         print(f"Native Aurora packaging failed: {error}", file=sys.stderr)
         return 1

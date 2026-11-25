@@ -1,0 +1,146 @@
+name: Build Aurora for Windows
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Windows x64
+    runs-on: windows-2025
+    timeout-minutes: 100
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.4'
+          cache: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.6.3'
+          host: windows
+          target: desktop
+          arch: win64_msvc2019_64
+
+      - name: Install Sunshine build dependencies
+        id: msys2
+        uses: msys2/setup-msys2@66cd2cce69caa17b53920067426061ca1de3a884 # v2.32.0
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            mingw-w64-ucrt-x86_64-boost
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-cppwinrt
+            mingw-w64-ucrt-x86_64-curl-winssl
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-MinHook
+            mingw-w64-ucrt-x86_64-miniupnpc
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-nlohmann-json
+            mingw-w64-ucrt-x86_64-onevpl
+            mingw-w64-ucrt-x86_64-openssl
+            mingw-w64-ucrt-x86_64-opus
+
+      - name: Build the Windows runtime components
+        shell: pwsh
+        env:
+          MSYS2_ROOT: ${{ steps.msys2.outputs.msys2-location }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
+          $vs = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (!$vs -or $LASTEXITCODE -ne 0) { throw 'MSVC x64 tools were not found.' }
+          Import-Module (Join-Path $vs 'Common7/Tools/Microsoft.VisualStudio.DevShell.dll')
+          Enter-VsDevShell -VsInstallPath $vs -SkipAutomaticLocation -DevCmdArguments '-arch=x64 -host_arch=x64'
+          $qmake = Join-Path $env:QT_ROOT_DIR 'bin/qmake.exe'
+          $streamer = ./desktop/upstream/moonlight-qt/Build-Windows-Streamer.ps1 -Qmake $qmake |
+            Where-Object { $_ -is [IO.DirectoryInfo] } | Select-Object -Last 1
+          $nativePath = Join-Path ([IO.Path]::GetPathRoot($env:RUNNER_TEMP)) 'aurora-native'
+          $hostRuntime = ./desktop/upstream/sunshine/Build-Windows-Sunshine.ps1 -Msys2Root $env:MSYS2_ROOT -WorkDirectory $nativePath |
+            Where-Object { $_ -is [IO.DirectoryInfo] } | Select-Object -Last 1
+          if (!$streamer -or !$hostRuntime) { throw 'A Windows runtime build did not return its package.' }
+          $tailnet = Join-Path $env:RUNNER_TEMP 'aurora-tailnet'
+          ./desktop/upstream/tsnet/Build-Tailnet.ps1 -Runtime win-x64 -OutputDirectory $tailnet -RunTests `
+            -Windres (Join-Path $env:MSYS2_ROOT 'ucrt64/bin/windres.exe')
+          ./desktop/Build.ps1 -StreamerDirectory $streamer.FullName -SunshineDirectory $hostRuntime.FullName -TailscaleDirectory $tailnet -Qmake $qmake -Setup
+
+      - name: Create and verify Windows downloads
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $portable = Get-Item -LiteralPath 'dist/Aurora-0.8-source-integrated'
+          $setup = 'dist/Aurora-0.8-source-integrated-setup/AuroraSetup.exe'
+          $launch = [Diagnostics.ProcessStartInfo]::new((Join-Path $portable.FullName 'Aurora.exe'))
+          $launch.UseShellExecute = $false
+          $launch.WorkingDirectory = $portable.FullName
+          $launch.ArgumentList.Add('--check-native')
+          $launch.Environment['PATH'] = "$env:SystemRoot\System32;$env:SystemRoot"
+          foreach ($variable in 'QT_PLUGIN_PATH', 'QT_QPA_PLATFORM_PLUGIN_PATH', 'QML2_IMPORT_PATH', 'QML_IMPORT_PATH') {
+            $null = $launch.Environment.Remove($variable)
+          }
+          $probe = [Diagnostics.Process]::Start($launch)
+          try {
+            if (!$probe.WaitForExit(30000)) {
+              $probe.Kill()
+              throw 'Packaged Aurora native startup timed out.'
+            }
+            if ($probe.ExitCode -ne 0) { throw "Packaged Aurora native startup failed ($($probe.ExitCode))." }
+          } finally { $probe.Dispose() }
+
+          ./desktop/Artifact-Checksums.ps1 -Path $portable.FullName -Verify
+          ./desktop/Artifact-Checksums.ps1 -Path $setup -Verify
+          $zip = Join-Path (Resolve-Path -LiteralPath 'dist').Path 'Aurora-Windows-x64-portable.zip'
+          [IO.Compression.ZipFile]::CreateFromDirectory($portable.FullName, $zip, [IO.Compression.CompressionLevel]::Optimal, $false)
+          ./desktop/Artifact-Checksums.ps1 -Path $zip
+          ./desktop/Artifact-Checksums.ps1 -Path $zip -Verify
+          python tests/Check-NativeDesktopPackage.py $zip
+          if ($LASTEXITCODE -ne 0) { throw 'The portable ZIP did not pass the native package scan.' }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Aurora-Windows-x64-integrated
+          path: |
+            dist/Aurora-Windows-x64-portable.zip
+            dist/Aurora-Windows-x64-portable.zip.sha256
+            dist/Aurora-0.8-source-integrated-setup/AuroraSetup.exe
+            dist/Aurora-0.8-source-integrated-setup/AuroraSetup.exe.sha256
+          if-no-files-found: error
+          compression-level: 0
+
+  attest:
+    name: Attest Windows artifacts
+    needs: build
+    if: ${{ !github.event.repository.private }}
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: Aurora-Windows-x64-integrated
+          path: artifacts
+
+      - name: Generate build provenance
+        uses: actions/attest@v4
+        with:
+          subject-path: |
+            artifacts/Aurora-Windows-x64-portable.zip
+            artifacts/Aurora-0.8-source-integrated-setup/AuroraSetup.exe

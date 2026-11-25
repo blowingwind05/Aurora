@@ -35,7 +35,7 @@ $design = Join-Path $preview 'docs/visual-design/assets'
 $brand = Join-Path $design 'brand'
 $null = New-Item -ItemType Directory -Force -Path $bridge, $assets, $brand
 Copy-Item -LiteralPath (Join-Path $shell 'qml') -Destination $previewShell -Recurse
-Copy-Item -LiteralPath (Join-Path $shell 'bridge/Live.qml'), (Join-Path $shell 'bridge/WindowsSessionPopup.qml') -Destination $bridge
+Copy-Item -LiteralPath (Join-Path $shell 'bridge/Live.qml') -Destination $bridge
 foreach ($asset in @('Aurora.png', 'Aurora-Windows-32.png', 'tailscale-dot.svg', 'panel-top-tight.svg', 'Wallpapers')) {
     Copy-Item -LiteralPath (Join-Path $desktop "Assets/$asset") -Destination $assets -Recurse
 }

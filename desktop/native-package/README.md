@@ -18,7 +18,9 @@ The output is a portable directory with Aurora.exe at its root. Installer and dr
 
 ## macOS
 
-Select an existing integrated Aurora.app for the same architecture and Qt 6 SDK. The donor supplies the deployed streaming executable, Qt frameworks and plugins, bundled AuroraTailnet, and the AuroraHost helper with its existing bundle identity. Build the launcher with the matching architecture and deployment target from the existing Info.plist.
+Run `pwsh -File desktop/Build-Mac.ps1 -Architecture arm64 -TailscaleDirectory <tailnet-output>` to build and package the app directly from its components. Use `x64` for Intel. The deployer uses the same Qt 6 SDK for the app and AuroraStream.
+
+For assembly against an existing build, use an integrated `Aurora.app` for the same architecture and Qt SDK. The donor supplies the deployed streamer, Qt frameworks and plugins, AuroraTailnet, and its signed AuroraHost helper.
 
 ~~~sh
 qt_prefix="/path/to/Qt/6.6.3/macos"

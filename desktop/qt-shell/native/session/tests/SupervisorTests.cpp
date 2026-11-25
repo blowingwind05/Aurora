@@ -9,6 +9,10 @@
 #include <QTemporaryDir>
 #include <QTest>
 
+#ifdef Q_OS_WIN
+#include <windows.h>
+#endif
+
 using namespace Aurora::Session;
 using aurora::tailscale::EmbeddedStatusClient;
 using aurora::tailscale::PresenceResult;
@@ -18,15 +22,16 @@ namespace {
 
 constexpr quint64 generation = 18;
 const QHostAddress peer(QStringLiteral("100.76.1.20"));
+const QString hostId = QStringLiteral("f43a3fe0-27f6-46b3-8c38-758349e23db1");
 
 SessionCandidate directCandidate()
 {
-    return {generation, "host-fixture", "Synthetic session", DirectRoute{QHostAddress("192.0.2.17"), 48989}};
+    return {generation, hostId, "Synthetic session", DirectRoute{QHostAddress("192.0.2.17"), 48989}};
 }
 
 SessionCandidate embeddedCandidate()
 {
-    return {generation, "host-fixture", "Synthetic relay", EmbeddedRoute{"peer", peer}};
+    return {generation, hostId, "Synthetic relay", EmbeddedRoute{"peer", peer}};
 }
 
 struct Fixture
@@ -34,6 +39,8 @@ struct Fixture
     QTemporaryDir temp;
     QString program;
     QString launched;
+    QString privacyLog;
+    QString exitPlayback;
 
     Fixture()
     {
@@ -42,6 +49,8 @@ struct Fixture
         program += ".exe";
 #endif
         launched = temp.filePath("playback-started");
+        privacyLog = temp.filePath("privacy");
+        exitPlayback = temp.filePath("exit-playback");
     }
 
     bool install(const QByteArray &mode = {}, const QByteArray &relay = {})
@@ -49,9 +58,24 @@ struct Fixture
         qputenv("AURORA_TEST_STREAM_LAUNCHED", QFile::encodeName(launched));
         qputenv("AURORA_TEST_STREAM_MODE", mode);
         qputenv("AURORA_TEST_STREAM_RELAY", relay);
+        qputenv("AURORA_TEST_STREAM_HOST", hostId.toLatin1());
         qputenv("AURORA_TEST_STREAM_ENDPOINT", relay.isEmpty() ? QByteArray("192.0.2.17:48989") : "127.0.0.1:" + relay);
+        qputenv("AURORA_TEST_PRIVACY_LOG", QFile::encodeName(privacyLog));
+        qputenv("AURORA_TEST_PLAYBACK_EXIT", QFile::encodeName(exitPlayback));
+        qunsetenv("AURORA_TEST_PRIVACY_MODE");
         return temp.isValid() && QFile::copy(QStringLiteral(SESSION_FAKE_CHILD), program);
     }
+
+#ifdef Q_OS_WIN
+    QList<QByteArray> privacyRequests() const
+    {
+        QFile file(privacyLog);
+        if (!file.open(QIODevice::ReadOnly))
+            return {};
+        const auto contents = file.readAll().trimmed();
+        return contents.isEmpty() ? QList<QByteArray>() : contents.split('\n');
+    }
+#endif
 };
 
 PreparedSession preparedAt(const QSignalSpy &spy, int index = 0)
@@ -83,6 +107,27 @@ SessionView makeView(QWindow &owner)
     return view;
 }
 
+#ifdef Q_OS_WIN
+SessionPrivacyRoute privacyRoute(const PreparedSession &prepared)
+{
+    using namespace Aurora::Discovery;
+    const auto &route = prepared.route;
+    const bool embedded = route.viaEmbeddedTailnet;
+    const Endpoint worker{route.address, quint16(route.port)};
+    const auto endpoint = embedded ? Endpoint{peer, BundledSunshinePort} : worker;
+    StreamHost selected{endpoint, route.hostId, "Synthetic", embedded, false, false, true};
+    return {selected, {ServerInfo::Status::Complete, selected},
+        embedded ? std::optional<Endpoint>(worker) : std::nullopt};
+}
+
+bool privacyValue(const SessionSupervisor &session, bool enabled, bool writable = true)
+{
+    const auto setting = session.privacyScreen().toMap();
+    return setting.contains("value") && setting.value("value").toBool() == enabled &&
+        setting.value("writable").toBool() == writable;
+}
+#endif
+
 } // namespace
 
 class SupervisorTests final : public QObject
@@ -97,6 +142,10 @@ private slots:
 #ifdef Q_OS_WIN
     void rejectedAttachmentDoesNotFallBack();
     void unresponsiveWorkerIsReaped();
+    void privacyTracksWorkerState();
+    void privacyRequiresThePreparedRoute();
+    void privacyStopsWithPlayback_data();
+    void privacyStopsWithPlayback();
 #endif
 };
 
@@ -187,7 +236,7 @@ void SupervisorTests::relayStaysThroughWorkerExit()
     const auto route = preparedAt(prepared).route;
     QCOMPARE(route.address, QHostAddress(QHostAddress::LocalHost));
     QCOMPARE(route.port, 55011);
-    QCOMPARE(route.hostId, QString("host-fixture"));
+    QCOMPARE(route.hostId, hostId);
     QVERIFY(route.viaEmbeddedTailnet);
     QVERIFY(!QFile::exists(fixture.launched));
     QVERIFY(closed.isEmpty());
@@ -308,6 +357,152 @@ void SupervisorTests::unresponsiveWorkerIsReaped()
     QCOMPARE(outcome(finished).reason, SessionEnd::Cancelled);
     QVERIFY(outcome(finished).forced);
     QCOMPARE(session.phase(), SessionSupervisor::Phase::Idle);
+}
+
+void SupervisorTests::privacyTracksWorkerState()
+{
+    Fixture fixture;
+    QVERIFY(fixture.install());
+    QWindow owner;
+    SessionSupervisor session(fixture.program);
+    QSignalSpy prepared(&session, &SessionSupervisor::prepared);
+    QSignalSpy finished(&session, &SessionSupervisor::finished);
+    const auto attempt = session.prepare(directCandidate());
+    QTRY_COMPARE_WITH_TIMEOUT(prepared.size(), 1, 3000);
+    QVERIFY(session.start({attempt, generation, privacyRoute(preparedAt(prepared))}, makeView(owner)));
+    session.setPrivacyScreen(true);
+    QVERIFY(fixture.privacyRequests().isEmpty());
+
+    QTRY_VERIFY_WITH_TIMEOUT(privacyValue(session, false), 3000);
+    QCOMPARE(fixture.privacyRequests().size(), 1);
+    QVERIFY(fixture.privacyRequests().last().startsWith("status "));
+
+    session.setPrivacyScreen(true);
+    QVERIFY(privacyValue(session, false, false)); // Keep the last confirmed state while changing.
+    session.setPrivacyScreen(true);
+    session.refreshPrivacyScreen();
+    QTRY_VERIFY_WITH_TIMEOUT(privacyValue(session, true), 3000);
+    QVERIFY(fixture.privacyRequests().last().startsWith("on "));
+    QCOMPARE(fixture.privacyRequests().size(), 2);
+
+    session.setPrivacyScreen(false);
+    QTRY_VERIFY_WITH_TIMEOUT(privacyValue(session, false), 3000);
+    QVERIFY(fixture.privacyRequests().last().startsWith("off "));
+
+    qputenv("AURORA_TEST_PRIVACY_MODE", "failed");
+    session.setPrivacyScreen(true);
+    QTRY_VERIFY_WITH_TIMEOUT(!session.privacyScreen().isValid(), 3000);
+    QVERIFY(!session.privacyScreenMessage().isEmpty());
+    session.setPrivacyScreen(false);
+    QCOMPARE(fixture.privacyRequests().size(), 4);
+
+    qputenv("AURORA_TEST_PRIVACY_MODE", "unavailable");
+    QSignalSpy feedback(&session, &SessionSupervisor::privacyScreenChanged);
+    session.refreshPrivacyScreen();
+    QTRY_COMPARE_WITH_TIMEOUT(feedback.size(), 2, 3000);
+    QVERIFY(!session.privacyScreen().isValid());
+    session.setPrivacyScreen(true);
+    QCOMPARE(fixture.privacyRequests().size(), 5);
+
+    qunsetenv("AURORA_TEST_PRIVACY_MODE");
+    session.refreshPrivacyScreen();
+    QTRY_VERIFY_WITH_TIMEOUT(privacyValue(session, false), 3000);
+    session.requestStop();
+    QTRY_COMPARE_WITH_TIMEOUT(finished.size(), 1, 3000);
+    QVERIFY(!session.privacyScreen().isValid());
+}
+
+void SupervisorTests::privacyRequiresThePreparedRoute()
+{
+    Fixture fixture;
+    QVERIFY(fixture.install());
+    QWindow owner;
+    SessionSupervisor session(fixture.program);
+    QSignalSpy prepared(&session, &SessionSupervisor::prepared);
+    QSignalSpy finished(&session, &SessionSupervisor::finished);
+    const auto attempt = session.prepare(directCandidate());
+    QTRY_COMPARE_WITH_TIMEOUT(prepared.size(), 1, 3000);
+    auto wrong = privacyRoute(preparedAt(prepared));
+    ++wrong.selected.endpoint.port;
+    wrong.revalidated.current = wrong.selected; // Internally consistent, but for another worker endpoint.
+    QVERIFY(session.start({attempt, generation, wrong}, makeView(owner)));
+    QTRY_COMPARE_WITH_TIMEOUT(session.phase(), SessionSupervisor::Phase::Streaming, 3000);
+    session.refreshPrivacyScreen();
+    session.setPrivacyScreen(true);
+    QVERIFY(!session.privacyScreen().isValid() && session.privacyScreenMessage().isEmpty());
+    session.requestStop();
+    QTRY_COMPARE_WITH_TIMEOUT(finished.size(), 1, 3000);
+    QVERIFY(fixture.privacyRequests().isEmpty());
+}
+
+void SupervisorTests::privacyStopsWithPlayback_data()
+{
+    QTest::addColumn<QString>("trigger");
+    QTest::newRow("stop") << QStringLiteral("stop");
+    QTest::newRow("relay-loss") << QStringLiteral("relay-loss");
+    QTest::newRow("playback-exit") << QStringLiteral("playback-exit");
+}
+
+void SupervisorTests::privacyStopsWithPlayback()
+{
+    QFETCH(QString, trigger);
+    const bool loseRelay = trigger == "relay-loss";
+    const bool exitPlayback = trigger == "playback-exit";
+    Fixture fixture;
+    QVERIFY(fixture.install(exitPlayback ? "exit-on-fixture" : "play", loseRelay ? "55012" : "55011"));
+    qputenv("AURORA_TEST_PRIVACY_MODE", "hold");
+    EmbeddedStatusClient tailnet(QStringLiteral(SESSION_TAILNET_FIXTURE),
+        fixture.temp.filePath(loseRelay ? "rpc-close-fault" : "rpc-session"));
+    QSignalSpy status(&tailnet, &EmbeddedStatusClient::statusFinished);
+    QSignalSpy closed(&tailnet, &EmbeddedStatusClient::closeFinished);
+    QVERIFY(tailnet.requestStatus(generation));
+    QTRY_COMPARE_WITH_TIMEOUT(status.size(), 1, 2000);
+
+    std::shared_ptr<aurora::tailscale::StreamLease> other;
+    if (loseRelay) {
+        QSignalSpy opened(&tailnet, &EmbeddedStatusClient::openFinished);
+        QVERIFY(tailnet.requestOpen(generation, "peer", peer));
+        QTRY_COMPARE_WITH_TIMEOUT(opened.size(), 1, 2000);
+        other = opened.first().at(2).value<aurora::tailscale::OpenResult>().lease;
+        QVERIFY(other && other->isValid());
+    }
+
+    QWindow owner;
+    SessionSupervisor session(fixture.program, &tailnet);
+    QSignalSpy prepared(&session, &SessionSupervisor::prepared);
+    QSignalSpy finished(&session, &SessionSupervisor::finished);
+    const auto attempt = session.prepare(embeddedCandidate());
+    QTRY_COMPARE_WITH_TIMEOUT(prepared.size(), 1, 3000);
+    QVERIFY(session.start({attempt, generation, privacyRoute(preparedAt(prepared))}, makeView(owner)));
+    QTRY_COMPARE_WITH_TIMEOUT(fixture.privacyRequests().size(), 1, 3000);
+    QCOMPARE(session.phase(), SessionSupervisor::Phase::Streaming);
+    const auto request = fixture.privacyRequests().first().split(' ');
+    QCOMPARE(request.size(), 2);
+    QCOMPARE(request.first(), QByteArray("status"));
+    const std::unique_ptr<void, decltype(&CloseHandle)> child(OpenProcess(SYNCHRONIZE, FALSE, request.last().toULong()),
+                                                            &CloseHandle);
+    QVERIFY(child && WaitForSingleObject(child.get(), 0) == WAIT_TIMEOUT);
+    bool exitedAtFinish = false;
+    connect(&session, &SessionSupervisor::finished, &session, [&] {
+        exitedAtFinish = WaitForSingleObject(child.get(), 0) == WAIT_OBJECT_0;
+    });
+
+    if (loseRelay) {
+        QVERIFY(other->close());
+    } else if (exitPlayback) {
+        QFile marker(fixture.exitPlayback);
+        QVERIFY(marker.open(QIODevice::WriteOnly));
+    } else {
+        session.requestStop();
+    }
+    QTRY_COMPARE_WITH_TIMEOUT(finished.size(), 1, 3500);
+    const auto expected = loseRelay ? SessionEnd::RelayLost : exitPlayback ? SessionEnd::Exited : SessionEnd::Cancelled;
+    QCOMPARE(outcome(finished).reason, expected);
+    QVERIFY(exitedAtFinish && !session.privacyScreen().isValid());
+    if (!loseRelay) {
+        QTRY_COMPARE_WITH_TIMEOUT(closed.size(), 1, 2000);
+        QCOMPARE(closed.first().at(2).value<StatusError>(), StatusError::None);
+    }
 }
 #endif
 

@@ -1,4 +1,3 @@
-#define AuroraVersion GetVersionNumbersString(AddBackslash(AuroraSourceDir) + "Aurora.exe")
 #define ViGEmBusInstaller "ViGEmBus_1.22.0_x64_x86_arm64.exe"
 #define ViGEmBusSha256 "89220A7865076B342892F98865F3499FB7C4CFD673159E89D352C360FD014C6A"
 
@@ -6,6 +5,7 @@
 AppId={{2EBC707A-8C2F-45C4-9F9C-BAD150CB483B}
 AppName=Aurora
 AppVersion={#AuroraVersion}
+VersionInfoVersion={#AuroraVersion}
 DefaultDirName={autopf}\Aurora
 DisableDirPage=no
 DisableProgramGroupPage=yes

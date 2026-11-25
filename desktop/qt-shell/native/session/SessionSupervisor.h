@@ -2,6 +2,7 @@
 #pragma once
 
 #include "MoonlightCommand.h"
+#include "ServerInfoClient.h"
 #include "StreamSurface.h"
 #include "EmbeddedStatusClient.h"
 
@@ -12,6 +13,12 @@
 #include <variant>
 
 namespace Aurora::Stream { class MoonlightProcess; }
+namespace Aurora::Stream::Control {
+class Adapter;
+enum class Operation;
+enum class PrivacyState;
+struct Result;
+}
 
 namespace Aurora::Session {
 
@@ -43,12 +50,22 @@ struct PreparedSession
     Stream::Route route;
 };
 
+// The caller's successful check for the selected host in this prepared attempt.
+// For embedded routes, checkedRelay is the loopback endpoint used in that check.
+struct SessionPrivacyRoute
+{
+    Discovery::StreamHost selected;
+    Discovery::ServerInfo::CheckResult revalidated;
+    std::optional<Discovery::Endpoint> checkedRelay;
+};
+
 // The coordinator issues this for a PreparedSession after current-route and
 // existing pairing/trust checks succeed for its exact executable and endpoint.
 struct SessionAuthorization
 {
     QUuid attempt;
     quint64 generation;
+    std::optional<SessionPrivacyRoute> privacy;
 };
 
 struct SessionView
@@ -83,6 +100,8 @@ class SessionSupervisor final : public QObject
     Q_PROPERTY(bool fullScreen READ fullScreen NOTIFY fullScreenChanged)
     Q_PROPERTY(QVariantMap connectionMetrics READ connectionMetrics NOTIFY connectionChanged)
     Q_PROPERTY(bool networkPoor READ networkPoor NOTIFY connectionChanged)
+    Q_PROPERTY(QVariant privacyScreen READ privacyScreen NOTIFY privacyScreenChanged)
+    Q_PROPERTY(QString privacyScreenMessage READ privacyScreenMessage NOTIFY privacyScreenChanged)
 
 public:
     enum class Phase { Idle, Probing, OpeningRelay, AwaitingAuthorization, Starting,
@@ -104,10 +123,14 @@ public:
     bool fullScreen() const;
     QVariantMap connectionMetrics() const { return metrics_; }
     bool networkPoor() const { return networkPoor_; }
+    QVariant privacyScreen() const;
+    QString privacyScreenMessage() const;
 
     Q_INVOKABLE void setViewport(const QRect &viewport, bool suppressed);
     Q_INVOKABLE void setFullScreen(bool enabled);
     Q_INVOKABLE void requestStop();
+    Q_INVOKABLE void refreshPrivacyScreen();
+    Q_INVOKABLE void setPrivacyScreen(bool enabled);
 
 signals:
     void prepared(const Aurora::Session::PreparedSession &session);
@@ -116,6 +139,7 @@ signals:
     void fullScreenChanged();
     void connectionChanged();
     void clientPixelSizeChanged(const QSize &size);
+    void privacyScreenChanged();
     // The preference owner validates the value and handles persistence.
     void preferenceChangeRequested(const QString &option, const QString &value);
 
@@ -135,7 +159,12 @@ private:
     void retireWorker();
     void beginStop(SessionEnd reason);
     void finish(SessionResult result);
+    void completeFinish();
     void setPhase(Phase phase);
+    bool matchesPrivacyRoute(const SessionPrivacyRoute &route) const;
+    void startPrivacy(Stream::Control::Operation operation);
+    void privacyFinished(const QUuid &token, const Stream::Control::Result &result);
+    void revokePrivacy();
 
     const QString executable_;
     const Stream::RuntimePlatform platform_;
@@ -158,6 +187,12 @@ private:
     Stream::Route resolved_;
     quint64 pendingOpen_ = 0;
     std::shared_ptr<aurora::tailscale::StreamLease> lease_;
+    std::unique_ptr<Stream::Control::Adapter> privacyControl_;
+    std::optional<SessionPrivacyRoute> privacyRoute_;
+    std::optional<Stream::Control::PrivacyState> privacyState_;
+    QUuid privacyRequest_;
+    bool privacyChanging_ = false;
+    std::optional<SessionResult> pendingFinish_;
     SessionView view_;
     QMetaObject::Connection ownerStateChanged_;
     QMetaObject::Connection ownerDestroyed_;

@@ -3,32 +3,20 @@
 param(
     [ValidateSet('arm64', 'x64')]
     [string] $Architecture = 'arm64',
-    [string] $Rcodesign,
-    [string] $Qmake,
+    [string] $Qmake = 'qmake',
     [string] $TailscaleDirectory,
     [switch] $WithoutStreamer,
     [switch] $WithoutHost
 )
 
 $ErrorActionPreference = 'Stop'
-if (-not $IsMacOS -and -not $Rcodesign) {
-    throw 'Build on macOS or pass -Rcodesign with the path to the rcodesign executable.'
+if (-not $IsMacOS) { throw 'Build Aurora with the Qt 6 toolchain on macOS.' }
+
+function Invoke-Native {
+    $command, $arguments = $args
+    & $command @arguments
+    if ($LASTEXITCODE -ne 0) { throw "$command failed ($LASTEXITCODE)." }
 }
-if (-not $IsMacOS -and -not $WithoutStreamer) {
-    throw 'The integrated macOS streaming component requires a native macOS build. Use -WithoutStreamer only for shell compatibility tests.'
-}
-$project = Join-Path $PSScriptRoot 'Aurora.csproj'
-$repository = Split-Path -Parent $PSScriptRoot
-$variant = if ($WithoutStreamer) { 'shell' } elseif ($WithoutHost) { 'controller' } else { 'integrated' }
-$output = Join-Path $repository "dist/macos-$Architecture-$variant"
-$bundle = Join-Path $output 'Aurora.app'
-$contents = Join-Path $bundle 'Contents'
-$executableDirectory = Join-Path $contents 'MacOS'
-$zip = Join-Path $repository "dist/Aurora-macOS-$Architecture-$variant.zip"
-$env:DOTNET_CLI_HOME = Join-Path $PSScriptRoot 'obj/cli'
-$env:NUGET_PACKAGES = Join-Path $PSScriptRoot 'obj/packages'
-$env:DOTNET_CLI_TELEMETRY_OPTOUT = '1'
-$env:DOTNET_GENERATE_ASPNET_CERTIFICATE = 'false'
 
 if ($TailscaleDirectory) {
     $TailscaleDirectory = (Resolve-Path -LiteralPath $TailscaleDirectory).Path
@@ -39,58 +27,85 @@ if ($TailscaleDirectory) {
     }
 }
 
-if (Test-Path -LiteralPath $bundle) {
-    $previous = Join-Path $output ("Aurora-" + [Guid]::NewGuid().ToString('N') + ".app")
-    Move-Item -LiteralPath $bundle -Destination $previous
-}
-dotnet publish $project -c Release -r "osx-$Architecture" --self-contained true -p:RestoreLockedMode=true -p:PublishSingleFile=true -p:EnableSingleFileAnalyzer=false -p:DebugType=None -o $executableDirectory
-if ($LASTEXITCODE -ne 0) { throw "macOS publish failed ($LASTEXITCODE)." }
-Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'Info.plist') -Destination $contents
-$resources = Join-Path $contents 'Resources'
-$null = New-Item -ItemType Directory -Force -Path $resources
-Copy-Item -LiteralPath (Join-Path $repository 'THIRD-PARTY-NOTICES.txt'), (Join-Path $repository 'LICENSE') -Destination $resources
-Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'Platform/Mac/Assets/Aurora.icns') -Destination $resources
-if ($TailscaleDirectory) {
-    $tailnetRuntime = Join-Path $executableDirectory 'AuroraTailnet'
-    Copy-Item -LiteralPath (Join-Path $TailscaleDirectory 'AuroraTailnet') -Destination $tailnetRuntime
-    $tailnetResources = Join-Path $resources 'Tailscale'
-    $null = New-Item -ItemType Directory -Force -Path $tailnetResources
-    Copy-Item -LiteralPath (Join-Path $TailscaleDirectory 'licenses') -Destination $tailnetResources -Recurse
-    if ($IsMacOS) {
-        & /bin/chmod +x $tailnetRuntime
-        if ($LASTEXITCODE -ne 0) { throw 'Could not make AuroraTailnet executable.' }
-        & /usr/bin/codesign --force --sign - $tailnetRuntime
-        if ($LASTEXITCODE -ne 0) { throw 'Signing AuroraTailnet failed.' }
+$qmakePath = (Get-Command $Qmake -CommandType Application -TotalCount 1).Source
+$repository = Split-Path -Parent $PSScriptRoot
+$variant = if ($WithoutStreamer) { 'shell' } elseif ($WithoutHost) { 'controller' } else { 'integrated' }
+$output = Join-Path $repository "dist/macos-$Architecture-$variant"
+$bundle = Join-Path $output 'Aurora.app'
+$zipName = "Aurora-macOS-$Architecture-$variant.zip"
+$zip = Join-Path $repository "dist/$zipName"
+$plist = Join-Path $PSScriptRoot 'Info.plist'
+$work = Join-Path $output ('.build-' + [Guid]::NewGuid().ToString('N'))
+$null = New-Item -ItemType Directory -Force -Path $work
+
+try {
+    $stagedBundle = Join-Path $work 'Aurora.app'
+    $stagedZip = Join-Path $work $zipName
+    $assemble = @((Join-Path $PSScriptRoot 'Build-NativeDesktop.py'), 'macos',
+        '--architecture', $Architecture, '--output', $stagedBundle)
+    if ($TailscaleDirectory) {
+        $assemble += @('--tailscale-directory', $TailscaleDirectory)
     }
-}
-if (-not $WithoutStreamer) {
-    $builder = Join-Path $PSScriptRoot 'upstream/moonlight-qt/Build-Mac-Streamer.sh'
-    & /bin/bash $builder $Architecture $contents $Qmake
-    if ($LASTEXITCODE -ne 0) { throw 'The Aurora streaming component could not be built.' }
-    & /usr/bin/codesign --force --sign - (Join-Path $executableDirectory 'AuroraStream')
-    if ($LASTEXITCODE -ne 0) { throw 'Signing AuroraStream failed.' }
-    if (-not $WithoutHost) {
-        $hostBuilder = Join-Path $PSScriptRoot 'upstream/sunshine/Build-Mac-Sunshine.sh'
-        & /bin/bash $hostBuilder $Architecture $contents
-        if ($LASTEXITCODE -ne 0) { throw 'The Aurora Sunshine host could not be built.' }
+
+    if ($WithoutStreamer) {
+        $nativeArch = if ($Architecture -eq 'x64') { 'x86_64' } else { 'arm64' }
+        $qtPrefix = Invoke-Native $qmakePath -query QT_INSTALL_PREFIX
+        $qtBin = Invoke-Native $qmakePath -query QT_HOST_BINS
+        $minimumOS = Invoke-Native /usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' $plist
+        $jobs = Invoke-Native /usr/sbin/sysctl -n hw.logicalcpu
+        $launcherBuild = Join-Path $work 'launcher'
+        Invoke-Native cmake -S (Join-Path $PSScriptRoot 'native-package') -B $launcherBuild -DCMAKE_BUILD_TYPE=Release `
+            "-DCMAKE_PREFIX_PATH=$qtPrefix" "-DCMAKE_OSX_ARCHITECTURES=$nativeArch" "-DCMAKE_OSX_DEPLOYMENT_TARGET=$minimumOS"
+        Invoke-Native cmake --build $launcherBuild --config Release --target AuroraQtShell --parallel $jobs
+        $assemble += @('--without-streamer', '--qt-bin', $qtBin, '--launcher', (Join-Path $launcherBuild 'bin/Aurora'))
     }
+    else {
+        $streamerContents = Join-Path $work 'Streamer.app/Contents'
+        $null = New-Item -ItemType Directory -Force -Path (Join-Path $streamerContents 'MacOS')
+        Copy-Item -LiteralPath $plist -Destination $streamerContents
+        Invoke-Native /bin/bash (Join-Path $PSScriptRoot 'upstream/moonlight-qt/Build-Mac-Streamer.sh') `
+            $Architecture $streamerContents $qmakePath
+        $assemble += @('--streamer-contents', $streamerContents)
+        if (-not $WithoutHost) {
+            Invoke-Native /bin/bash (Join-Path $PSScriptRoot 'upstream/sunshine/Build-Mac-Sunshine.sh') `
+                $Architecture $streamerContents
+            $assemble += @('--host-app', (Join-Path $streamerContents 'Helpers/AuroraHost.app'))
+        }
+    }
+
+    Invoke-Native python3 @assemble | Out-Host
+    $contents = Join-Path $stagedBundle 'Contents'
+    # Seal Qt and the loose executables before signing the outer app.
+    $qtPaths = @('Frameworks', 'PlugIns', 'Resources/qml' | ForEach-Object { Join-Path $contents $_ })
+    Invoke-Native /usr/bin/find @qtPaths -type f -name '*.dylib' -exec /usr/bin/codesign --force --sign '-' '{}' '+'
+    Invoke-Native /usr/bin/find $qtPaths[0] -depth -type d -name '*.framework' -exec /usr/bin/codesign --force --sign '-' '{}' '+'
+    if ($TailscaleDirectory) {
+        $tailnet = Join-Path $contents 'MacOS/AuroraTailnet'
+        Invoke-Native /bin/chmod +x $tailnet
+        Invoke-Native /usr/bin/codesign --force --sign '-' $tailnet
+    }
+    if (-not $WithoutStreamer) {
+        Invoke-Native /usr/bin/codesign --force --sign '-' (Join-Path $contents 'MacOS/AuroraStream')
+        if (-not $WithoutHost) {
+            # Keep the existing signature from the Sunshine component builder.
+            Invoke-Native /usr/bin/codesign --verify --deep --strict (Join-Path $contents 'Helpers/AuroraHost.app')
+        }
+    }
+    Invoke-Native /usr/bin/codesign --force --sign '-' $stagedBundle
+    Invoke-Native /usr/bin/codesign --verify --deep --strict $stagedBundle
+    Invoke-Native /usr/bin/ditto -c -k --sequesterRsrc --keepParent $stagedBundle $stagedZip
+    & (Join-Path $PSScriptRoot 'Artifact-Checksums.ps1') -Path $stagedZip | Out-Null
+
+    if (Test-Path -LiteralPath $bundle) {
+        $previous = Join-Path $output ("Aurora-" + [Guid]::NewGuid().ToString('N') + ".app")
+        Move-Item -LiteralPath $bundle -Destination $previous
+    }
+    Move-Item -LiteralPath $stagedBundle -Destination $bundle
+    Move-Item -LiteralPath $stagedZip -Destination $zip -Force
+    Move-Item -LiteralPath "$stagedZip.sha256" -Destination "$zip.sha256" -Force
+}
+finally {
+    Remove-Item -LiteralPath $work -Recurse -Force
 }
 
-if ($IsMacOS) {
-    & /usr/bin/codesign --force --deep --sign - $bundle
-    if ($LASTEXITCODE -ne 0) { throw 'Ad-hoc signing failed.' }
-    & /usr/bin/codesign --verify --deep --strict $bundle
-    if ($LASTEXITCODE -ne 0) { throw 'Signature verification failed.' }
-    & /usr/bin/ditto -c -k --keepParent $bundle $zip
-    if ($LASTEXITCODE -ne 0) { throw 'Archive creation failed.' }
-}
-else {
-    $signer = (Resolve-Path -LiteralPath $Rcodesign).Path
-    & $signer sign $bundle
-    if ($LASTEXITCODE -ne 0) { throw 'Ad-hoc signing failed.' }
-    $signature = & $signer extract code-directory (Join-Path $executableDirectory 'Aurora')
-    if ($LASTEXITCODE -ne 0 -or ($signature -join "`n") -notmatch '\bADHOC\b') { throw 'The executable has no ad-hoc signature.' }
-    python (Join-Path $PSScriptRoot 'Pack-Mac.py') $bundle $zip
-    if ($LASTEXITCODE -ne 0) { throw 'Archive creation failed.' }
-}
 Get-Item -LiteralPath $zip

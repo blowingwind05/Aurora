@@ -7,6 +7,7 @@ AuroraMainWindow {
     id: shell
     visible: snapshot.windowVisible !== false
     deviceModel: devices
+    deviceEpoch: Number.isInteger(snapshot.deviceEpoch) ? snapshot.deviceEpoch : -1
     hostState: snapshot.host || ({})
     deviceAccess: snapshot.deviceAccess || "loading"
     accountName: snapshot.accountName || ""
@@ -135,7 +136,8 @@ AuroraMainWindow {
     function syncDevices() {
         const rows = snapshot.devices || []
         for (let i = 0; i < rows.length; ++i) {
-            const row = rows[i]
+            // Write the role every time. ListModel.set retains roles omitted by a row.
+            const row = Object.assign({}, rows[i], { supportsPower: rows[i].supportsPower === true })
             let existing = i
             while (existing < devices.count && devices.get(existing).deviceId !== row.deviceId)
                 ++existing
@@ -185,6 +187,13 @@ AuroraMainWindow {
     onSunshineRequested: function(action, data) { auroraBridge.sendSunshine(action, data) }
     onRefreshRequested: auroraBridge.send("refresh", "", 0)
     onConnectRequested: function(deviceId) { auroraBridge.send("connect", deviceId, snapshot.deviceEpoch) }
+    onDevicePowerRequested: function(deviceId, restart, epoch) {
+        if (snapshot.deviceAccess !== "ready" || snapshot.deviceEpoch !== epoch || !deviceId)
+            return
+        const matching = (snapshot.devices || []).filter(function(row) { return row.deviceId === deviceId })
+        if (matching.length === 1 && matching[0].online === true && matching[0].supportsPower === true)
+            auroraBridge.send(restart ? "device-power-restart" : "device-power-shutdown", deviceId, epoch)
+    }
     onNavigationRequested: function(destination) {
         if (destination === "host" || destination === "devices" ||
             destination === "feedback" || destination === "about") {

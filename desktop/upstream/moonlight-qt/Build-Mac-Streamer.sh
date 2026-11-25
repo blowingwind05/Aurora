@@ -102,11 +102,9 @@ for directory in Frameworks PlugIns Resources; do
   fi
 done
 if [[ "$expected_arch" == "$native_arch" ]]; then
-  for probe in --check-ui --check-native; do
-    /usr/bin/env -u QT_PLUGIN_PATH -u QT_QPA_PLATFORM_PLUGIN_PATH -u QML2_IMPORT_PATH -u QML_IMPORT_PATH \
-      QT_QPA_PLATFORM=cocoa "$destination/MacOS/AuroraQtShell" "$probe" \
-      "$destination/Resources/QtPreview/desktop/qt-shell/bridge/Live.qml"
-  done
+  /usr/bin/env -u QT_PLUGIN_PATH -u QT_QPA_PLATFORM_PLUGIN_PATH -u QML2_IMPORT_PATH -u QML_IMPORT_PATH \
+    QT_QPA_PLATFORM=cocoa "$destination/MacOS/AuroraQtShell" --check-native \
+    "$destination/Resources/QtPreview/desktop/qt-shell/bridge/Live.qml"
 fi
 
 mkdir -p "$destination/Resources"

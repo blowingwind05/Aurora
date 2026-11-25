@@ -116,7 +116,7 @@ void windowsLaunchers()
     for (const auto &invalid : {QStringLiteral("Aurora.exe"), QStringLiteral("C:Aurora.exe"),
                                QStringLiteral("\\Aurora.exe"), QStringLiteral("\\\\server\\Aurora.exe"),
                                QStringLiteral("\\\\.\\C:\\Aurora.exe"), QStringLiteral("C:\\DOTNET.EXE"),
-                               QStringLiteral("C:\\bad\"path\\Aurora.exe"), QStringLiteral("C:\\Aurora.ps1")}) {
+                               QStringLiteral("C:\\bad\"path\\Aurora.exe"), QStringLiteral("C:\\StartApp.ps1")}) {
         CHECK(windowsStartupCommand(invalid).isEmpty());
     }
     const auto longest = QStringLiteral("C:\\") + QString(251, QLatin1Char('a')) + QStringLiteral(".exe");

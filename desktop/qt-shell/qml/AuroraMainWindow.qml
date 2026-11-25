@@ -15,6 +15,7 @@ Window {
     property bool customWindowChrome: AuroraTheme.windows
     property int macTitleBarHeight: 52
     property var deviceModel: null
+    property int deviceEpoch: -1
     property string deviceAccess: "loading"
     property bool refreshAvailable: true
     property bool refreshing: false
@@ -62,6 +63,75 @@ Window {
     signal refreshRequested()
     signal connectRequested(string deviceId)
     signal deviceToolRequested(string deviceId, string action)
+    signal devicePowerRequested(string deviceId, bool restart, int epoch)
+
+    property int nextPowerConfirmationId: 0
+    property var pendingDevicePower: null
+    property DeviceCard powerDevice: null
+    property Item powerFocus: null
+    readonly property bool devicePowerContext: visible && visibility !== Window.Minimized &&
+        currentPage === "devices" && deviceAccess === "ready"
+    onDevicePowerContextChanged: invalidateDevicePower()
+    onDeviceEpochChanged: invalidateDevicePower()
+    onPowerDeviceChanged: invalidateDevicePower()
+
+    Connections {
+        target: window.powerDevice
+        function onPowerAvailableChanged() { window.invalidateDevicePower() }
+        function onDeviceIdChanged() { window.invalidateDevicePower() }
+        function onDisplayNameChanged() { window.invalidateDevicePower() }
+    }
+
+    function devicePowerCurrent(request) {
+        return devicePowerContext && deviceEpoch === request.epoch && powerDevice && powerDevice.powerAvailable &&
+            powerDevice.deviceId === request.deviceId && powerDevice.displayName === request.displayName
+    }
+
+    function invalidateDevicePower() {
+        if (pendingDevicePower && !devicePowerCurrent(pendingDevicePower))
+            clearDevicePower()
+    }
+
+    function confirmDevicePower(device, restart, epoch, source) {
+        if (pendingDevicePower || !devicePowerContext || epoch !== deviceEpoch || !device.powerAvailable)
+            return
+        powerDevice = device
+        powerFocus = source
+        const name = device.displayName
+        pendingDevicePower = {
+            id: ++nextPowerConfirmationId,
+            deviceId: device.deviceId,
+            displayName: name,
+            epoch: epoch,
+            restart: restart,
+            title: restart ? qsTr("要重启「%1」吗？").arg(name) : qsTr("要将「%1」关机吗？").arg(name),
+            body: restart ? qsTr("重启将断开远程连接。请先保存这台设备上的工作。")
+                          : qsTr("关机将断开远程连接。请先保存这台设备上的工作，重新开机后才能连接。"),
+            label: restart ? qsTr("确认重启") : qsTr("确认关机"),
+            destructive: true
+        }
+    }
+
+    function clearDevicePower() {
+        pendingDevicePower = null
+        powerDevice = null
+        powerFocus = null
+    }
+
+    TailscaleConfirmation {
+        objectName: "devicePowerConfirmation"
+        confirmation: window.pendingDevicePower
+        returnFocusItem: window.powerFocus
+        onDecision: function(id, approved) {
+            const request = window.pendingDevicePower
+            if (!request || id !== request.id)
+                return
+            const send = approved && window.devicePowerCurrent(request)
+            window.clearDevicePower()
+            if (send)
+                window.devicePowerRequested(request.deviceId, request.restart, request.epoch)
+        }
+    }
 
     readonly property bool compact: width <= 470
     readonly property bool narrow: width <= 650
@@ -261,6 +331,7 @@ Window {
             compact: window.compact
             narrow: window.narrow
             deviceModel: window.deviceModel
+            deviceEpoch: window.deviceEpoch
             accessState: window.deviceAccess
             refreshAvailable: window.refreshAvailable
             refreshing: window.refreshing
@@ -272,6 +343,9 @@ Window {
             onRefreshRequested: window.refreshRequested()
             onConnectRequested: function(deviceId) { window.connectRequested(deviceId) }
             onToolRequested: function(deviceId, action) { window.deviceToolRequested(deviceId, action) }
+            onPowerConfirmationRequested: function(device, restart, epoch, source) {
+                window.confirmDevicePower(device, restart, epoch, source)
+            }
             onAccountRequested: window.navigationRequested("account")
         }
 

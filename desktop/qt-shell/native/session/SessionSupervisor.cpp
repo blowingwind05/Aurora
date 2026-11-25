@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "SessionSupervisor.h"
+#include "ControlAdapter.h"
 #include "MoonlightProcess.h"
 
 #include <QCloseEvent>
@@ -68,6 +69,11 @@ SessionSupervisor::SessionSupervisor(QString bundledExecutable, aurora::tailscal
 {
     qRegisterMetaType<PreparedSession>();
     qRegisterMetaType<SessionResult>();
+    if (platform_ == Stream::RuntimePlatform::Windows) {
+        privacyControl_ = std::make_unique<Stream::Control::Adapter>();
+        connect(privacyControl_.get(), &Stream::Control::Adapter::finished,
+                this, &SessionSupervisor::privacyFinished, Qt::QueuedConnection);
+    }
     startupDeadline_.setSingleShot(true);
     stopDeadline_.setSingleShot(true);
     startupDeadline_.setTimerType(Qt::PreciseTimer);
@@ -130,6 +136,7 @@ SessionSupervisor::SessionSupervisor(QString bundledExecutable, aurora::tailscal
 
 SessionSupervisor::~SessionSupervisor()
 {
+    privacyControl_.reset();
     disconnect(&surface_, nullptr, this, nullptr);
     if (tailnet_) {
         disconnect(tailnet_, nullptr, this, nullptr);
@@ -232,6 +239,8 @@ bool SessionSupervisor::start(const SessionAuthorization &authorization, Session
     view_ = std::move(view);
     if (platform_ == Stream::RuntimePlatform::MacOS)
         view_.owner.clear();
+    if (privacyControl_ && authorization.privacy && matchesPrivacyRoute(*authorization.privacy))
+        privacyRoute_ = authorization.privacy;
     const auto token = attempt_;
     setPhase(Phase::Starting);
     QTimer::singleShot(0, this, [this, token] {
@@ -424,11 +433,12 @@ void SessionSupervisor::requestStop()
 
 void SessionSupervisor::beginStop(SessionEnd reason)
 {
-    if (phase_ == Phase::Idle || phase_ == Phase::Stopping)
+    if (phase_ == Phase::Idle || phase_ == Phase::Stopping || pendingFinish_)
         return;
     stopReason_ = reason;
     startupDeadline_.stop();
     setPhase(Phase::Stopping);
+    revokePrivacy();
 
     if (pendingOpen_ && tailnet_) {
         tailnet_->cancelOpen(pendingOpen_);
@@ -457,9 +467,23 @@ void SessionSupervisor::retireWorker()
 
 void SessionSupervisor::finish(SessionResult result)
 {
+    if (pendingFinish_)
+        return;
+    pendingFinish_ = std::move(result);
+    retireWorker();
+    if (privacyControl_ && privacyControl_->busy())
+        setPhase(Phase::Stopping);
+    revokePrivacy();
+    if (pendingFinish_ && (!privacyControl_ || !privacyControl_->busy()))
+        completeFinish();
+}
+
+void SessionSupervisor::completeFinish()
+{
     const auto token = attempt_;
     const auto generation = candidate_.generation;
-    retireWorker();
+    const auto result = *pendingFinish_;
+    privacyRequest_ = {};
     surface_.requestStop();
     if (lease_) {
         lease_->close();
@@ -480,6 +504,7 @@ void SessionSupervisor::finish(SessionResult result)
     forcedStop_ = false;
     metrics_.clear();
     networkPoor_ = false;
+    pendingFinish_.reset();
     setPhase(Phase::Idle);
     emit fullScreenChanged();
     emit connectionChanged();
@@ -492,6 +517,8 @@ void SessionSupervisor::setPhase(Phase phase)
         return;
     phase_ = phase;
     emit phaseChanged();
+    if (phase_ == Phase::Streaming)
+        refreshPrivacyScreen();
 }
 
 void SessionSupervisor::setViewport(const QRect &viewport, bool suppressed)

@@ -5,7 +5,7 @@ project(AuroraNativeInstanceTests LANGUAGES CXX)
 find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS Network)
 find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Network)
 
-set(native "${CMAKE_CURRENT_SOURCE_DIR}/../../desktop/qt-shell/native")
+set(native "${CMAKE_CURRENT_SOURCE_DIR}/../../desktop/qt-shell/native/platform")
 add_executable(AuroraNativeInstanceTests NativeInstanceTests.cpp
     "${native}/NativeInstance.cpp" "${native}/NativeInstance.h")
 set_target_properties(AuroraNativeInstanceTests PROPERTIES AUTOMOC ON CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)

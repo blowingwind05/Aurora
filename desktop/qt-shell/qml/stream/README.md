@@ -46,12 +46,12 @@ Stream.StreamSessionChrome {
 
 ## 离线验收
 
-在应用补丁后的临时副本运行以下命令。验收仅启动 Qt Quick 测试进程。
+在仓库根目录运行 Qt Quick 界面测试。
 
 ```powershell
-pwsh -NoProfile -File ./tests/qt-shell/stream/Replay.ps1 -QmlTestRunner 'D:/anaconda3/Library/bin/qmltestrunner.exe'
+pwsh -NoProfile -File ./tests/qt-ui/Replay.ps1
 ```
 
-可用 Qt 5.15 的 `qmlscene tests/qt-shell/stream/Preview.qml` 浏览静态素材和演示数据。将窗口调整至 1000 × 620、760、759、490、489 和 400 × 280，查看页签圆脚、分隔线、留白、菜单对齐及滚动。用 Tab、Enter 和 Esc 操作。预览里的系统窗控区域按平台留白，系统行为由实际宿主提供。
+可用 Qt 5.15 的 `qmlscene tests/qt-ui/Preview.qml` 浏览静态素材和演示数据。将窗口调整至 1000 × 620、760、759、490、489 和 400 × 280，查看页签圆脚、分隔线、留白、菜单对齐及滚动。用 Tab、Enter 和 Esc 操作。预览里的系统窗控区域按平台留白，系统行为由实际宿主提供。
 
 `icons/` 中的七个 SVG 来自[串流原型](../../../../docs/visual-design/aurora-stream-preview.html)的内联图标。其余图标和品牌图沿用设计目录中的资产。

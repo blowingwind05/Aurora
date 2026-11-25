@@ -37,10 +37,7 @@ values. The caller supplies any probe work.
   connection failure. Timeouts, encoder wait, and dispatch off the GUI thread
   belong to the probe and runtime integration.
 
-The original `Discovery.cs`, `AuroraPresence.cs`, and
-`AuroraWindow.QtShell.cs` define these policies. Name collation and Unicode
-case tables come from Qt, so locale-specific ordering and casing of newer
-Unicode characters can depend on the Qt build.
+Name collation and Unicode casing follow the Qt build.
 
 ## Offline verification
 
@@ -53,14 +50,6 @@ cmake --build build/discovery --config Release
 cmake -E chdir build/discovery ctest -C Release --output-on-failure
 ```
 
-The native fixtures reuse the normalized `desk` and `lap` peers from
-`tests/Discovery.Tests.ps1` and the desktop merge, identity, and route cases
-from `tests/DesktopDiscovery.Tests.ps1`. The original CLI fixture remains
-runnable offline with `pwsh -NoProfile -File tests/Discovery.Tests.ps1`.
-The native fixture inputs are in-memory records and the probes are callbacks
-that return fixture values.
-
-The production integration still needs status normalization, discovery and
-server-info transports, identity persistence, probe and stream lifecycle, and
-shell wiring. The package and application entry point are independent of this
-standalone fixture target.
+The fixtures use in-memory peers and probe callbacks to cover filtering,
+merging, identity persistence, and route selection. The application wires
+this module to authenticated presence and server-info in `native/app`.

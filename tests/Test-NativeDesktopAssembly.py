@@ -5,6 +5,7 @@ import importlib.util
 import os
 from pathlib import Path
 import plistlib
+import shutil
 import struct
 import subprocess
 import sys
@@ -55,7 +56,9 @@ def windows_inputs(root):
     put(streamer, "platforms/qwindows.dll")
     put(streamer, "QtQuick/Controls.2/qmldir")
     put(sunshine, "AuroraHost.exe", pe())
+    put(sunshine, "zlib1.dll")
     put(sunshine, "assets/apps.json")
+    put(sunshine, "assets/web/index.html")
     put(tailscale, "AuroraTailnet.exe", pe())
     for directory in (streamer, sunshine, tailscale):
         put(directory, "licenses/SOURCE.txt")
@@ -73,7 +76,7 @@ class AssemblyTest(unittest.TestCase):
         inputs = windows_inputs(self.root)
         assembly.assemble(output, lambda target: assembly.stage_windows(target, *inputs))
         self.assertTrue((output / "Aurora.exe").is_file())
-        self.assertTrue((output / "QtPreview/desktop/qt-shell/bridge/WindowsSessionPopup.qml").is_file())
+        self.assertTrue((output / "QtPreview/desktop/qt-shell/qml/stream/NativeSessionWindow.qml").is_file())
         self.assertFalse((output / "QtPreview/stale.txt").exists())
         streamer = output / "Components/Moonlight"
         self.assertFalse((streamer / "AuroraQtShell.exe").exists())
@@ -81,8 +84,24 @@ class AssemblyTest(unittest.TestCase):
         self.assertTrue(os.path.samefile(output / "Qt5Core.dll", streamer / "Qt5Core.dll"))
         self.assertIn("Prefix = Components/Moonlight", (output / "qt.conf").read_text())
         self.assertEqual((inputs[1] / "AuroraQtShell.exe").read_bytes(), b"obsolete companion")
+        portable_zip = shutil.make_archive(str(self.root / "portable"), "zip", root_dir=output)
+        subprocess.run([sys.executable, str(DESKTOP.parent / "tests/Check-NativeDesktopPackage.py"), portable_zip],
+                       check=True)
         with self.assertRaises(FileExistsError):
             assembly.assemble(output, lambda _: self.fail("Existing output was passed to the stager"))
+
+    def test_windows_package_rejects_incomplete_sunshine(self):
+        for relative in ("zlib1.dll", "assets/web/index.html"):
+            with self.subTest(missing=relative):
+                root = self.root / Path(relative).name
+                inputs = windows_inputs(root)
+                missing = inputs[2] / relative
+                missing.unlink()
+                output = root / "Incomplete package"
+                with self.assertRaises(FileNotFoundError) as error:
+                    assembly.assemble(output, lambda target: assembly.stage_windows(target, *inputs))
+                self.assertEqual(error.exception.args[0], missing)
+                self.assertFalse(output.exists())
 
     def test_managed_payload_rejects_publication(self):
         inputs = windows_inputs(self.root)

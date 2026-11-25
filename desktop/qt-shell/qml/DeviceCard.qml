@@ -15,11 +15,17 @@ FocusScope {
     property url defaultWallpaper
     property var enabledTools: []
     property bool connectionPending: false
+    property bool supportsPower: false
+    property int deviceEpoch: -1
     signal connectRequested(string deviceId)
     signal toolRequested(string deviceId, string action)
     signal copyRequested(string address)
+    signal powerConfirmationRequested(bool restart, int epoch, Item source)
+
+    onDeviceEpochChanged: if (toolsMenu.visible) toolsMenu.close()
 
     readonly property bool ready: online && canConnect && deviceId !== ""
+    readonly property bool powerAvailable: online && supportsPower && deviceId !== "" && deviceEpoch >= 0
     readonly property bool compactTools: width - 2 <= 325
     readonly property bool compactAddress: width - 18 <= 250
     readonly property real cardRadius: 14
@@ -297,7 +303,49 @@ FocusScope {
                     x: more.width - width
                     property real anchorTop: 0
                     y: anchorTop >= height + 8 ? -height - 3 : more.height + 3
-                    onAboutToShow: anchorTop = more.mapToItem(null, 0, 0).y
+                    property var powerChoice: null
+                    readonly property string powerUnavailable: qsTr("远程电源操作需要被控端在线并支持此功能")
+
+                    function choosePower(restart) {
+                        if (!card.powerAvailable)
+                            return
+                        powerChoice = {
+                            restart: restart,
+                            deviceId: card.deviceId,
+                            displayName: card.displayName,
+                            epoch: card.deviceEpoch
+                        }
+                        close()
+                    }
+
+                    onAboutToShow: {
+                        powerChoice = null
+                        anchorTop = more.mapToItem(null, 0, 0).y
+                    }
+                    onClosed: {
+                        const choice = powerChoice
+                        powerChoice = null
+                        if (choice && card.powerAvailable && choice.deviceId === card.deviceId &&
+                                choice.displayName === card.displayName && choice.epoch === card.deviceEpoch)
+                            card.powerConfirmationRequested(choice.restart, choice.epoch, more)
+                    }
+
+                    property Item powerHint: MouseArea {
+                        parent: toolsMenu.contentItem ? toolsMenu.contentItem.parent : null
+                        visible: toolsMenu.opened && !card.powerAvailable
+                        readonly property point start: restartItem.parent && parent
+                            ? restartItem.parent.mapToItem(parent, restartItem.x, restartItem.y) : Qt.point(0, 0)
+                        x: start.x
+                        y: start.y
+                        width: restartItem.width
+                        height: restartItem.height + shutdownItem.height
+                        z: 1
+                        hoverEnabled: true
+                        acceptedButtons: Qt.NoButton
+                        ToolTip.text: toolsMenu.powerUnavailable
+                        ToolTip.delay: 550
+                        ToolTip.visible: containsMouse
+                    }
 
                     AuroraMenuItem {
                         visible: card.lanAddress.length > 0
@@ -321,14 +369,22 @@ FocusScope {
                         contentItem: Item {}
                     }
                     AuroraMenuItem {
-                        enabled: false
+                        id: restartItem
+                        objectName: "restart-" + card.deviceId
+                        enabled: card.powerAvailable
                         text: qsTr("重启")
                         icon.source: AuroraTheme.icon("rotate-ccw")
+                        Accessible.description: enabled ? "" : toolsMenu.powerUnavailable
+                        onTriggered: toolsMenu.choosePower(true)
                     }
                     AuroraMenuItem {
-                        enabled: false
+                        id: shutdownItem
+                        objectName: "shutdown-" + card.deviceId
+                        enabled: card.powerAvailable
                         text: qsTr("关机")
                         icon.source: AuroraTheme.icon("power")
+                        Accessible.description: enabled ? "" : toolsMenu.powerUnavailable
+                        onTriggered: toolsMenu.choosePower(false)
                     }
                 }
             }

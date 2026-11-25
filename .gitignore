@@ -1,6 +1,12 @@
 *.local.json
 *.log
 .env
+*.pfx
+*.p12
+*.p8
+*.jks
+*.keystore
+*.mobileprovision
 artifacts/
 dist/
 desktop/bin/

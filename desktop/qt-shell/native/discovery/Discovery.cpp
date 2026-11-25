@@ -248,6 +248,7 @@ QJsonObject qtDeviceRow(const Device &device, const QString &wallpaperUrl)
         {QStringLiteral("displayName"), device.name},
         {QStringLiteral("online"), device.online},
         {QStringLiteral("canConnect"), device.canConnect()},
+        {QStringLiteral("supportsPower"), device.supportsPower()},
         {QStringLiteral("lanAddress"), lanAddress.toString()},
         {QStringLiteral("tailscaleAddress"), tailnetAddress.toString()},
         {QStringLiteral("wallpaperUrl"), wallpaperUrl}

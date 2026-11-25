@@ -8,13 +8,14 @@ find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Quick QuickControls2 Netw
 add_executable(AuroraQtShell bridge/main.cpp bridge/AuroraMore.cpp bridge/AuroraMore.h)
 target_sources(AuroraQtShell PRIVATE
     bridge/aurora-brand.qrc
-    native/DesktopTray.cpp native/DesktopTray.h native/TrayMenuPlacement.h
-    native/NativeDevicePresence.cpp native/NativeDevicePresence.h
-    native/NativeDesktop.cpp native/NativeDesktop.h
-    native/NativeDesktopSessions.cpp native/NativeDesktopPairing.cpp native/NativeDesktopPairingHost.cpp
-    native/NativeDesktopWallpapers.cpp
-    native/NativeInstance.cpp native/NativeInstance.h
+    native/app/NativeDesktop.cpp native/app/NativeDesktop.h
+    native/app/NativeDesktopSessions.cpp native/app/NativeDesktopPairing.cpp native/app/NativeDesktopPairingHost.cpp
+    native/app/NativeDesktopWallpapers.cpp native/app/NativeDesktopPower.cpp
+    native/app/NativeDevicePresence.cpp native/app/NativeDevicePresence.h
+    native/platform/DesktopTray.cpp native/platform/DesktopTray.h native/platform/TrayMenuPlacement.h
+    native/platform/NativeInstance.cpp native/platform/NativeInstance.h
     native/preferences/DesktopPreferences.cpp native/preferences/DesktopPreferences.h)
+target_include_directories(AuroraQtShell PRIVATE native)
 target_compile_definitions(AuroraQtShell PRIVATE AURORA_DESKTOP_VERSION="${PROJECT_VERSION}")
 set_target_properties(AuroraQtShell PROPERTIES AUTOMOC ON AUTORCC ON CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
 if(WIN32)
@@ -37,7 +38,6 @@ add_subdirectory(native/discovery)
 add_subdirectory(native/discovery/serverinfo)
 add_subdirectory(native/pairing)
 add_subdirectory(native/presence)
-add_subdirectory(native/session)
 add_subdirectory(native/sunshine)
 add_subdirectory(native/sunshine/admin)
 add_subdirectory(native/sunshine/host)
@@ -45,6 +45,8 @@ add_subdirectory(native/sunshine/lifecycle)
 add_subdirectory(native/stream)
 add_subdirectory(native/pairing/client)
 add_subdirectory(native/tailscale)
+add_subdirectory(native/stream/control)
+add_subdirectory(native/session)
 add_subdirectory(native/pairing/host)
 add_subdirectory(native/tailscale/avatar)
 add_subdirectory(native/wallpaper/host)

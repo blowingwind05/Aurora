@@ -16,11 +16,19 @@ macOS 使用内置 Tailscale。Windows 可在「Tailscale 账户」选择内置�
 
 设备卡优先使用被控电脑壁纸的本地缩略图。远控窗口和设备列表各有自己的工作区，从「控制中心」可以访问当前会话的操作。
 
+用安装器部署的旧版 Windows Aurora，请先通过 Windows 设置卸载，再安装新版。便携包请解压到新目录。
+
+在 Windows 被控端使用远程手柄需要 ViGEmBus。安装器会在驱动缺失时安装它。使用便携包时，可从 `Components/ViGEmBus` 运行随包附带的安装程序。
+
 ## 开发与设计
 
 - [贡献指南](CONTRIBUTING.md) 包含开发环境、构建命令、代码定位和验证步骤。
 - [完整视觉设计](docs/visual-design/README.md) 包含布局、颜色、组件、平台适配和验收口径。
 - [上游组件](desktop/upstream) 记录 Moonlight、Sunshine 和 Tailscale 的构建入口与源码版本。
+
+GitHub Actions 的 **Build Aurora for Windows** 生成便携 ZIP 和安装器。Windows 与 macOS 的下载包附带 SHA-256 校验文件，公开仓库的构建还会生成来源证明。[签名与下载验证](docs/signing.md)
+
+旧桌面端及其构建脚本可从 [desktop-dotnet-archive](https://github.com/blowingwind05/Aurora/tree/desktop-dotnet-archive) 检出。
 
 ## 许可
 

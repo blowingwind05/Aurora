@@ -7,15 +7,15 @@ the desktop coordinator.
 
 ## Wire format
 
-UDP port `48988`, 192 bytes per request or response, as in
-`desktop/AuroraPresence.cs` and the existing tsnet helper.
+UDP port `48988`, with 192 bytes per request or response. The desktop and
+tsnet helper share this framing.
 
 | Byte range | Value |
 | --- | --- |
 | 0–16 | ASCII `AURORA/PRESENCE/1` |
 | 17 | Request `1` or reply `2` |
 | 18–33 | 16 random request bytes, echoed by the responder |
-| 34–49 | Presence GUID in .NET byte order |
+| 34–49 | Presence GUID with its first three fields in little-endian order |
 | 50 | Platform `0` unknown, `1` Windows, `2` macOS |
 | 51 | Hosting flag, true only for `1` |
 | 52–191 | UTF-8 machine name with zero padding and no split character |

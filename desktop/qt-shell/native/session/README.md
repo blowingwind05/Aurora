@@ -1,9 +1,10 @@
 # Native stream session
 
-Link `aurora_native_session` from `add_subdirectory(native/session)`. The
-target links the existing `aurora_native_stream` and `AuroraNativeTailscale`
-libraries. `SessionSupervisor` embeds the bundled worker on Windows and
-launches the bundled native Moonlight window on macOS.
+Link `aurora_native_session` from `add_subdirectory(native/session)`. Include
+`native/stream/control` after the stream, server-info, and Tailscale targets
+so the session target can link `Aurora::StreamControl`.
+`SessionSupervisor` embeds the bundled worker on Windows and launches the
+bundled native Moonlight window on macOS.
 
 ## Coordinator integration
 
@@ -47,6 +48,33 @@ terminal `finished` signal carries the attempt, generation, reason, and
 any worker exit code. It follows worker exit and submission of lease
 cleanup. The tailnet client acknowledges that cleanup asynchronously.
 Coordinator code owns window disposal, access policy, and any retry.
+
+## Windows privacy screen
+
+For a Windows session, the coordinator can attach a `SessionPrivacyRoute`
+to the optional third field of `SessionAuthorization`. Capture the selected
+`Discovery::StreamHost` and the successful `ServerInfo::CheckResult` for the
+prepared attempt, including the last successful encoder-wait check if one
+was required. Use the same route check whose request and attempt were
+matched before the existing Moonlight trust check. Set `checkedRelay` to
+the exact loopback endpoint passed into that check for an embedded route.
+Direct routes leave it empty.
+
+Pass the privacy route with `start({prepared.attempt, prepared.generation,
+privacy}, view)`. The supervisor checks the selected host, checked endpoint,
+provider, fresh privacy capability, and active worker endpoint before enabling
+privacy. An omitted or mismatched grant leaves playback available. The
+supervisor obtains the runtime and any relay lease from the active attempt.
+Continue using `cancel(attempt)` when the caller's account or access changes.
+
+`NativeSessionWindow.qml` binds `privacyScreen` and `privacyScreenMessage` to
+the existing chrome. The supervisor checks status when video becomes ready.
+Opening the control center refreshes status, and the toggle calls
+`setPrivacyScreen(bool)`. The displayed value is the worker's last confirmed
+state. One status or change request runs at a time. Session stop, relay loss,
+or worker exit revokes privacy and reaps the control child before the session
+finishes and closes its relay. The macOS standalone Moonlight window owns
+its existing privacy controls.
 
 ## Windows surface helper
 
@@ -124,7 +152,9 @@ build with the shell's Qt toolchain and run CTest. The supervisor fixture
 uses the repository's stream entry gate and fake Moonlight and tailnet
 children. It covers the authorization gate, viewport and full-screen
 handling, relay lifetime, cancellation during allocation, and graceful
-and forced worker stops. The Windows surface fixture still loads the
-existing stream chrome in a `QQuickView` and exercises the original
+and forced worker stops. On Windows it also checks confirmed privacy state,
+route mismatches, suppression of overlapping requests, and control-worker
+reaping on stop, relay loss, and playback exit. The Windows surface fixture
+loads the existing stream chrome in a `QQuickView` and exercises the original
 invitation, window validation and events. Both fixtures use local child
 processes and pipes.

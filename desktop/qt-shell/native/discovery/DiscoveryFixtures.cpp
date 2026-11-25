@@ -56,7 +56,7 @@ void checkInvalidInput(Action action)
 
 void catalog()
 {
-    // DesktopDiscovery.Tests.ps1 supplies the combined, stock, multi-LAN, and IPv6 inputs.
+    // Cover combined, stock, multi-LAN, and IPv6 discovery inputs.
     const auto studio = peer("tailscale-node", "Studio", Far, Far6);
     const auto localHost = host(Near, "HOST-A");
     const auto remoteHost = host(Far, "host-a");
@@ -147,7 +147,7 @@ void catalog()
 
 void trust()
 {
-    // Discovery.Tests.ps1 names both same-user peers "studio" and prefers the desk's IPv4.
+    // Two same-user peers share the name "studio". Use their stable IDs and prefer IPv4.
     const auto desk = peer("desk", "studio", QHostAddress("100.64.2.1"), QHostAddress("fd7a:115c:a1e0::123"));
     const auto lap = peer("lap", "studio", QHostAddress("fd7a:115c:a1e0::124"), {}, false);
     const QHostAddress self("100.64.2.90");

@@ -20,6 +20,41 @@ void report(const char *line)
 }
 
 #ifdef Q_OS_WIN
+int fakePrivacy(int argc, char **argv)
+{
+    const auto endpoint = QByteArray(argv[2]);
+    const auto host = QByteArray(argv[3]);
+    const auto operation = QByteArray(argv[4]);
+    const auto relay = qgetenv("AURORA_TEST_STREAM_RELAY");
+    if (endpoint != qgetenv("AURORA_TEST_STREAM_ENDPOINT") || host != qgetenv("AURORA_TEST_STREAM_HOST") ||
+        qgetenv("AURORA_GAMESTREAM_RELAY_BASE") != relay || qEnvironmentVariableIsSet("AURORA_EMBEDDED_SESSION") ||
+        qgetenv("AURORA_GAMESTREAM_HOST_UUID") != (relay.isEmpty() ? QByteArray() : host)) {
+        return 23;
+    }
+    if (operation != "status" && operation != "on" && operation != "off")
+        return 24;
+
+    QCoreApplication app(argc, argv);
+    QFile log(qEnvironmentVariable("AURORA_TEST_PRIVACY_LOG"));
+    const auto record = operation + ' ' + QByteArray::number(app.applicationPid()) + '\n';
+    if (!log.open(QIODevice::WriteOnly | QIODevice::Append) || log.write(record) != record.size() || !log.flush())
+        return 25;
+    log.close();
+
+    const auto mode = qgetenv("AURORA_TEST_PRIVACY_MODE");
+    if (mode == "hold")
+        return app.exec();
+    if (mode == "failed")
+        return 4;
+    const auto reply = mode == "unavailable" ? QByteArray("unavailable") :
+        operation == "status" ? QByteArray("off") : operation;
+    QTimer::singleShot(120, &app, [&app, reply] {
+        report(reply.constData());
+        app.quit();
+    });
+    return app.exec();
+}
+
 LPCWSTR wide(const QString &text)
 {
     return reinterpret_cast<LPCWSTR>(text.utf16());
@@ -70,12 +105,16 @@ int main(int argc, char **argv)
         const int guard = prepareAuroraStreamInvocation(argc, argv);
         if (guard >= 0)
             return guard;
+#ifdef Q_OS_WIN
+        if (argc == 5 && std::strcmp(argv[1], "privacy") == 0)
+            return fakePrivacy(argc, argv);
+#endif
         if (argc < 4 || std::strcmp(argv[1], "stream") || std::strcmp(argv[3], "Desktop")
             || QByteArray(argv[2]) != qgetenv("AURORA_TEST_STREAM_ENDPOINT")) {
             return 17;
         }
         const auto relay = qgetenv("AURORA_TEST_STREAM_RELAY");
-        if ((!relay.isEmpty() && qgetenv("AURORA_GAMESTREAM_HOST_UUID") != "host-fixture")
+        if ((!relay.isEmpty() && qgetenv("AURORA_GAMESTREAM_HOST_UUID") != qgetenv("AURORA_TEST_STREAM_HOST"))
             || qgetenv("AURORA_GAMESTREAM_RELAY_BASE") != relay) {
             return 18;
         }
@@ -143,6 +182,10 @@ int main(int argc, char **argv)
     }
     QTimer tick;
     QObject::connect(&tick, &QTimer::timeout, &app, [&] {
+        if (mode == "exit-on-fixture" && QFile::exists(qEnvironmentVariable("AURORA_TEST_PLAYBACK_EXIT"))) {
+            app.quit();
+            return;
+        }
         if (WaitForSingleObject(stop, 0) == WAIT_OBJECT_0) {
             if (mode == "ignore-stop")
                 return;

@@ -5,6 +5,7 @@ import QtQuick.Controls 2.15
 Item {
     id: page
     property var deviceModel: null
+    property int deviceEpoch: -1
     property string accessState: "loading"
     property bool compact: false
     property bool narrow: false
@@ -18,6 +19,7 @@ Item {
     signal refreshRequested()
     signal connectRequested(string deviceId)
     signal toolRequested(string deviceId, string action)
+    signal powerConfirmationRequested(DeviceCard device, bool restart, int epoch, Item source)
     signal accountRequested()
 
     readonly property bool ready: accessState === "ready"
@@ -185,15 +187,22 @@ Item {
                 id: deviceRepeater
                 model: page.ready ? page.deviceModel : null
                 delegate: DeviceCard {
+                    id: deviceCard
                     required property int index
+                    required property var model
+                    deviceEpoch: page.deviceEpoch
+                    supportsPower: model.supportsPower === true
                     objectName: "device-" + deviceId
                     width: Math.floor((page.contentWidth - (page.columns - 1) * cards.columnSpacing) / page.columns)
-                    defaultWallpaper: AuroraTheme.desktopAsset("Wallpapers/" +
+                    defaultWallpaper: index < 0 ? "" : AuroraTheme.desktopAsset("Wallpapers/" +
                         page.defaultWallpapers[index % page.defaultWallpapers.length])
                     enabledTools: page.enabledDeviceTools[deviceId] || []
                     connectionPending: page.connectionPending
                     onConnectRequested: function(deviceId) { page.connectRequested(deviceId) }
                     onToolRequested: function(deviceId, action) { page.toolRequested(deviceId, action) }
+                    onPowerConfirmationRequested: function(restart, epoch, source) {
+                        page.powerConfirmationRequested(deviceCard, restart, epoch, source)
+                    }
                     onCopyRequested: function(address) {
                         clipboard.text = address
                         clipboard.selectAll()

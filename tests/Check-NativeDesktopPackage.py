@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-only
-"""Detect managed desktop dependencies in an extracted release or macOS ZIP."""
+"""Detect managed desktop dependencies in an extracted release or ZIP."""
 
 from argparse import ArgumentParser
 from pathlib import Path, PurePosixPath
@@ -85,14 +85,15 @@ def run():
         if package.is_file() and package.suffix.lower() == ".zip":
             with ZipFile(package) as archive:
                 files = [entry.filename for entry in archive.infolist() if not entry.is_dir()]
-                failures = check_package(files, archive.open, "Aurora.app/Contents/MacOS/Aurora")
+                main = "Aurora.exe" if "Aurora.exe" in files else "Aurora.app/Contents/MacOS/Aurora"
+                failures = check_package(files, archive.open, main)
         elif package.is_dir():
             mac = package.suffix == ".app"
             main = "Contents/MacOS/Aurora" if mac else "Aurora.exe"
             files = [path.relative_to(package).as_posix() for path in package.rglob("*") if path.is_file()]
             failures = check_package(files, lambda name: (package / name).open("rb"), main)
         else:
-            raise ValueError("Pass the Windows portable folder, Aurora.app, or the macOS release ZIP.")
+            raise ValueError("Pass a Windows portable folder, Aurora.app, or a release ZIP.")
     except (BadZipFile, OSError, ValueError) as error:
         print(error, file=sys.stderr)
         return 2

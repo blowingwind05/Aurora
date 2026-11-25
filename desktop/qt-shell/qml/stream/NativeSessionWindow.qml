@@ -46,11 +46,21 @@ Window {
         canDisconnect: connected
         connectionMetrics: session ? session.connectionMetrics : ({})
         networkQuality: session && session.networkPoor ? StreamSessionChrome.Poor : StreamSessionChrome.Normal
+        privacyScreen: session && !window.finished ? (session.privacyScreen || null) : null
+        privacyScreenMessage: session && !window.finished ? session.privacyScreenMessage : ""
 
         onPanelOpenChanged: window.updateViewport()
+        onPanelKindChanged: {
+            if (panelKind === "controls" && !window.finished && session)
+                session.refreshPrivacyScreen()
+        }
         onCancelRequested: session.requestStop()
         onDisconnectRequested: session.requestStop()
         onFullScreenRequested: function(enabled) { session.setFullScreen(enabled) }
+        onPrivacyScreenRequested: function(enabled) {
+            if (!window.finished && session)
+                session.setPrivacyScreen(enabled)
+        }
     }
 
     Text {

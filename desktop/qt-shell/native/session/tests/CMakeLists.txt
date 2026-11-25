@@ -9,6 +9,7 @@ find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS Quick Test)
 find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Quick Test)
 add_subdirectory(../../stream stream)
 add_subdirectory(../../tailscale tailscale)
+add_subdirectory(../../stream/control stream-control)
 add_subdirectory(.. session)
 
 add_executable(AuroraSessionFakeChild FakeChild.cpp)
