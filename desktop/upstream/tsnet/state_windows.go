@@ -59,21 +59,23 @@ func prepareStateDir(dir string) (func(), error) {
 		}
 	}()
 	if err := checkPrivatePath(directory, true, user.User.Sid, private); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("check embedded node state directory: %w", err)
 	}
 
 	lockPath, err := windows.UTF16PtrFromString(filepath.Join(dir, ".aurora.lock"))
 	if err != nil {
 		return nil, err
 	}
-	lock, err := windows.CreateFile(lockPath, windows.GENERIC_READ|windows.GENERIC_WRITE, 0, nil,
+	// An elevated token can default new files to the Administrators owner.
+	// Give a newly created lock the same explicit user owner as its directory.
+	lock, err := windows.CreateFile(lockPath, windows.GENERIC_READ|windows.GENERIC_WRITE, 0, &attributes,
 		windows.OPEN_ALWAYS, windows.FILE_FLAG_OPEN_REPARSE_POINT, 0)
 	if err != nil {
 		return nil, fmt.Errorf("lock embedded node state: %w", err)
 	}
 	if err := checkPrivatePath(lock, false, user.User.Sid, private); err != nil {
 		windows.CloseHandle(lock)
-		return nil, err
+		return nil, fmt.Errorf("check embedded node state lock: %w", err)
 	}
 
 	statePath, err := windows.UTF16PtrFromString(filepath.Join(dir, stateFile))
@@ -89,7 +91,7 @@ func prepareStateDir(dir string) (func(), error) {
 	}
 	if err != nil && !errors.Is(err, windows.ERROR_FILE_NOT_FOUND) {
 		windows.CloseHandle(lock)
-		return nil, err
+		return nil, fmt.Errorf("check persisted embedded node state: %w", err)
 	}
 
 	keep = true
