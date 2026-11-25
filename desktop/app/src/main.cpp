@@ -72,7 +72,8 @@ int main(int argc, char *argv[])
 #endif
 
     const auto directory = checkNative ? QString() : Aurora::Preferences::defaultDirectory();
-    const auto entry = arguments.value(2, NativeDesktop::bundledEntryPoint());
+    const auto packagedEntry = DesktopBridge::packagedEntryPoint();
+    const auto entry = arguments.value(2, packagedEntry);
     const auto sessionSource = QUrl::fromLocalFile(QFileInfo(entry).dir().absoluteFilePath(
         QStringLiteral("stream/NativeSessionWindow.qml")));
     QNetworkAccessManager network;
@@ -120,7 +121,8 @@ int main(int argc, char *argv[])
         QTimer::singleShot(2000, &app, [&app] { app.exit(1); });
     } else {
         app.setQuitOnLastWindowClosed(false);
-        desktop.start();
+        bridge.installApplicationMenu();
+        desktop.start(QFileInfo(packagedEntry).isFile());
     }
     return app.exec();
 }

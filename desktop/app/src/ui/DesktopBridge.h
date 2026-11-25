@@ -4,7 +4,10 @@
 #include <QObject>
 #include <QVariantMap>
 
+#include <memory>
+
 class NativeDesktop;
+class QMenuBar;
 
 class DesktopBridge final : public QObject
 {
@@ -13,6 +16,9 @@ class DesktopBridge final : public QObject
 
 public:
     explicit DesktopBridge(NativeDesktop &desktop);
+    ~DesktopBridge() override;
+    static QString packagedEntryPoint();
+    void installApplicationMenu();
     QVariantMap state() const;
 
     Q_INVOKABLE void send(const QString &action, const QString &deviceId = {}, int deviceEpoch = 0);
@@ -25,4 +31,5 @@ signals:
 
 private:
     NativeDesktop &desktop_;
+    std::unique_ptr<QMenuBar> applicationMenu_;
 };

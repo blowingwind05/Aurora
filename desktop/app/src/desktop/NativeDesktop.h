@@ -28,7 +28,6 @@
 #include <QVariantMap>
 
 class QJsonObject;
-class QMenuBar;
 class QTcpSocket;
 class StreamSessionWindow;
 
@@ -39,11 +38,11 @@ class NativeDesktop final : public QObject
 public:
     NativeDesktop(const QString &version, const QString &dataDirectory, StreamSessionWindow &streamWindow);
     ~NativeDesktop() override;
-    static QString bundledEntryPoint();
     const QVariantMap &state() const { return snapshot; }
 
-    void start();
+    void start(bool packaged);
     void activate(const QString &page = {});
+    void requestExit();
     void handleRequest(const QJsonObject &request);
 
 signals:
@@ -73,7 +72,6 @@ private:
     bool handleSunshineAction(const QString &action, const QJsonObject &request);
     void readHostSettings();
     void publishHostState();
-    void requestExit();
     void readTailnet(bool showRefresh = true);
     void receiveTailnetStatus(quint64 generation, const aurora::tailscale::StatusResult &result);
     bool handleTailnetAction(const QString &action, const QJsonObject &request);
@@ -163,7 +161,6 @@ private:
     Aurora::Platform::HostSleepPrevention sleepPrevention;
     QVariantMap snapshot;
     DesktopTray tray;
-    std::unique_ptr<QMenuBar> applicationMenu;
     std::unique_ptr<Aurora::Platform::StartupRegistration> startup;
     std::unique_ptr<Aurora::Sunshine::LifecycleController> host;
     std::unique_ptr<Aurora::Wallpaper::HostWallpaperUpdater> hostWallpaper;

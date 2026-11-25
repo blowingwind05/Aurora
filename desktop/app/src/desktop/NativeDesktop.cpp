@@ -3,7 +3,6 @@
 #include "stream/control/ControlAdapter.h"
 #include "tailscale/ProviderSelection.h"
 
-#include <QAction>
 #include <QApplication>
 #include <QClipboard>
 #include <QCoreApplication>
@@ -13,8 +12,6 @@
 #include <QFileInfo>
 #include <QJsonObject>
 #include <QSaveFile>
-#include <QKeySequence>
-#include <QMenuBar>
 #include <QTimer>
 
 #include <algorithm>
@@ -73,20 +70,11 @@ NativeDesktop::NativeDesktop(const QString &version, const QString &dataDirector
 
 NativeDesktop::~NativeDesktop() = default;
 
-void NativeDesktop::start()
+void NativeDesktop::start(bool packaged)
 {
-    initializeStartup();
+    if (packaged)
+        initializeStartup();
     initializeTray();
-#ifdef Q_OS_MACOS
-    applicationMenu = std::make_unique<QMenuBar>();
-    auto *application = applicationMenu->addMenu(tr("Aurora"));
-    auto *settings = application->addAction(tr("设置…"), this, [this] { activate(QStringLiteral("settings")); });
-    settings->setMenuRole(QAction::PreferencesRole);
-    settings->setShortcut(QKeySequence::Preferences);
-    auto *quit = application->addAction(tr("退出 Aurora"), this, &NativeDesktop::requestExit);
-    quit->setMenuRole(QAction::QuitRole);
-    quit->setShortcut(QKeySequence::Quit);
-#endif
     if (!directory.isEmpty()) {
         accountAvatar = std::make_unique<aurora::tailscale::AvatarLoader>();
         connect(accountAvatar.get(), &aurora::tailscale::AvatarLoader::dataUriChanged, this, [this] {
@@ -196,7 +184,6 @@ void NativeDesktop::initializeStartup()
 {
     const auto launcher = QCoreApplication::applicationFilePath();
     if (directory.isEmpty() ||
-        !QFileInfo(bundledEntryPoint()).isFile() ||
         QFileInfo(launcher).completeBaseName().compare(QStringLiteral("Aurora"), Qt::CaseInsensitive) != 0)
         return;
     startup = std::make_unique<StartupRegistration>([this] {
@@ -908,20 +895,6 @@ void NativeDesktop::updateDeviceCatalog(const aurora::tailscale::Status &status)
             ? QStringLiteral("signedOut") : QStringLiteral("loading"));
     snapshot.insert(QStringLiteral("devices"), rows);
     snapshot.insert(QStringLiteral("deviceEpoch"), deviceEpoch);
-}
-
-QString NativeDesktop::bundledEntryPoint()
-{
-    const QDir app(QCoreApplication::applicationDirPath());
-    const QString entry = QStringLiteral("ui/desktop/app/qml/Main.qml");
-#ifdef Q_OS_MACOS
-    return app.absoluteFilePath(QStringLiteral("../Resources/") + entry);
-#else
-    const auto adjacent = app.absoluteFilePath(entry);
-    if (QFileInfo::exists(adjacent))
-        return adjacent;
-    return app.absoluteFilePath(QStringLiteral("../../") + entry);
-#endif
 }
 
 void NativeDesktop::initializeTray()
