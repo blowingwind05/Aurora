@@ -243,6 +243,7 @@ void NativeDesktop::publishHostState()
         hostSettings.reset();
         hostSettingsReceipt = {};
         hostSettingsFeedback.clear();
+        manualPairings.clear();
     }
     const bool allowed = preferences.managedHostAllowed();
     const bool busy = current.phase == Phase::Starting || current.phase == Phase::Restarting || current.phase == Phase::Stopping;
@@ -281,6 +282,12 @@ void NativeDesktop::publishHostState()
         const auto settingsStatus = hostSettings ? QStringLiteral("ready")
             : settingsBusy ? QStringLiteral("loading")
             : hostSettingsFeedback.isEmpty() ? QStringLiteral("idle") : QStringLiteral("unavailable");
+        QVariantList pairingRows;
+        for (const auto &pending : manualPairings) {
+            const auto name = pending.name.trimmed();
+            pairingRows.append(QVariantMap{{QStringLiteral("id"), pending.id},
+                {QStringLiteral("name"), name.isEmpty() ? pending.address : name}});
+        }
         hostState.insert(QStringLiteral("sunshine"), QVariantMap{
             {QStringLiteral("session"), hostSettingsSession},
             {QStringLiteral("status"), settingsStatus},
@@ -291,6 +298,7 @@ void NativeDesktop::publishHostState()
             {QStringLiteral("pairingFeedback"), pairingHostFeedback()},
             {QStringLiteral("reauthorizeAvailable"), !pairingHostConfirmation().isEmpty()},
             {QStringLiteral("pairingConfirmation"), pairingHostConfirmation()},
+            {QStringLiteral("pairingRequests"), pairingRows},
         });
     }
     snapshot.insert(QStringLiteral("host"), hostState);
@@ -357,6 +365,7 @@ void NativeDesktop::readHostSettings()
             if (!result.error.isEmpty())
                 hostSettingsFeedback = result.error;
             publishHostState();
+            readManualPairings();
         })) {
         hostSettingsFeedback.clear();
         publishHostState();
@@ -374,6 +383,10 @@ bool NativeDesktop::handleSunshineAction(const QString &action, const QJsonObjec
         return true;
     if (action == QLatin1String("sunshineLoad")) {
         readHostSettings();
+    } else if (action == QLatin1String("sunshinePairingRefresh")) {
+        readManualPairings();
+    } else if (action == QLatin1String("sunshinePair")) {
+        approveManualPairing(message);
     } else if (action == QLatin1String("sunshineReauthorize")) {
         const auto confirmation = pairingHostConfirmation();
         if (!confirmation.isEmpty() && message.value(QStringLiteral("pairingConfirmation")).toString() == confirmation &&
@@ -417,6 +430,8 @@ bool NativeDesktop::handleSunshineAction(const QString &action, const QJsonObjec
 
 void NativeDesktop::requestExit()
 {
+    devicesForeground = false;
+    refreshDeviceWallpapers();
     retirePairingHost();
     if ((sessionSupervisor && sessionSupervisor->phase() != Aurora::Session::SessionSupervisor::Phase::Idle) ||
         (pairingAttempt && pairingAttempt->exchange)) {

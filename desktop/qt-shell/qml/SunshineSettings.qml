@@ -14,6 +14,16 @@ Column {
     readonly property bool creating: editor.state.status === "setup"
     property string selectedPairing: ""
 
+    Timer {
+        interval: 3000
+        repeat: true
+        running: settings.active && settings.editor.ready
+        onTriggered: {
+            if (!settings.editor.state.busy)
+                settings.editor.command("sunshinePairingRefresh")
+        }
+    }
+
     onPendingChanged: {
         if (pending.some(function(item) { return item.id === selectedPairing }))
             return

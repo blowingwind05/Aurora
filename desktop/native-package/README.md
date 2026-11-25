@@ -31,7 +31,7 @@ python3 desktop/Build-NativeDesktop.py macos --launcher build/native-mac/bin/Aur
   --output dist/macos-arm64-native/Aurora.app
 ~~~
 
-For Intel builds, use x86_64 for CMAKE_OSX_ARCHITECTURES and x64 for the assembler. The new app uses the existing Info.plist and Aurora.icns. Qt is deployed against Contents/MacOS/Aurora before the prebuilt host app is copied into Contents/Helpers. QtPreview lives in Contents/Resources. The result is ready for the separate signing step. Deployment runs with code signing disabled and preserves the donor host bundle and framework links.
+For Intel builds, use x86_64 for CMAKE_OSX_ARCHITECTURES and x64 for the assembler. The new app uses the existing Info.plist and Aurora.icns. Qt is deployed with ad-hoc signing against Contents/MacOS/Aurora before the prebuilt signed host app is copied into Contents/Helpers. QtPreview lives in Contents/Resources. Apply the final outer bundle signature after assembly.
 
 ## Package checks
 

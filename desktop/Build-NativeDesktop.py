@@ -218,7 +218,7 @@ def deploy_mac_qt(bundle, qt_bin):
         donor_version = plistlib.load(info).get("CFBundleVersion")
     if not version.startswith("6.") or version != donor_version:
         raise ValueError(f"The macOS deployment tool must match the donor Qt version {donor_version}.")
-    subprocess.run([str(deploy), str(bundle), "-no-codesign", "-no-strip", "-appstore-compliant",
+    subprocess.run([str(deploy), str(bundle), "-codesign=-", "-no-strip", "-appstore-compliant",
                     f"-qmldir={contents / 'Resources/QtPreview/desktop/qt-shell'}"], check=True)
 
 

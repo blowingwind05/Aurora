@@ -67,6 +67,8 @@ private:
     void retirePairingHost();
     QString pairingHostConfirmation() const;
     QString pairingHostFeedback() const;
+    void readManualPairings();
+    void approveManualPairing(const QJsonObject &request);
     bool handleHostAction(const QString &action);
     bool handleSunshineAction(const QString &action, const QJsonObject &request);
     void readHostSettings();
@@ -163,6 +165,7 @@ private:
     std::optional<Aurora::Sunshine::SettingsSnapshot> hostSettings;
     QJsonObject hostSettingsReceipt;
     QString hostSettingsFeedback;
+    QList<Aurora::Sunshine::PendingPairing> manualPairings;
     QString hostPreferenceFeedback;
     int preferenceRequestId = 0;
     std::unique_ptr<aurora::tailscale::EmbeddedStatusClient> tailnet;
