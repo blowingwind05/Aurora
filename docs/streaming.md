@@ -12,7 +12,7 @@
 
 ## Qt Quick 会话界面
 
-Aurora 默认启用 `AURORA_QT_SESSION=1`，串流组件从同一套 [QML 连接页](../desktop/upstream/moonlight-qt/qt-session/ConnectionStage.qml) 加载界面。Windows 在现有会话窗内显示 Qt 串流握手阶段，配对前的进度和失败重试由会话窗处理。macOS 用 Qt 显示连接中、失败重试和退出现有远端应用确认，沿用原生顶栏，出画时交给 SDL 视频窗。
+Aurora 默认启用 `AURORA_QT_SESSION=1`。Windows 的 Aurora 会话窗和两端的串流组件共用 [QML 连接页](../desktop/app/qml/stream/ConnectionStage.qml)。Windows 在 Aurora 会话窗中嵌入串流画面。macOS 的 AuroraStream 管理连接窗口，并在出画时交给 SDL 视频窗及 AppKit 控制中心。
 
 ## 已配对设备的建连优化
 

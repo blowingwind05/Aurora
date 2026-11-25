@@ -35,6 +35,14 @@ Window {
         }
     }
 
+    ConnectionStage {
+        y: window.videoTop
+        width: parent.width
+        height: Math.max(0, parent.height - y)
+        visible: !chrome.connected
+        reduceMotion: chrome.reduceMotion
+    }
+
     StreamSessionChrome {
         id: chrome
         anchors.fill: parent
@@ -63,12 +71,4 @@ Window {
         }
     }
 
-    Text {
-        anchors.centerIn: parent
-        visible: !chrome.connected
-        text: qsTr("正在连接…")
-        color: Aurora.AuroraTheme.ink
-        font.family: Aurora.AuroraTheme.font
-        font.pixelSize: 18
-    }
 }

@@ -44,6 +44,8 @@ for patch in "$here"/*.patch; do
 done
 cp "$here/AuroraStreamEntry.h" "$source/app/"
 cp -R "$here/qt-session" "$source/app/"
+connection_stage="$here/../../app/qml/stream/ConnectionStage.qml"
+cp "$connection_stage" "$source/app/qt-session/"
 cp "$here/../../Assets/Aurora.icns" "$source/app/moonlight.icns"
 
 echo '编译极光串流组件…'
@@ -116,6 +118,7 @@ mkdir -p "$notices"
 cp "$source/LICENSE" "$notices/LICENSE"
 cp "${patches[@]}" "$here/AuroraStreamEntry.h" "$notices/"
 cp -R "$here/qt-session" "$notices/"
+cp "$connection_stage" "$notices/qt-session/"
 printf '%s\n' 'https://github.com/moonlight-stream/moonlight-qt' "$revision" > "$notices/SOURCE.txt"
 git -C "$source" submodule status --recursive >> "$notices/SOURCE.txt"
 (

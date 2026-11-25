@@ -49,6 +49,8 @@ foreach ($patch in $patches) {
 }
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'AuroraStreamEntry.h') -Destination (Join-Path $source 'app')
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'qt-session') -Destination (Join-Path $source 'app') -Recurse
+$connectionStage = Join-Path $desktop 'app/qml/stream/ConnectionStage.qml'
+Copy-Item -LiteralPath $connectionStage -Destination (Join-Path $source 'app/qt-session')
 Copy-Item -LiteralPath (Join-Path $desktop 'Assets/Aurora.ico') -Destination (Join-Path $source 'app/moonlight.ico') -Force
 
 $previousPath = $env:PATH
@@ -98,6 +100,7 @@ finally { $env:PATH = $previousPath }
 $notices = Join-Path $deploy 'licenses'
 $null = New-Item -ItemType Directory -Path $notices
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'qt-session') -Destination $notices -Recurse
+Copy-Item -LiteralPath $connectionStage -Destination (Join-Path $notices 'qt-session')
 Copy-Item -LiteralPath (Join-Path $source 'LICENSE') -Destination (Join-Path $notices 'Moonlight-Qt.txt')
 Copy-Item -LiteralPath (@($patches.FullName) + (Join-Path $PSScriptRoot 'AuroraStreamEntry.h')) -Destination $notices
 @('https://github.com/moonlight-stream/moonlight-qt', $revision) + @(git -C $source submodule status --recursive) |
