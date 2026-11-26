@@ -403,6 +403,31 @@ pre code {
   box-shadow: none !important;
 }
 
+.tooltip.aurora-tooltip {
+  max-width: min(240px, var(--tooltip-available-width, calc(100vw - 12px)), calc(100vw - 12px));
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 6px;
+  corner-shape: round;
+  color: #f8fafc;
+  background: #202631;
+  box-shadow: 0 2px 8px rgb(25 40 63 / 16%);
+  font-family: -apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, &quot;Microsoft YaHei UI&quot;, &quot;PingFang SC&quot;, sans-serif;
+  font-size: 12px;
+  font-weight: 400;
+  letter-spacing: normal;
+  line-height: 18px;
+  white-space: pre-line;
+}
+@media (forced-colors: active) {
+  .tooltip.aurora-tooltip {
+    color: CanvasText;
+    background: Canvas;
+    border: 1px solid CanvasText;
+    box-shadow: none;
+  }
+}
+
 .tooltip {
   position: fixed;
   z-index: 50;
@@ -2208,7 +2233,7 @@ html&gt;body{padding:0}&lt;/style&gt;
         &lt;section data-screen=&quot;account&quot; aria-labelledby=&quot;aurora-unified-account&quot; hidden&gt;
           &lt;div class=&quot;page-head&quot;&gt;
             &lt;h2 id=&quot;aurora-unified-account&quot;&gt;Tailscale 账户&lt;/h2&gt;
-            &lt;button type=&quot;button&quot; class=&quot;button icon-button&quot; data-result=&quot;account&quot; aria-label=&quot;刷新状态&quot; data-tooltip=&quot;刷新状态&quot;&gt;&lt;i data-lucide=&quot;refresh-cw&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;/button&gt;
+            &lt;button type=&quot;button&quot; class=&quot;button icon-button&quot; data-result=&quot;account&quot; aria-label=&quot;刷新 Tailscale 状态&quot; data-tooltip=&quot;刷新 Tailscale 状态&quot;&gt;&lt;i data-lucide=&quot;refresh-cw&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;/button&gt;
           &lt;/div&gt;
           &lt;section class=&quot;panel provider-panel&quot; aria-labelledby=&quot;aurora-provider-title&quot;&gt;
             &lt;div class=&quot;provider-row&quot;&gt;
@@ -4213,8 +4238,8 @@ html&gt;body{padding:0}&lt;/style&gt;
   const tooltipId = `codex-visualization-tooltip-${
     window.crypto?.randomUUID?.() ?? Date.now().toString(36)
   }`;
-  const tooltipGap = 5;
-  const hoverDelay = 700;
+  const tooltipGap = 6;
+  const hoverDelay = 550;
   const skipDelay = 300;
   let activeTrigger = null;
   let pendingTrigger = null;
@@ -4247,7 +4272,7 @@ html&gt;body{padding:0}&lt;/style&gt;
     if (tooltip == null) {
       tooltip = document.createElement(&quot;div&quot;);
       tooltip.id = tooltipId;
-      tooltip.className = &quot;tooltip&quot;;
+      tooltip.className = &quot;tooltip aurora-tooltip&quot;;
       tooltip.setAttribute(&quot;role&quot;, &quot;tooltip&quot;);
     }
     return tooltip;
@@ -4330,6 +4355,28 @@ html&gt;body{padding:0}&lt;/style&gt;
         }
       });
   };
+  const positionWithoutLibrary = (trigger, floating) =&gt; {
+    const anchor = trigger.getBoundingClientRect();
+    const viewWidth = document.documentElement.clientWidth;
+    const viewHeight = document.documentElement.clientHeight;
+    const width = floating.offsetWidth;
+    const height = floating.offsetHeight;
+    const centerX = anchor.left + (anchor.width - width) / 2;
+    const centerY = anchor.top + (anchor.height - height) / 2;
+    const positions = {
+      top: { x: centerX, y: anchor.top - tooltipGap - height, fits: anchor.top &gt;= height + 2 * tooltipGap },
+      bottom: { x: centerX, y: anchor.bottom + tooltipGap, fits: viewHeight - anchor.bottom &gt;= height + 2 * tooltipGap },
+      left: { x: anchor.left - tooltipGap - width, y: centerY, fits: anchor.left &gt;= width + 2 * tooltipGap },
+      right: { x: anchor.right + tooltipGap, y: centerY, fits: viewWidth - anchor.right &gt;= width + 2 * tooltipGap },
+    };
+    const opposite = { top: &quot;bottom&quot;, bottom: &quot;top&quot;, left: &quot;right&quot;, right: &quot;left&quot; };
+    const preferred = getPlacement(trigger);
+    const position = positions[preferred].fits ? positions[preferred] : positions[opposite[preferred]];
+    const x = Math.max(tooltipGap, Math.min(position.x, viewWidth - width - tooltipGap));
+    const y = Math.max(tooltipGap, Math.min(position.y, viewHeight - height - tooltipGap));
+    floating.style.transform = &quot;translate(&quot; + Math.round(x) + &quot;px, &quot; + Math.round(y) + &quot;px)&quot;;
+    floating.style.visibility = &quot;visible&quot;;
+  };
   const openTooltip = (trigger) =&gt; {
     const content = getContent(trigger);
     if (!trigger.isConnected || content.length === 0) {
@@ -4354,7 +4401,15 @@ html&gt;body{padding:0}&lt;/style&gt;
         updatePosition(trigger, floating, positioning);
       });
     }).catch(() =&gt; {
-      if (request === positionRequest) closeTooltip(false);
+      if (request !== positionRequest || !trigger.isConnected) return;
+      const update = () =&gt; positionWithoutLibrary(trigger, floating);
+      update();
+      window.addEventListener(&quot;resize&quot;, update);
+      document.addEventListener(&quot;scroll&quot;, update, true);
+      autoUpdateCleanup = () =&gt; {
+        window.removeEventListener(&quot;resize&quot;, update);
+        document.removeEventListener(&quot;scroll&quot;, update, true);
+      };
     });
   };
   const requestOpen = (trigger, immediate = false) =&gt; {
@@ -4399,6 +4454,8 @@ html&gt;body{padding:0}&lt;/style&gt;
     const isTouch = event.pointerType === &quot;touch&quot; || lastPointerWasTouch;
     lastPointerWasTouch = false;
     if (!isTouch || event.detail === 0) {
+      const trigger = getTrigger(event);
+      if (trigger &amp;&amp; (activeTrigger === trigger || pendingTrigger === trigger)) closeTooltip();
       return;
     }
     const trigger = getTrigger(event);
@@ -4509,6 +4566,10 @@ html&gt;body{padding:0}&lt;/style&gt;
 
   // Events between children of one shadow root never reach the document.
   listen(document);
+  document.documentElement.addEventListener(&quot;pointerleave&quot;, () =&gt; {
+    if (!pinnedByTouch) closeTooltip(false);
+  });
+  window.addEventListener(&quot;blur&quot;, () =&gt; closeTooltip(false));
   window.addEventListener(&quot;pagehide&quot;, destroy, { once: true });
 })();
 &lt;/script&gt;

@@ -35,7 +35,7 @@ Aurora 使用这枚**青蓝渐变的折带 A**作为主图标。全系列的 **A
 | Tailscale 运行方式与账号切换 | [交互、双平台原型和状态截图](tailscale-runtime.md) |
 | 独立串流窗口 | [三态原型、截图与实现规格](stream-session.md) |
 | 对齐基线、间距、尺寸与响应式 | [布局与距离](layout.md) · [侧边栏宽度](layout.md#侧边栏宽度) |
-| 配色、组件状态与新增元素验收 | [视觉与组件规范](visual-guidelines.md) · [圆角规范](visual-guidelines.md#圆角规范) · [次级文字操作](visual-guidelines.md#次级文字操作) · [设置和配置的分隔线](visual-guidelines.md#设置和配置的分隔线) · [设置下拉菜单](visual-guidelines.md#设置下拉菜单) · [开关状态](visual-guidelines.md#开关状态) |
+| 配色、组件状态与新增元素验收 | [视觉与组件规范](visual-guidelines.md) · [字体与字重](visual-guidelines.md#字体与文案) · [圆角规范](visual-guidelines.md#圆角规范) · [次级文字操作](visual-guidelines.md#次级文字操作) · [设置和配置的分隔线](visual-guidelines.md#设置和配置的分隔线) · [设置下拉菜单](visual-guidelines.md#设置下拉菜单) · [开关状态](visual-guidelines.md#开关状态) |
 | 两个平台的差异与窗口约定 | [Windows 托盘右键菜单](windows.md#托盘右键菜单) · [macOS 适配](macos.md) · [macOS 菜单栏右键菜单](macos.md#菜单栏右键菜单) |
 | Windows 和 macOS 页面、组件截图 | [截图索引](screenshots.md) |
 | 主图标文件与壁纸占位图 | [素材说明](assets/README.md) |
