@@ -8,6 +8,8 @@ on:
       - '.gitmodules'
       - 'desktop/**'
       - 'tests/Check-NativeDesktopPackage.py'
+      - 'tests/qt-macos-stream-toolbar/**'
+      - 'tests/qt-ui/**'
   workflow_dispatch:
     inputs:
       architecture:

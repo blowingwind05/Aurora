@@ -162,17 +162,35 @@ NSButton* appearanceButton(NSView* root)
     return nil;
 }
 
+QQuickItem* visibleItemNamed(QQuickItem* root, const QString& name)
+{
+    if (!root || !root->isVisible()) return nullptr;
+    if (root->objectName() == name && root->width() > 0 && root->height() > 0) return root;
+    for (auto* child : root->childItems()) {
+        if (auto* found = visibleItemNamed(child, name)) return found;
+    }
+    return nullptr;
+}
+
 bool testAppearanceEditor(Viewer& viewer)
 {
-    QPointer<AuroraMacControlsView> home;
-    for (auto* window : QGuiApplication::allWindows()) {
-        if (auto* controls = qobject_cast<AuroraMacControlsView*>(window)) home = controls;
-    }
-    if (!check(home, "find the Qt controls panel")) return false;
-    auto* homeView = reinterpret_cast<NSView*>(home->winId());
-    auto* panel = homeView.window;
-    auto* safety = home->rootObject()->findChild<QQuickItem*>(QStringLiteral("controlPage:safety"));
-    if (!check(panel && safety, "locate the safety page button")) return false;
+    NSView* homeView = nil;
+    NSPanel* panel = nil;
+    QPointer<QQuickItem> safety;
+    if (!check(viewer.wait([&] {
+        for (auto* window : QGuiApplication::allWindows()) {
+            auto* controls = qobject_cast<AuroraMacControlsView*>(window);
+            if (!controls || !controls->isVisible()) continue;
+            auto* view = reinterpret_cast<NSView*>(controls->winId());
+            safety = visibleItemNamed(controls->rootObject(), QStringLiteral("controlPage:safety"));
+            if (view.window && safety) {
+                homeView = view;
+                panel = (NSPanel*)view.window;
+                return true;
+            }
+        }
+        return false;
+    }), "locate the safety control in the attached Qt panel")) return false;
     postClick(homeView, safety->mapRectToScene(QRectF(0, 0, safety->width(), safety->height())));
     if (!check(viewer.wait([&] { return appearanceButton(panel.contentView).enabled; }), "open the AppKit safety page"))
         return false;
@@ -190,7 +208,7 @@ bool testAppearanceEditor(Viewer& viewer)
     if (!check(view.window == panel && panel.parentWindow == viewer.window &&
                (panel.collectionBehavior & NSWindowCollectionBehaviorFullScreenAuxiliary) && auroraPrivacyEditorOwnsInput(),
         "reuse the playback auxiliary panel and route input locally")) return false;
-    auto* close = editor->rootObject()->findChild<QQuickItem*>(QStringLiteral("privacyEditorClose"));
+    auto* close = visibleItemNamed(editor->rootObject(), QStringLiteral("privacyEditorClose"));
     if (!check(close, "locate the appearance editor close button")) return false;
     postClick(view, close->mapRectToScene(QRectF(0, 0, close->width(), close->height())));
     return check(viewer.wait([&] { return !auroraPrivacyEditorOwnsInput() &&
