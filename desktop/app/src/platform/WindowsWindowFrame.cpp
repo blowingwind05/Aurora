@@ -1,15 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "WindowsWindowFrame.h"
 
+#include <QAbstractNativeEventFilter>
+#include <QCoreApplication>
 #include <QWindow>
 
 #include <windows.h>
-#include <commctrl.h>
 #include <dwmapi.h>
 
 namespace {
-
-constexpr UINT_PTR frameSubclassId = 1;
 
 HRESULT extendFrame(HWND window)
 {
@@ -32,25 +31,45 @@ void fitMaximizedClient(HWND window, RECT &client)
     }
 }
 
-LRESULT CALLBACK windowFrameProc(HWND window, UINT message, WPARAM wParam, LPARAM lParam, UINT_PTR, DWORD_PTR)
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+using NativeEventResult = qintptr;
+#else
+using NativeEventResult = long;
+#endif
+
+class WindowsFrameFilter final : public QObject, public QAbstractNativeEventFilter
 {
-    switch (message) {
-    case WM_NCCALCSIZE: {
-        // Keep the system window styles while letting QML fill the caption and frame.
-        RECT &client = wParam ? reinterpret_cast<NCCALCSIZE_PARAMS *>(lParam)->rgrc[0]
-                              : *reinterpret_cast<RECT *>(lParam);
-        fitMaximizedClient(window, client);
-        return 0;
+public:
+    WindowsFrameFilter(QWindow &window, HWND handle)
+        : QObject(&window), handle_(handle)
+    {
+        QCoreApplication::instance()->installNativeEventFilter(this);
     }
-    case WM_DWMCOMPOSITIONCHANGED:
-        extendFrame(window);
-        break;
-    case WM_NCDESTROY:
-        RemoveWindowSubclass(window, windowFrameProc, frameSubclassId);
-        break;
+
+    bool nativeEventFilter(const QByteArray &eventType, void *message, NativeEventResult *result) override
+    {
+        if (eventType != "windows_generic_MSG")
+            return false;
+        const auto &event = *static_cast<const MSG *>(message);
+        if (event.hwnd != handle_)
+            return false;
+
+        if (event.message == WM_NCCALCSIZE) {
+            // Let Qt observe the adjusted rectangle so its stored margins match the Win32 client.
+            auto &client = event.wParam ? reinterpret_cast<NCCALCSIZE_PARAMS *>(event.lParam)->rgrc[0]
+                                        : *reinterpret_cast<RECT *>(event.lParam);
+            fitMaximizedClient(handle_, client);
+            *result = 0;
+            return true;
+        }
+        if (event.message == WM_DWMCOMPOSITIONCHANGED)
+            extendFrame(handle_);
+        return false;
     }
-    return DefSubclassProc(window, message, wParam, lParam);
-}
+
+private:
+    const HWND handle_;
+};
 
 } // namespace
 
@@ -60,16 +79,17 @@ bool installWindowsWindowFrame(QWindow &window)
     constexpr LONG_PTR requiredStyles = WS_CAPTION | WS_THICKFRAME;
     RECT client{};
     if (!handle || (GetWindowLongPtrW(handle, GWL_STYLE) & requiredStyles) != requiredStyles
-        || !GetClientRect(handle, &client) || !SetWindowSubclass(handle, windowFrameProc, frameSubclassId, 0)) {
+        || !GetClientRect(handle, &client)) {
         return false;
     }
 
+    auto *filter = new WindowsFrameFilter(window, handle);
     // Keep the requested client size when removing the original title bar.
     constexpr UINT flags = SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE;
     if (SUCCEEDED(extendFrame(handle)) && SetWindowPos(handle, nullptr, 0, 0, client.right, client.bottom, flags))
         return true;
 
-    RemoveWindowSubclass(handle, windowFrameProc, frameSubclassId);
+    delete filter;
     const MARGINS original{};
     DwmExtendFrameIntoClientArea(handle, &original);
     SetWindowPos(handle, nullptr, 0, 0, 0, 0, flags | SWP_NOSIZE);

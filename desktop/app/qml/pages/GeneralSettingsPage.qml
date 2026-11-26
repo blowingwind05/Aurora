@@ -60,7 +60,7 @@ Item {
                 text: body.parent.title
                 font.family: AuroraTheme.font
                 font.pixelSize: 15
-                font.weight: Font.DemiBold
+                font.weight: AuroraTheme.headingWeight
                 color: AuroraTheme.ink
                 verticalAlignment: Text.AlignVCenter
                 Accessible.role: Accessible.Heading
@@ -81,11 +81,13 @@ Item {
             font.pixelSize: 13
             wrapMode: Text.Wrap
             Layout.fillWidth: true
+            Layout.alignment: Qt.AlignVCenter
         }
     }
 
     component FieldNote: Text {
-        width: parent.width
+        anchors.right: parent.right
+        width: page.fieldWidth
         visible: text.length > 0
         bottomPadding: 10
         color: AuroraTheme.muted
@@ -111,7 +113,7 @@ Item {
             text: qsTr("设置")
             font.family: AuroraTheme.font
             font.pixelSize: page.compact ? 21 : 26
-            font.weight: Font.DemiBold
+            font.weight: AuroraTheme.headingWeight
             color: AuroraTheme.ink
             verticalAlignment: Text.AlignVCenter
             Accessible.role: Accessible.Heading
@@ -126,7 +128,7 @@ Item {
                 text: qsTr("通用")
                 font.family: AuroraTheme.font
                 font.pixelSize: 15
-                font.weight: Font.DemiBold
+                font.weight: AuroraTheme.headingWeight
                 color: AuroraTheme.ink
                 Accessible.role: Accessible.Heading
             }
@@ -180,6 +182,7 @@ Item {
                     T.Switch {
                         id: startup
                         objectName: "startupSwitch"
+                        Layout.alignment: Qt.AlignVCenter
                         onActiveFocusChanged: page.revealControl(startup)
                         implicitWidth: 32
                         implicitHeight: 34
@@ -235,6 +238,7 @@ Item {
                     AuroraSettingChoice {
                         id: closeChoice
                         objectName: "closeChoice"
+                        Layout.alignment: Qt.AlignVCenter
                         onActiveFocusChanged: page.revealControl(closeChoice)
                         Layout.preferredWidth: page.fieldWidth
                         Accessible.name: closeRow.label
@@ -257,6 +261,7 @@ Item {
                     AuroraSettingChoice {
                         id: sleep
                         objectName: "sleepChoice"
+                        Layout.alignment: Qt.AlignVCenter
                         onActiveFocusChanged: page.revealControl(sleep)
                         Layout.preferredWidth: page.fieldWidth
                         Accessible.name: sleepRow.label
@@ -266,9 +271,7 @@ Item {
                         onSelectionRequested: function(index) { page.sleepModeRequested(page.sleepModes[index]) }
                     }
                 }
-                FieldNote {
-                    text: page.sleepFeedback || qsTr("关闭时按系统电源设置休眠。防休眠仅在被控组件运行时生效。")
-                }
+                FieldNote { text: page.sleepFeedback }
             }
 
             SettingsCard {
@@ -284,6 +287,7 @@ Item {
                     AuroraSettingChoice {
                         id: privacyModeChoice
                         objectName: "privacyImplementationChoice"
+                        Layout.alignment: Qt.AlignVCenter
                         onActiveFocusChanged: page.revealControl(privacyModeChoice)
                         Layout.preferredWidth: page.fieldWidth
                         Accessible.name: privacyModeRow.label

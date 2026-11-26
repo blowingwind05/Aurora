@@ -137,59 +137,43 @@ Item {
             anchors.verticalCenter: parent.verticalCenter
             text: page.advanced ? qsTr("全部配置项") : qsTr("本机被控")
             font.pixelSize: page.compact ? 21 : 26
-            font.weight: Font.Bold
+            font.weight: AuroraTheme.headingWeight
             Accessible.role: Accessible.Heading
         }
-        AuroraButton {
+        AuroraRefreshButton {
             id: refresh
             objectName: "refreshHost"
             visible: !page.advanced
             anchors.right: parent.right
-            width: 34
-            height: 34
-            quiet: true
-            hoverFill: "transparent"
-            text: page.hostState.refreshing ? qsTr("正在检测本机被控") : qsTr("重新检测本机被控")
-            hint: text
-            display: AbstractButton.IconOnly
-            icon.width: 20
-            icon.height: 20
-            icon.source: page.hostState.refreshing ? "" : AuroraTheme.icon("refresh-cw")
-            enabled: page.hostState.refreshAvailable === true && !page.busy
-            onClicked: page.actionRequested("hostRefresh")
-
-            Canvas {
-                id: spinner
-                anchors.centerIn: parent
-                width: 18
-                height: width
-                visible: page.hostState.refreshing === true
-                onPaint: {
-                    const context = getContext("2d")
-                    context.reset()
-                    context.strokeStyle = AuroraTheme.blue
-                    context.lineWidth = 2
-                    context.lineCap = "round"
-                    context.beginPath()
-                    context.arc(width / 2, height / 2, 7, 0, Math.PI * 1.55)
-                    context.stroke()
-                }
-                RotationAnimator {
-                    target: spinner
-                    from: 0
-                    to: 360
-                    duration: 850
-                    loops: Animation.Infinite
-                    running: spinner.visible && !page.reduceMotion
-                }
-            }
+            available: page.hostState.refreshAvailable === true && !page.busy
+            refreshing: page.hostState.refreshing === true
+            reduceMotion: page.reduceMotion
+            idleLabel: qsTr("重新检测本机被控")
+            busyLabel: qsTr("正在检测本机被控")
+            lastFailure: page.hostState.refreshFailed === true ? page.hostState.refreshFeedback || "" : ""
+            onRefreshRequested: page.actionRequested("hostRefresh")
         }
+    }
+
+    AuroraRefreshFeedback {
+        id: feedbackSlot
+        visible: !page.advanced
+        anchors.top: heading.bottom
+        anchors.topMargin: 15
+        anchors.left: heading.left
+        anchors.right: heading.right
+        pending: refresh.showingProgress
+        message: page.hostState.refreshFeedback || ""
+        failed: page.hostState.refreshFailed === true
+        revision: page.hostState.refreshRevision || 0
+        reduceMotion: page.reduceMotion
     }
 
     SunshineLink {
         objectName: "sunshineBack"
         visible: page.advanced
         anchors.right: heading.right
+        anchors.rightMargin: advancedOptions.scrollGutter
         anchors.verticalCenter: heading.verticalCenter
         text: qsTr("本机被控")
         icon.source: AuroraTheme.icon("arrow-left")
@@ -198,6 +182,7 @@ Item {
     }
 
     SunshineAdvanced {
+        id: advancedOptions
         anchors.top: heading.bottom
         anchors.topMargin: 6
         anchors.left: heading.left
@@ -212,8 +197,7 @@ Item {
     Flickable {
         id: scroll
         visible: !page.advanced
-        anchors.top: heading.bottom
-        anchors.topMargin: 15
+        anchors.top: feedbackSlot.bottom
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.bottom: parent.bottom
@@ -255,7 +239,7 @@ Item {
                             Layout.fillWidth: true
                             text: qsTr("这台电脑")
                             font.pixelSize: 15
-                            font.weight: Font.Bold
+                            font.weight: AuroraTheme.headingWeight
                             Accessible.role: Accessible.Heading
                         }
                         RowLayout {
@@ -416,7 +400,7 @@ Item {
                         width: parent.width
                         text: qsTr("允许极光控制这台 Mac")
                         font.pixelSize: 15
-                        font.weight: Font.Bold
+                        font.weight: AuroraTheme.headingWeight
                         Accessible.role: Accessible.Heading
                     }
                     HostText {

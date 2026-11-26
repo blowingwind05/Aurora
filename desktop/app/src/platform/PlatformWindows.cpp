@@ -222,4 +222,23 @@ std::unique_ptr<HostSleepBackend> makeHostSleepBackend()
     return std::make_unique<WindowsHostSleepBackend>();
 }
 
+QVariantMap highContrastToolTipColors()
+{
+    HIGHCONTRASTW contrast{sizeof contrast};
+    if (!SystemParametersInfoW(SPI_GETHIGHCONTRAST, sizeof contrast, &contrast, 0) ||
+        !(contrast.dwFlags & HCF_HIGHCONTRASTON))
+        return {};
+
+    const auto colorName = [](int index) {
+        const auto rgb = GetSysColor(index);
+        return QStringLiteral("#%1%2%3")
+            .arg(int(GetRValue(rgb)), 2, 16, QLatin1Char('0'))
+            .arg(int(GetGValue(rgb)), 2, 16, QLatin1Char('0'))
+            .arg(int(GetBValue(rgb)), 2, 16, QLatin1Char('0'));
+    };
+    const auto foreground = colorName(COLOR_WINDOWTEXT);
+    return {{QStringLiteral("background"), colorName(COLOR_WINDOW)},
+            {QStringLiteral("text"), foreground}, {QStringLiteral("outline"), foreground}};
+}
+
 } // namespace Aurora::Platform

@@ -6,6 +6,7 @@ QtObject {
     readonly property bool windows: Qt.platform.os === "windows"
     readonly property bool mac: Qt.platform.os === "osx"
     readonly property string font: windows ? "Microsoft YaHei UI" : mac ? "PingFang SC" : Qt.application.font.family
+    readonly property int headingWeight: windows ? Font.Bold : Font.DemiBold
     readonly property color frame: "#EDF1F8"
     readonly property color workspace: "#F9FAFC"
     readonly property color ink: "#19283F"

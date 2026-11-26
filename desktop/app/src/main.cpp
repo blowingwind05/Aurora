@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "desktop/NativeDesktop.h"
 #include "platform/NativeInstance.h"
+#include "platform/PlatformBackends.h"
 #ifdef Q_OS_WIN
 #include "platform/WindowsWindowFrame.h"
 #endif
@@ -14,6 +15,7 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QIcon>
+#include <QKeyEvent>
 #include <QNetworkAccessManager>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
@@ -27,6 +29,28 @@ bool installMacTitleBar(QWindow &window);
 #endif
 
 namespace {
+
+class ToolTipEnvironment final : public QObject
+{
+    Q_OBJECT
+
+public:
+    Q_INVOKABLE QVariantMap colors() const
+    {
+        return Aurora::Platform::highContrastToolTipColors();
+    }
+
+signals:
+    void dismissRequested();
+
+protected:
+    bool eventFilter(QObject *, QEvent *event) override
+    {
+        if (event->type() == QEvent::KeyPress && static_cast<QKeyEvent *>(event)->key() == Qt::Key_Escape)
+            emit dismissRequested();
+        return false;
+    }
+};
 
 bool verifyNativeUi(QWindow &window, StreamSessionWindow &sessionWindow, DesktopBridge &bridge)
 {
@@ -81,7 +105,10 @@ int main(int argc, char *argv[])
         QStringLiteral("stream/NativeSessionWindow.qml")));
     QNetworkAccessManager network;
     AuroraMore more(network, &QDesktopServices::openUrl);
+    ToolTipEnvironment toolTipEnvironment;
+    app.installEventFilter(&toolTipEnvironment);
     QQmlApplicationEngine engine;
+    engine.rootContext()->setContextProperty("auroraToolTipEnvironment", &toolTipEnvironment);
     StreamSessionWindow sessionWindow(engine, sessionSource);
     NativeDesktop desktop(QStringLiteral(AURORA_DESKTOP_VERSION), directory, sessionWindow);
     std::unique_ptr<NativeInstance> instance;
@@ -143,3 +170,5 @@ int main(int argc, char *argv[])
     }
     return app.exec();
 }
+
+#include "main.moc"

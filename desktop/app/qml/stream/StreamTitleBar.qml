@@ -167,9 +167,11 @@ FocusScope {
             elide: Text.ElideRight
 
             HoverHandler { id: nameHover }
-            ToolTip.visible: nameHover.hovered && device.truncated
-            ToolTip.text: text
-            ToolTip.delay: 550
+            Aurora.AuroraToolTip {
+                anchorItem: device
+                text: device.text
+                active: nameHover.hovered && device.truncated
+            }
         }
 
         Item {
@@ -235,13 +237,16 @@ FocusScope {
             }
 
             Item {
+                id: inactiveStatus
                 anchors.fill: parent
                 visible: bar.session.tight && !bar.session.connected
 
                 HoverHandler { id: inactiveStatusHover }
-                ToolTip.visible: inactiveStatusHover.hovered
-                ToolTip.text: bar.session.statusText
-                ToolTip.delay: 550
+                Aurora.AuroraToolTip {
+                    anchorItem: inactiveStatus
+                    text: bar.session.statusText
+                    active: inactiveStatusHover.hovered
+                }
             }
         }
 
@@ -371,14 +376,17 @@ FocusScope {
                 }
 
                 MouseArea {
+                    id: unavailableDisplay
                     anchors.fill: add
                     acceptedButtons: Qt.NoButton
                     hoverEnabled: !add.enabled
                     enabled: !add.enabled
-                    ToolTip.visible: containsMouse
-                    ToolTip.delay: 550
-                    ToolTip.text: bar.session.creatingDisplay ? qsTr("正在新增虚拟显示器…")
-                        : bar.session.createDisplayUnavailableReason || qsTr("当前无法新增虚拟显示器")
+                    Aurora.AuroraToolTip {
+                        anchorItem: add
+                        active: unavailableDisplay.containsMouse
+                        text: bar.session.creatingDisplay ? qsTr("正在新增虚拟显示器…")
+                            : bar.session.createDisplayUnavailableReason || qsTr("当前无法新增虚拟显示器")
+                    }
                 }
             }
         }

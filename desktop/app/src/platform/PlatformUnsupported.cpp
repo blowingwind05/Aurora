@@ -13,4 +13,9 @@ std::unique_ptr<HostSleepBackend> makeHostSleepBackend()
     return {};
 }
 
+QVariantMap highContrastToolTipColors()
+{
+    return {};
+}
+
 } // namespace Aurora::Platform

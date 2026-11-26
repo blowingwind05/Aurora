@@ -73,7 +73,7 @@ bool NativeDesktop::handleDevicePower(const QString &action, const QJsonObject &
     if (!restart && action != QLatin1String("device-power-shutdown"))
         return false;
     if (!powerAdapter || devicePower || (connection && !connection->launched) || !tailnetStatus.account ||
-        tailnetConfirmation || tailnetVerification || request.value(QStringLiteral("deviceEpoch")).toInt(-1) != deviceEpoch ||
+        tailnetSwitch || tailnetConfirmation || tailnetVerification || request.value(QStringLiteral("deviceEpoch")).toInt(-1) != deviceEpoch ||
         !snapshot.value(QStringLiteral("windowVisible")).toBool())
         return true;
 
@@ -145,6 +145,7 @@ void NativeDesktop::settleDevicePower(const QString &message, bool failed)
     if (!message.isEmpty()) {
         snapshot.insert(QStringLiteral("refreshFeedback"), message);
         snapshot.insert(QStringLiteral("refreshFailed"), failed);
+        snapshot.insert(QStringLiteral("deviceRefreshResult"), false);
         emit stateChanged(snapshot);
     }
 }

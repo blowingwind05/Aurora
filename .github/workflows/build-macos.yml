@@ -1,6 +1,13 @@
 name: Build Aurora for macOS
 
 on:
+  push:
+    branches: [main, aurora-native-streaming-integration]
+    paths:
+      - '.github/workflows/build-macos.yml'
+      - '.gitmodules'
+      - 'desktop/**'
+      - 'tests/Check-NativeDesktopPackage.py'
   workflow_dispatch:
     inputs:
       architecture:
@@ -11,6 +18,10 @@ on:
 
 permissions:
   contents: read
+
+concurrency:
+  group: macos-${{ github.ref }}-${{ inputs.architecture || 'arm64' }}
+  cancel-in-progress: true
 
 jobs:
   build:
@@ -75,7 +86,8 @@ jobs:
           test -x "$runtime"
           test "$("${clean_env[@]}" "$runtime" --aurora-runtime-info)" = aurora-stream/1
           test "$("${clean_env[@]}" "$runtime" --aurora-gamestream-relay-info)" = aurora-gamestream-relay/1
-          test -f "$app/Contents/Resources/ThirdParty/Moonlight/SOURCE.txt"
+          python3 desktop/upstream/Prepare-EngineSource.py verify moonlight \
+            "$app/Contents/Resources/ThirdParty/Moonlight/SOURCE.txt"
           tailnet="$app/Contents/MacOS/AuroraTailnet"
           test -x "$tailnet"
           test "$("${clean_env[@]}" "$tailnet" --aurora-runtime-info)" = aurora-tailnet/1
@@ -85,7 +97,17 @@ jobs:
           test "$("${clean_env[@]}" "$host/Contents/MacOS/AuroraHost" --aurora-runtime-info)" = aurora-host/1
           codesign --verify --deep --strict "$host"
           test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$host/Contents/Info.plist")" = org.aurora-remote.desktop.host
-          test -f "$host/Contents/Resources/licenses/SOURCE.txt"
+          python3 desktop/upstream/Prepare-EngineSource.py verify sunshine \
+            "$host/Contents/Resources/licenses/SOURCE.txt"
+
+          native_arch="$AURORA_ARCHITECTURE"
+          if [[ "$native_arch" == x64 ]]; then
+            native_arch=x86_64
+          fi
+          test "$(uname -m)" = "$native_arch"
+          for binary in "$launcher" "$runtime" "$tailnet" "$host/Contents/MacOS/AuroraHost"; do
+            test "$(lipo -archs "$binary")" = "$native_arch"
+          done
 
       - uses: actions/upload-artifact@v4
         with:

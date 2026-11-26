@@ -59,7 +59,7 @@ bool NativeDesktop::handleConnectAction(const QString &action, const QJsonObject
     if (action != QLatin1String("connect"))
         return false;
     if (!sessionSupervisor || !localPresence || connection || exitAfterSession ||
-        tailnetConfirmation || tailnetVerification || !tailnetStatus.account ||
+        tailnetSwitch || tailnetConfirmation || tailnetVerification || !tailnetStatus.account ||
         tailnetStatus.state != aurora::tailscale::BackendState::Connected ||
         !snapshot.value(QStringLiteral("windowVisible")).toBool() ||
         request.value(QStringLiteral("deviceEpoch")).toInt(-1) != deviceEpoch)
@@ -519,5 +519,6 @@ void NativeDesktop::reportConnection(const QString &message, bool failed)
     snapshot.insert(QStringLiteral("connectionPending"), bool(connection));
     snapshot.insert(QStringLiteral("refreshFeedback"), message);
     snapshot.insert(QStringLiteral("refreshFailed"), failed);
+    snapshot.insert(QStringLiteral("deviceRefreshResult"), false);
     emit stateChanged(snapshot);
 }

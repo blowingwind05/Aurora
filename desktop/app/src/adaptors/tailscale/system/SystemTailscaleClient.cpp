@@ -282,7 +282,7 @@ void SystemTailscaleClient::profilesRead(ProfilesResult result)
     if (request->phase == Phase::VerifyProfile) {
         if (selected == result.profiles.cend() || !selected->isCurrent)
             return fail(StatusError::InvalidResponse);
-        return finish(StatusError::None, {}, {}, request->switchError == StatusError::None ?
+        return finish(StatusError::None, {}, std::move(result.profiles), request->switchError == StatusError::None ?
             ActionOutcome::Completed : ActionOutcome::Revalidated);
     }
 
@@ -291,7 +291,7 @@ void SystemTailscaleClient::profilesRead(ProfilesResult result)
     if (selected->isCurrent) {
         if (!sameRunningInstallation())
             return fail(StatusError::Unavailable);
-        return finish(StatusError::None, {}, {}, ActionOutcome::AlreadyCurrent);
+        return finish(StatusError::None, {}, std::move(result.profiles), ActionOutcome::AlreadyCurrent);
     }
     resetDeadline(Phase::SwitchProfile);
     dispatch.start(0);
@@ -352,19 +352,22 @@ void SystemTailscaleClient::finish(StatusError error, std::optional<Status> stat
         process.kill();
     }
 
+    if (error == StatusError::None && !profiles.isEmpty()) {
+        ListedProfiles listed{completed->generation, completed->executable, {}};
+        for (const auto &profile : profiles) {
+            if (!completed->action || !profile.isCurrent)
+                listed.ids.insert(profile.id);
+        }
+        listedProfiles = std::move(listed);
+    }
+
     if (completed->action)
-        emit actionFinished(completed->generation, {*completed->action, error, outcome, completed->exitCode});
+        emit actionFinished(completed->generation,
+            {*completed->action, error, outcome, completed->exitCode, std::move(profiles)});
     else if (completed->phase == Phase::Status)
         emit statusFinished(completed->generation, {error, std::move(status)});
-    else {
-        if (error == StatusError::None && !profiles.isEmpty()) {
-            ListedProfiles listed{completed->generation, completed->executable, {}};
-            for (const auto &profile : profiles)
-                listed.ids.insert(profile.id);
-            listedProfiles = std::move(listed);
-        }
+    else
         emit profilesFinished(completed->generation, {error, std::move(profiles)});
-    }
 }
 
 } // namespace aurora::tailscale::system

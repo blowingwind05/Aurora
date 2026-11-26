@@ -8,6 +8,7 @@ ColumnLayout {
     id: page
     property var editor
     property int inset: 14
+    readonly property int scrollGutter: 8
     readonly property var categories: [qsTr("显示与编码"), qsTr("输入"), qsTr("网络")]
     property int category: 0
     readonly property var groups: filteredGroups(search.text, category, editor.options)
@@ -42,6 +43,7 @@ ColumnLayout {
     GridLayout {
         id: filter
         Layout.fillWidth: true
+        Layout.rightMargin: page.scrollGutter
         columns: width >= 475 ? 2 : 1
         columnSpacing: 10
         rowSpacing: 5
@@ -62,8 +64,9 @@ ColumnLayout {
                     implicitWidth: Math.max(40, implicitContentWidth + 8)
                     quiet: true
                     hoverFill: "transparent"
-                    foreground: page.category === index ? AuroraTheme.blue : AuroraTheme.muted
+                    foreground: page.category === index ? AuroraTheme.ink : AuroraTheme.muted
                     font.pixelSize: 15
+                    font.weight: page.category === index ? AuroraTheme.headingWeight : Font.Normal
                     Accessible.role: Accessible.PageTab
                     Accessible.selected: page.category === index
                     activeFocusOnTab: page.category === index
@@ -96,6 +99,7 @@ ColumnLayout {
             objectName: "sunshineSearch"
             Layout.fillWidth: filter.columns === 1
             Layout.preferredWidth: filter.columns === 1 ? filter.width : 235
+            Layout.alignment: Qt.AlignVCenter | Qt.AlignRight
             placeholderText: qsTr("搜索设置名称或配置键")
             Accessible.name: placeholderText
             onTextChanged: scroll.contentY = 0
@@ -114,7 +118,7 @@ ColumnLayout {
 
         Column {
             id: sections
-            width: scroll.width - 8
+            width: Math.max(0, scroll.width - page.scrollGutter)
             spacing: 12
 
             Repeater {
@@ -141,7 +145,7 @@ ColumnLayout {
                             color: AuroraTheme.ink
                             font.family: AuroraTheme.font
                             font.pixelSize: 15
-                            font.weight: Font.DemiBold
+                            font.weight: AuroraTheme.headingWeight
                             Accessible.role: Accessible.Heading
                         }
                         Repeater {

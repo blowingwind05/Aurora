@@ -27,7 +27,7 @@ Item {
     component Heading: Text {
         font.family: AuroraTheme.font
         font.pixelSize: 15
-        font.weight: Font.DemiBold
+        font.weight: AuroraTheme.headingWeight
         color: AuroraTheme.ink
         Accessible.role: Accessible.Heading
     }
@@ -35,6 +35,7 @@ Item {
     component Detail: Text {
         font.family: AuroraTheme.font
         font.pixelSize: 12
+        font.weight: Font.Normal
         color: AuroraTheme.muted
         textFormat: Text.PlainText
         wrapMode: Text.Wrap
@@ -98,7 +99,7 @@ Item {
                     color: link.foreground
                     font.family: AuroraTheme.font
                     font.pixelSize: 13
-                    font.weight: Font.DemiBold
+                    font.weight: link.card ? Font.DemiBold : AuroraTheme.headingWeight
                     wrapMode: Text.Wrap
                     Layout.preferredWidth: link.card || link.stacked ? -1 : 120
                     Layout.fillWidth: link.card || link.stacked
@@ -162,6 +163,7 @@ Item {
         verticalAlignment: Text.AlignVCenter
         text: page.section === "feedback" ? qsTr("反馈") : qsTr("关于")
         font.pixelSize: page.compact ? 21 : 26
+        font.weight: AuroraTheme.headingWeight
     }
 
     Flickable {

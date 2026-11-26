@@ -28,6 +28,8 @@ Window {
     property bool refreshing: false
     property string refreshFeedback: ""
     property bool refreshFailed: false
+    property int refreshRevision: 0
+    property bool deviceRefreshResult: false
     property bool reduceMotion: false
     property bool connectionPending: false
     property var enabledDeviceTools: ({})
@@ -147,8 +149,9 @@ Window {
     readonly property int sidebarWidth: compact ? 43 : narrow ? 144 : 184
     readonly property int windowRadius: qmlWindowFrame && !expanded ? 13 : 0
 
-    function showMoreNotice(message) {
+    function showMoreNotice(message, successful) {
         moreNoticeText = message
+        moreNotice.successful = successful === true
         moreNotice.visibleWhileTimed = true
         moreNoticeTimer.restart()
     }
@@ -344,6 +347,8 @@ Window {
             refreshing: window.refreshing
             refreshFeedback: window.refreshFeedback
             refreshFailed: window.refreshFailed
+            refreshRevision: window.refreshRevision
+            deviceRefreshResult: window.deviceRefreshResult
             reduceMotion: window.reduceMotion
             connectionPending: window.connectionPending
             enabledDeviceTools: window.enabledDeviceTools
@@ -392,9 +397,11 @@ Window {
         id: moreNotice
         objectName: "moreNotice"
         property bool visibleWhileTimed: false
+        property bool successful: false
+        readonly property int iconReserve: successful ? 28 : 0
         anchors.centerIn: parent
         z: 2
-        width: Math.min(window.width - 32, message.implicitWidth + 32)
+        width: Math.min(window.width - 32, message.implicitWidth + 32 + iconReserve)
         height: message.implicitHeight + 22
         radius: 10
         color: "white"
@@ -406,21 +413,33 @@ Window {
             NumberAnimation { duration: 160 }
         }
 
+        AuroraGlyph {
+            visible: moreNotice.successful
+            anchors.left: parent.left
+            anchors.leftMargin: 14
+            anchors.verticalCenter: parent.verticalCenter
+            width: 18
+            height: 18
+            icon.source: Qt.resolvedUrl("../../../../docs/visual-design/assets/icons/phosphor/check-bold.svg")
+            icon.color: AuroraTheme.statusBlue
+        }
+
         Text {
             id: message
             objectName: "moreNoticeText"
             anchors.left: parent.left
             anchors.right: parent.right
-            anchors.leftMargin: 16
+            anchors.leftMargin: 16 + moreNotice.iconReserve
             anchors.rightMargin: 16
             anchors.verticalCenter: parent.verticalCenter
-            horizontalAlignment: Text.AlignHCenter
+            horizontalAlignment: moreNotice.successful ? Text.AlignLeft : Text.AlignHCenter
             text: window.moreNoticeText
             textFormat: Text.PlainText
             wrapMode: Text.Wrap
             color: AuroraTheme.ink
             font.family: AuroraTheme.font
-            font.pixelSize: 13
+            font.pixelSize: moreNotice.successful ? 15 : 13
+            font.weight: moreNotice.successful ? Font.Bold : Font.Normal
             Accessible.role: Accessible.StaticText
         }
 

@@ -9,6 +9,7 @@ Button {
     property bool quiet: false
     property string hint: ""
     property color hoverFill: AuroraTheme.hover
+    property int focusOffset: 0
     property color foreground: !enabled ? AuroraTheme.disabled : primary ? "white"
         : selected || (quiet && (hovered || visualFocus)) ? AuroraTheme.blue
         : quiet ? AuroraTheme.muted : hovered ? AuroraTheme.hoverInk : AuroraTheme.ink
@@ -32,17 +33,36 @@ Button {
     icon.height: 16
 
     Accessible.name: text
-    ToolTip.text: hint
-    ToolTip.delay: 550
-    ToolTip.visible: hint.length > 0 && (hovered || visualFocus)
+    AuroraToolTip {
+        id: tooltip
+        anchorItem: control
+        text: control.hint
+        active: control.enabled && !control.down && control.hovered
+        focused: control.enabled && !control.down && control.visualFocus
+    }
+
+    Connections {
+        target: control
+        function onClicked() { tooltip.dismiss() }
+    }
 
     background: Rectangle {
         radius: 7
         color: control.primary ? (control.hovered || control.down ? "#076DDA" : AuroraTheme.blue)
             : control.selected ? AuroraTheme.selected
             : control.enabled && (control.hovered || control.down) ? control.hoverFill : "transparent"
-        border.width: control.visualFocus ? 2 : 0
+        border.width: control.visualFocus && control.focusOffset === 0 ? 2 : 0
         border.color: AuroraTheme.blue
+
+        Rectangle {
+            anchors.fill: parent
+            anchors.margins: -control.focusOffset - border.width
+            visible: control.visualFocus && control.focusOffset > 0
+            radius: parent.radius + control.focusOffset + border.width
+            color: "transparent"
+            border.width: 2
+            border.color: AuroraTheme.blue
+        }
     }
 
     Keys.onReturnPressed: control.clicked()

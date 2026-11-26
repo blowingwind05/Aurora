@@ -16,6 +16,8 @@ Item {
     property bool reduceMotion: false
     property string refreshFeedback: ""
     property bool refreshFailed: false
+    property int refreshRevision: 0
+    property bool deviceRefreshResult: false
     property var enabledDeviceTools: ({})
     signal refreshRequested()
     signal connectRequested(string deviceId)
@@ -32,27 +34,6 @@ Item {
         "mountain-valley.webp", "forest-path.webp", "blossom-grove.webp", "ginkgo-lakeside.webp",
         "baikal-piano.webp", "baikal-accordion.webp", "sunflower-field.webp", "sunset-sky.webp"
     ]
-
-    property bool feedbackVisible: false
-
-    function updateFeedback() {
-        feedbackVisible = ready && !refreshing && refreshFeedback.length > 0
-        feedbackTimer.stop()
-        if (feedbackVisible && !refreshFailed)
-            feedbackTimer.start()
-    }
-
-    onRefreshFeedbackChanged: updateFeedback()
-    onRefreshFailedChanged: updateFeedback()
-    onRefreshingChanged: updateFeedback()
-    onReadyChanged: updateFeedback()
-    Component.onCompleted: updateFeedback()
-
-    Timer {
-        id: feedbackTimer
-        interval: 3000
-        onTriggered: page.feedbackVisible = false
-    }
 
     Item {
         id: heading
@@ -71,83 +52,39 @@ Item {
             text: qsTr("我的设备")
             font.family: AuroraTheme.font
             font.pixelSize: page.compact ? 21 : 26
-            font.weight: Font.Bold
+            font.weight: AuroraTheme.headingWeight
             color: AuroraTheme.ink
             Accessible.role: Accessible.Heading
         }
 
-        AuroraButton {
+        AuroraRefreshButton {
             id: refresh
             objectName: "refreshDevices"
             anchors.right: parent.right
-            width: 34
-            height: 34
-            quiet: true
-            hoverFill: "transparent"
             visible: page.ready
-            enabled: page.refreshAvailable && !page.refreshing
-            text: page.refreshing ? qsTr("正在刷新设备列表") : qsTr("刷新设备列表")
-            hint: text
-            display: AbstractButton.IconOnly
-            icon.width: 20
-            icon.height: 20
-            icon.source: page.refreshing ? "" : AuroraTheme.icon("refresh-cw")
-            onClicked: page.refreshRequested()
-
-            Canvas {
-                id: spinner
-                width: 18
-                height: width
-                anchors.centerIn: parent
-                visible: page.refreshing
-                onPaint: {
-                    const context = getContext("2d")
-                    context.reset()
-                    context.strokeStyle = AuroraTheme.blue
-                    context.lineWidth = 2
-                    context.lineCap = "round"
-                    context.beginPath()
-                    context.arc(width / 2, height / 2, 7, 0, Math.PI * 1.55)
-                    context.stroke()
-                }
-                RotationAnimator {
-                    target: spinner
-                    from: 0
-                    to: 360
-                    duration: 850
-                    loops: Animation.Infinite
-                    running: spinner.visible && !page.reduceMotion
-                }
-            }
+            available: page.refreshAvailable
+            refreshing: page.refreshing
+            reduceMotion: page.reduceMotion
+            idleLabel: qsTr("刷新设备列表")
+            busyLabel: qsTr("正在刷新设备列表")
+            lastFailure: page.deviceRefreshResult && page.refreshFailed ? page.refreshFeedback : ""
+            onRefreshRequested: page.refreshRequested()
         }
     }
 
-    Item {
+    AuroraRefreshFeedback {
         id: feedbackSlot
         anchors.top: heading.bottom
         anchors.topMargin: 15
         anchors.left: heading.left
         anchors.right: heading.right
-        height: page.feedbackVisible ? feedback.implicitHeight + 8 : 0
-        clip: true
-
-        Behavior on height {
-            enabled: !page.reduceMotion
-            NumberAnimation { duration: 240; easing.type: Easing.InOutQuad }
-        }
-
-        Text {
-            id: feedback
-            objectName: "refreshFeedback"
-            width: parent.width
-            visible: parent.height > 0
-            text: page.refreshFeedback
-            textFormat: Text.PlainText
-            wrapMode: Text.Wrap
-            font.family: AuroraTheme.font
-            font.pixelSize: 13
-            color: page.refreshFailed ? "#A13F39" : AuroraTheme.muted
-        }
+        available: page.ready || (page.deviceRefreshResult && page.refreshFailed)
+        pending: refresh.showingProgress
+        message: page.refreshFeedback
+        failed: page.refreshFailed
+        retainFailure: !page.deviceRefreshResult
+        revision: page.refreshRevision
+        reduceMotion: page.reduceMotion
     }
 
     Flickable {
@@ -199,6 +136,7 @@ Item {
                         page.defaultWallpapers[index % page.defaultWallpapers.length])
                     enabledTools: page.enabledDeviceTools[deviceId] || []
                     connectionPending: page.connectionPending
+                    reduceMotion: page.reduceMotion
                     onConnectRequested: function(deviceId) { page.connectRequested(deviceId) }
                     onToolRequested: function(deviceId, action) { page.toolRequested(deviceId, action) }
                     onPowerConfirmationRequested: function(restart, epoch, source) {

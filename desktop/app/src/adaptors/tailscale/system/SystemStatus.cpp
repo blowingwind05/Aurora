@@ -100,7 +100,7 @@ ProfilesResult decodeLegacyProfileList(const QByteArray &bytes)
             continue;
         seen.insert(id);
         const auto tailnet = line.mid(tailnetColumn, accountColumn - tailnetColumn).trimmed();
-        result.profiles.append(Profile{id, {}, login, tailnet, current});
+        result.profiles.append(Profile{id, {}, login, tailnet, current, false});
     }
     return result;
 }

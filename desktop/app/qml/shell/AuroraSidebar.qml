@@ -48,7 +48,7 @@ Item {
                     width: button.icon.width
                     height: width
                     icon.source: button.icon.source
-                    icon.color: button.foreground
+                    icon.color: button.icon.color
                     visible: !button.initialAvatar
                 }
                 AuroraAccountAvatar {
@@ -67,8 +67,11 @@ Item {
                 anchors.rightMargin: 8
                 anchors.verticalCenter: parent.verticalCenter
                 visible: !sidebar.compact
+                spacing: 1
                 Text {
                     width: parent.width
+                    height: button.subtitle.length > 0 ? 18 : implicitHeight
+                    verticalAlignment: Text.AlignVCenter
                     text: button.text
                     textFormat: Text.PlainText
                     elide: Text.ElideRight
@@ -78,12 +81,15 @@ Item {
                 Text {
                     width: parent.width
                     visible: text.length > 0
+                    height: 15
+                    verticalAlignment: Text.AlignVCenter
                     text: button.subtitle
                     textFormat: Text.PlainText
                     elide: Text.ElideRight
                     font.family: AuroraTheme.font
                     font.pixelSize: 11
-                    color: button.selected ? button.foreground : AuroraTheme.muted
+                    font.weight: Font.Normal
+                    color: AuroraTheme.muted
                 }
             }
         }
@@ -100,11 +106,16 @@ Item {
 
         NavButton {
             objectName: "navAccount"
-            text: sidebar.accountName || qsTr("Tailscale 账户")
+            text: sidebar.accountName || "Tailscale"
             subtitle: sidebar.accountSubtitle
+            font.family: AuroraTheme.windows && !sidebar.accountName ? "Segoe UI" : AuroraTheme.font
+            font.weight: sidebar.accountName ? AuroraTheme.headingWeight : Font.DemiBold
             initialAvatar: sidebar.accountName.length > 0 || sidebar.accountAvatar.toString().length > 0
             icon.source: AuroraTheme.tailscale
-            icon.width: 19
+            icon.color: "transparent"
+            icon.width: 16
+            focusOffset: 2
+            z: visualFocus ? 1 : 0
             selected: sidebar.currentPage === "account"
             onClicked: sidebar.navigationRequested("account")
         }

@@ -20,6 +20,7 @@ struct ActionResult
     StatusError error = StatusError::InvalidResponse;
     ActionOutcome outcome = ActionOutcome::Failed;
     std::optional<int> exitCode;
+    QVector<Profile> verifiedProfiles;
 };
 
 class SystemTailscaleClient final : public QObject

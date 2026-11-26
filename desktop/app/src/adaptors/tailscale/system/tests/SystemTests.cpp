@@ -9,6 +9,8 @@
 #include <QTemporaryDir>
 #include <QTest>
 
+#include <algorithm>
+
 using namespace aurora::tailscale;
 using namespace aurora::tailscale::system;
 
@@ -406,6 +408,15 @@ private slots:
         QCOMPARE(int(result.error), error);
         QCOMPARE(int(result.outcome), outcome);
         QCOMPARE(result.exitCode.value_or(-1), exitCode);
+        if (result.error == StatusError::None) {
+            const auto selected = std::find_if(result.verifiedProfiles.cbegin(), result.verifiedProfiles.cend(),
+                [](const Profile &profile) { return profile.isCurrent; });
+            QVERIFY(selected != result.verifiedProfiles.cend());
+            QCOMPARE(selected->id, id);
+            QCOMPARE(selected->loginNameAuthoritative, scenario != "select-legacy");
+        } else {
+            QVERIFY(result.verifiedProfiles.isEmpty());
+        }
         QCOMPARE(commands(executable), expectedCommands);
         QCOMPARE(profiles.size(), 1);
         QVERIFY(!client.requestProfileSwitch(id, generation));

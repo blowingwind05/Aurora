@@ -26,12 +26,16 @@ Item {
         return values
     }
     readonly property var profiles: account.profiles || []
-    readonly property bool canPickProfiles: account.mode === "system" && profiles.length > 0
+    readonly property bool canPickProfiles: account.mode === "system" &&
+        profiles.some(function(profile) { return !profile.current })
     readonly property int accountRevision: account.revision || 0
     onAccountRevisionChanged: if (profileMenu && profileMenu.opened) profileMenu.close()
     readonly property int focusVersion: account.focusVersion || 0
-    onFocusVersionChanged: if (focusVersion && primaryAction && primaryAction.visible && primaryAction.enabled) primaryAction.forceActiveFocus()
-    onCanPickProfilesChanged: if (!canPickProfiles && profileMenu.opened) profileMenu.close()
+    onFocusVersionChanged: if (focusVersion) Qt.callLater(function() {
+        if (primaryAction && primaryAction.visible && primaryAction.enabled)
+            primaryAction.forceActiveFocus()
+    })
+    onCanPickProfilesChanged: if (!canPickProfiles && profileMenu && profileMenu.opened) profileMenu.close()
     onAccountChanged: if (profileMenu && account.busy && profileMenu.opened) profileMenu.close()
 
     readonly property int inset: compact ? 8 : narrow ? 13 : 21
@@ -71,7 +75,34 @@ Item {
             width: parent.width
             text: parent.value
             color: AuroraTheme.ink
-            font.weight: Font.Medium
+            font.weight: AuroraTheme.headingWeight
+        }
+    }
+
+    component LoadingRing: Canvas {
+        id: ring
+        onPaint: {
+            var brush = getContext("2d")
+            brush.reset()
+            var center = width / 2
+            var radius = center - 1
+            brush.lineWidth = 2
+            brush.lineCap = "round"
+            brush.strokeStyle = "#D6E4FA"
+            brush.beginPath()
+            brush.arc(center, center, radius, 0, Math.PI * 2)
+            brush.stroke()
+            brush.strokeStyle = AuroraTheme.blue
+            brush.beginPath()
+            brush.arc(center, center, radius, 0, Math.PI * 0.82)
+            brush.stroke()
+        }
+        RotationAnimator on rotation {
+            from: 0
+            to: 360
+            duration: 850
+            loops: Animation.Infinite
+            running: ring.visible && !page.reduceMotion
         }
     }
 
@@ -87,20 +118,9 @@ Item {
             width: parent.width
             visible: operation.progress.length > 0
             spacing: 6
-            AuroraGlyph {
+            LoadingRing {
                 Layout.preferredWidth: 14
                 Layout.preferredHeight: 14
-                icon.width: 14
-                icon.height: 14
-                icon.source: AuroraTheme.icon("refresh-cw")
-                icon.color: AuroraTheme.blue
-                RotationAnimator on rotation {
-                    from: 0
-                    to: 360
-                    duration: 850
-                    loops: Animation.Infinite
-                    running: visible && !page.reduceMotion
-                }
             }
             Body { Layout.fillWidth: true; text: operation.progress }
         }
@@ -135,56 +155,39 @@ Item {
             text: qsTr("Tailscale 账户")
             color: AuroraTheme.ink
             font.pixelSize: page.compact ? 21 : 26
-            font.weight: Font.DemiBold
+            font.weight: AuroraTheme.headingWeight
             Accessible.role: Accessible.Heading
         }
 
-        AuroraButton {
+        AuroraRefreshButton {
             id: refresh
             objectName: "refreshTailscale"
             anchors.right: parent.right
-            width: 34
-            height: 34
-            quiet: true
-            hoverFill: "transparent"
-            enabled: page.actionsAvailable && !page.refreshing
-            text: page.refreshing ? qsTr("正在检查 Tailscale 状态") : qsTr("刷新 Tailscale 状态")
-            hint: text
-            display: AbstractButton.IconOnly
-            icon.width: 20
-            icon.height: 20
-            icon.source: page.refreshing ? "" : AuroraTheme.icon("refresh-cw")
-            onClicked: page.actionRequested("tailscale.refresh", "", refresh)
-
-            Canvas {
-                anchors.centerIn: parent
-                width: 18
-                height: 18
-                visible: page.refreshing
-                onPaint: {
-                    const context = getContext("2d")
-                    context.reset()
-                    context.strokeStyle = AuroraTheme.blue
-                    context.lineWidth = 2
-                    context.lineCap = "round"
-                    context.beginPath()
-                    context.arc(9, 9, 7, 0, Math.PI * 1.55)
-                    context.stroke()
-                }
-                RotationAnimator on rotation {
-                    from: 0
-                    to: 360
-                    duration: 850
-                    loops: Animation.Infinite
-                    running: page.refreshing && !page.reduceMotion
-                }
-            }
+            available: page.actionsAvailable && page.account.refreshEnabled !== false
+            refreshing: page.refreshing
+            reduceMotion: page.reduceMotion
+            idleLabel: qsTr("刷新 Tailscale 状态")
+            busyLabel: qsTr("正在检查 Tailscale 状态")
+            lastFailure: page.account.refreshFailed === true ? page.account.refreshFeedback || "" : ""
+            onRefreshRequested: page.actionRequested("tailscale.refresh", "", refresh)
         }
     }
 
-    Flickable {
+    AuroraRefreshFeedback {
+        id: feedbackSlot
         anchors.top: heading.bottom
         anchors.topMargin: 15
+        anchors.left: heading.left
+        anchors.right: heading.right
+        pending: refresh.showingProgress
+        message: page.account.refreshFeedback || ""
+        failed: page.account.refreshFailed === true
+        revision: page.account.refreshRevision || 0
+        reduceMotion: page.reduceMotion
+    }
+
+    Flickable {
+        anchors.top: feedbackSlot.bottom
         anchors.left: heading.left
         anchors.right: heading.right
         anchors.bottom: parent.bottom
@@ -213,7 +216,7 @@ Item {
                         text: qsTr("运行方式")
                         color: AuroraTheme.ink
                         font.pixelSize: 15
-                        font.weight: Font.DemiBold
+                        font.weight: AuroraTheme.headingWeight
                         Layout.fillWidth: true
                     }
 
@@ -237,7 +240,7 @@ Item {
                         Layout.columnSpan: runtime.columns
                         Layout.fillWidth: true
                         text: page.account.runtimeNotice || ""
-                        color: "#906016"
+                        color: AuroraTheme.muted
                         visible: text.length > 0
                     }
 
@@ -259,129 +262,177 @@ Item {
                 contentItem: ColumnLayout {
                     spacing: 12
 
-                    RowLayout {
+                    Item {
                         Layout.fillWidth: true
-                        spacing: 8
+                        implicitHeight: Math.max(identitySlot.height, logout.visible ? logout.height : 0)
 
                         Item {
-                            id: identityArea
-                            Layout.fillWidth: true
-                            implicitHeight: identityRow.implicitHeight
+                            id: identitySlot
+                            anchors.left: parent.left
+                            anchors.right: logout.visible ? logout.left : parent.right
+                            anchors.rightMargin: logout.visible ? 8 : 0
+                            height: identityArea.height + (statusBelow ? statusBadge.height + 5 : 0)
+                            readonly property int avatarExtent: 40 + (page.narrow ? 8 : 10)
+                            readonly property real identityWidth: avatarExtent + Math.ceil(Math.max(
+                                nameWidth.advanceWidth, loginWidth.advanceWidth, switchLabel.implicitWidth))
+                            readonly property real statusStart: (page.canPickProfiles ? identityWidth
+                                : avatarExtent + Math.ceil(nameWidth.advanceWidth)) + 8
+                            readonly property bool statusBelow: statusBadge.visible &&
+                                statusStart + statusBadge.implicitWidth > width
 
-                            Rectangle {
-                                anchors.fill: parent
-                                radius: 7
-                                color: profileMenu.opened ? AuroraTheme.selected :
-                                    profileTrigger.hovered ? AuroraTheme.hover : "transparent"
-                                border.color: AuroraTheme.blue
-                                border.width: profileTrigger.visualFocus ? 2 : 0
-                            }
+                            TextMetrics { id: nameWidth; text: displayName.text; font: displayName.font }
+                            TextMetrics { id: loginWidth; text: loginName.text; font: loginName.font }
 
-                            RowLayout {
-                                id: identityRow
-                                anchors.fill: parent
-                                spacing: 10
+                            Item {
+                                id: identityArea
+                                width: Math.min(identitySlot.width, identitySlot.identityWidth)
+                                height: Math.max(40, profileText.implicitHeight)
 
                                 AuroraAccountAvatar {
-                                    Layout.preferredWidth: 40
-                                    Layout.preferredHeight: 40
-                                    Layout.alignment: Qt.AlignTop
+                                    width: 40
+                                    height: 40
+                                    anchors.verticalCenter: parent.verticalCenter
                                     photo: page.connected ? page.avatarPhoto : ""
                                     initial: page.account.initial || ""
                                 }
 
                                 Column {
-                                    Layout.fillWidth: true
-                                    spacing: 4
-
-                                    Flow {
-                                        width: parent.width
-                                        spacing: 6
-
-                                        Body {
-                                            objectName: "tailscaleDisplayName"
-                                            width: Math.min(implicitWidth, parent.width)
-                                            wrapMode: Text.NoWrap
-                                            elide: Text.ElideRight
-                                            text: page.account.displayName || "Tailscale"
-                                            color: AuroraTheme.ink
-                                            font.pixelSize: 16
-                                            font.weight: Font.DemiBold
-                                        }
-
-                                        Row {
-                                            height: nameStatus.implicitHeight + 3
-                                            spacing: 4
-                                            Rectangle {
-                                                width: 6
-                                                height: 6
-                                                radius: 3
-                                                anchors.verticalCenter: parent.verticalCenter
-                                                border.color: page.statusColor
-                                                color: page.connected ? page.statusColor : "transparent"
-                                            }
-                                            Body {
-                                                id: nameStatus
-                                                objectName: "tailscaleStatus"
-                                                anchors.verticalCenter: parent.verticalCenter
-                                                text: page.account.status || ""
-                                                color: page.statusColor
-                                            }
-                                        }
-                                    }
+                                    id: profileText
+                                    x: identitySlot.avatarExtent
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    width: Math.max(0, identityArea.width - x)
+                                    spacing: 5
 
                                     Body {
+                                        id: displayName
+                                        objectName: "tailscaleDisplayName"
+                                        width: parent.width
+                                        wrapMode: Text.NoWrap
+                                        elide: Text.ElideRight
+                                        text: page.account.displayName || "Tailscale"
+                                        color: AuroraTheme.ink
+                                        font.pixelSize: 16
+                                        font.weight: AuroraTheme.headingWeight
+                                    }
+                                    Body {
+                                        id: loginName
                                         objectName: "tailscaleLoginName"
                                         width: parent.width
+                                        wrapMode: Text.NoWrap
+                                        elide: Text.ElideRight
                                         text: page.account.loginName || ""
                                         visible: text.length > 0
+                                        font.pixelSize: 12
+                                        font.weight: Font.Normal
+                                    }
+                                    Body {
+                                        id: switchLabel
+                                        width: parent.width
+                                        visible: page.narrow && page.canPickProfiles
+                                        text: visible ? qsTr("切换账号") : ""
+                                        color: profileTrigger.enabled ? AuroraTheme.statusBlue : AuroraTheme.muted
+                                        font.pixelSize: 12
                                     }
                                 }
 
-                                AuroraGlyph {
-                                    Layout.preferredWidth: 14
-                                    Layout.preferredHeight: 14
-                                    icon.width: 14
-                                    icon.height: 14
+                                AuroraButton {
+                                    id: profileTrigger
+                                    objectName: "tailscaleProfiles"
+                                    anchors.fill: parent
                                     visible: page.canPickProfiles
-                                    icon.source: AuroraTheme.icon("chevron-down")
-                                    rotation: profileMenu.opened ? 180 : 0
+                                    enabled: page.actionsAvailable
+                                    focusPolicy: Qt.StrongFocus
+                                    Accessible.name: qsTr("切换系统 Tailscale 账号")
+                                    Accessible.description: [displayName.text, loginName.text].filter(Boolean).join("，")
+                                    hint: displayName.truncated || loginName.truncated
+                                        ? qsTr("切换账号") + "\n" + Accessible.description : qsTr("切换账号")
+                                    HoverHandler { enabled: profileTrigger.enabled; cursorShape: Qt.PointingHandCursor }
+                                    background: Rectangle {
+                                        radius: 7
+                                        color: profileMenu.opened ? AuroraTheme.selected :
+                                            profileTrigger.hovered && profileTrigger.enabled ? AuroraTheme.hover : "transparent"
+                                        border.color: AuroraTheme.blue
+                                        border.width: profileTrigger.visualFocus ? 2 : 0
+                                    }
+                                    z: -1
+                                    onClicked: profileMenu.opened ? profileMenu.close() : profileMenu.open()
+                                }
+
+                                TailscaleProfileMenu {
+                                    id: profileMenu
+                                    property real triggerY: 0
+                                    y: triggerY + identityArea.height + height + 10 <= page.Window.height
+                                        ? identityArea.height + 4 : -height - 4
+                                    width: Math.min(cards.width - 28, 340)
+                                    maximumHeight: Math.max(96, Math.min(285, page.Window.height - 12))
+                                    profiles: page.profiles
+                                    onAboutToShow: triggerY = identityArea.mapToItem(null, 0, 0).y
+                                    onClosed: if (profileTrigger.visible && profileTrigger.enabled) profileTrigger.forceActiveFocus()
+                                    onProfileRequested: function(key) { page.actionRequested("tailscale.profile", key, profileTrigger) }
                                 }
                             }
 
-                            AuroraButton {
-                                id: profileTrigger
-                                objectName: "tailscaleProfiles"
-                                anchors.fill: parent
-                                visible: page.canPickProfiles
-                                enabled: page.actionsAvailable
-                                Accessible.name: qsTr("选择系统 Tailscale 账号")
-                                background: null
-                                onClicked: profileMenu.opened ? profileMenu.close() : profileMenu.open()
-                            }
+                            Row {
+                                id: statusBadge
+                                x: identitySlot.statusBelow ? 0 : identitySlot.statusStart
+                                y: identitySlot.statusBelow ? identityArea.height + 5 : profileText.y
+                                visible: nameStatus.text.length > 0
+                                height: displayName.implicitHeight
+                                spacing: 4
 
-                            TailscaleProfileMenu {
-                                id: profileMenu
-                                y: identityArea.height + 4
-                                width: Math.min(cards.width - 28, Math.max(identityArea.width, 250))
-                                maximumHeight: Math.max(110, Math.min(285, page.height - 26))
-                                profiles: page.profiles
-                                onClosed: if (profileTrigger.visible && profileTrigger.enabled) profileTrigger.forceActiveFocus()
-                                onProfileRequested: function(key) { page.actionRequested("tailscale.profile", key, profileTrigger) }
+                                Rectangle {
+                                    width: 6
+                                    height: 6
+                                    radius: 3
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    border.color: page.statusColor
+                                    color: page.connected ? page.statusColor : "transparent"
+                                }
+                                Body {
+                                    id: nameStatus
+                                    objectName: "tailscaleStatus"
+                                    y: displayName.baselineOffset - baselineOffset
+                                    text: page.account.status || ""
+                                    color: page.statusColor
+                                }
                             }
                         }
 
                         AuroraButton {
                             id: logout
                             objectName: "tailscaleLogout"
-                            Layout.alignment: Qt.AlignTop
+                            anchors.right: parent.right
+                            y: Math.max(0, (identityArea.height - height) / 2)
+                            width: page.narrow ? 34 : logoutContent.implicitWidth + 8
                             visible: page.connected
                             enabled: page.actionsAvailable
                             quiet: true
+                            hoverFill: "transparent"
                             text: qsTr("退出登录")
                             hint: page.narrow ? text : ""
-                            display: page.narrow ? AbstractButton.IconOnly : AbstractButton.TextBesideIcon
-                            icon.source: AuroraTheme.icon("log-out")
+
+                            contentItem: Item {
+                                Row {
+                                    id: logoutContent
+                                    anchors.centerIn: parent
+                                    spacing: 5
+
+                                    AuroraGlyph {
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        width: 16
+                                        height: 16
+                                        icon.source: AuroraTheme.icon("log-out")
+                                        icon.color: logout.foreground
+                                    }
+                                    Body {
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        visible: !page.narrow
+                                        text: logout.text
+                                        color: logout.foreground
+                                    }
+                                }
+                            }
+
                             onClicked: page.actionRequested("tailscale.logout", "", logout)
                         }
                     }
@@ -389,6 +440,7 @@ Item {
                     GridLayout {
                         visible: page.connected
                         Layout.fillWidth: true
+                        Layout.topMargin: page.narrow ? 4 : 8
                         columns: page.narrow ? 1 : 2
                         columnSpacing: 12
                         rowSpacing: 8
@@ -426,7 +478,9 @@ Item {
                     AuroraButton {
                         id: primaryAction
                         objectName: "tailscaleAuthorization"
+                        Layout.alignment: Qt.AlignRight
                         text: page.account.primaryAction || ""
+                        font.weight: AuroraTheme.headingWeight
                         primary: true
                         visible: text.length > 0
                         enabled: page.account.canOpenPrimaryAction === true && !page.refreshing
@@ -441,6 +495,7 @@ Item {
                 objectName: "tailscaleHelp"
                 text: qsTr("连接帮助")
                 quiet: true
+                hoverFill: "transparent"
                 checkable: true
                 contentItem: Row {
                     spacing: 5

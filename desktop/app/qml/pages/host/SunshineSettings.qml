@@ -52,7 +52,7 @@ Column {
 
     component SectionHeading: CopyText {
         font.pixelSize: 15
-        font.weight: Font.DemiBold
+        font.weight: AuroraTheme.headingWeight
         color: AuroraTheme.ink
         Accessible.role: Accessible.Heading
     }

@@ -72,8 +72,19 @@ private:
     void approveManualPairing(const QJsonObject &request);
     bool handleHostAction(const QString &action);
     bool handleSunshineAction(const QString &action, const QJsonObject &request);
-    void readHostSettings();
+    bool readHostSettings(bool reportRefresh = false);
     void publishHostState();
+    enum class HostRefresh { Idle, Starting, Reading };
+    void finishHostRefresh(const QString &text, bool failed);
+    enum class RefreshTarget { Devices, Account };
+    struct TailnetRefresh {
+        RefreshTarget target;
+        quint64 generation;
+        std::optional<QDeadlineTimer> deviceDeadline;
+    };
+    void startTailnetRefresh(RefreshTarget target);
+    void finishTailnetRefresh(const QString &text, bool failed);
+    void checkDeviceRefresh();
     void readTailnet(bool showRefresh = true);
     void receiveTailnetStatus(quint64 generation, const aurora::tailscale::StatusResult &result);
     bool handleTailnetAction(const QString &action, const QJsonObject &request);
@@ -85,9 +96,23 @@ private:
         std::optional<aurora::tailscale::AccountIdentity> account;
         int revision;
     };
+    struct TailnetSwitch
+    {
+        TailnetIntent intent;
+        QString name;
+        QString login;
+        std::optional<QDeadlineTimer> statusDeadline;
+        bool failed = false;
+        bool verifyLogin = false;
+        bool waitingForProviderStatus = false;
+    };
+    void startTailnetSwitch(const TailnetIntent &intent, const QString &name = {}, const QString &login = {});
+    void finishTailnetSwitch(bool confirmed);
+    void beginTailnetProviderSwitch();
+    void verifyTailnetProfile(TailnetIntent intent);
     void clearTailnetContext();
     bool beginVerifiedTailnetChange(const TailnetIntent &intent);
-    void changeTailnetProvider(bool embedded);
+    void changeTailnetProvider(bool embedded, const aurora::tailscale::StatusResult &verified);
 #ifdef Q_OS_WIN
     void readSystemProfiles();
     void receiveSystemProfiles(quint64 generation, const aurora::tailscale::system::ProfilesResult &result);
@@ -207,6 +232,10 @@ private:
     QString hostSettingsFeedback;
     QList<Aurora::Sunshine::PendingPairing> manualPairings;
     QString hostPreferenceFeedback;
+    HostRefresh hostRefresh = HostRefresh::Idle;
+    QString hostRefreshFeedback;
+    bool hostRefreshFailed = false;
+    int hostRefreshRevision = 0;
     int preferenceRequestId = 0;
     std::unique_ptr<aurora::tailscale::EmbeddedStatusClient> tailnet;
     std::optional<Aurora::Pairing::EmbeddedHostContext> pairingHostContext;
@@ -228,7 +257,20 @@ private:
     std::unique_ptr<Aurora::Ui::AvatarLoader> accountAvatar;
     bool avatarVisible = false;
     QTimer tailnetPoll;
+    QTimer tailnetSwitchRetry;
+    QTimer deviceRefreshPoll;
+    std::optional<TailnetRefresh> manualRefresh;
+    QString accountRefreshFeedback;
+    bool accountRefreshFailed = false;
+    int accountRefreshRevision = 0;
     QString tailnetFeedback;
+    QString tailnetNotice;
+    int tailnetNoticeVersion = 0;
+    int tailnetFocusVersion = 0;
+    bool tailnetRuntimeNeedsLogin = false;
+    bool tailnetBrowserPending = false;
+    bool tailnetSwitchRetryAvailable = false;
+    std::optional<TailnetSwitch> tailnetSwitch;
     std::optional<aurora::tailscale::AccountIdentity> catalogAccount;
     std::optional<TailnetIntent> tailnetConfirmation;
     std::optional<TailnetIntent> tailnetVerification;

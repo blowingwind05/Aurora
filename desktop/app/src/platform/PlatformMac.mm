@@ -3,6 +3,7 @@
 
 #include <QDebug>
 
+#import <AppKit/AppKit.h>
 #import <Foundation/Foundation.h>
 #import <ServiceManagement/SMAppService.h>
 
@@ -137,6 +138,23 @@ std::unique_ptr<StartupBackend> makeStartupBackend(const QString &)
 std::unique_ptr<HostSleepBackend> makeHostSleepBackend()
 {
     return std::make_unique<MacHostSleepBackend>();
+}
+
+QVariantMap highContrastToolTipColors()
+{
+    if (!NSWorkspace.sharedWorkspace.accessibilityDisplayShouldIncreaseContrast)
+        return {};
+
+    const auto colorName = [](NSColor *color) {
+        NSColor *rgb = [color colorUsingColorSpace:NSColorSpace.sRGBColorSpace];
+        return QStringLiteral("#%1%2%3")
+            .arg(qRound(rgb.redComponent * 255), 2, 16, QLatin1Char('0'))
+            .arg(qRound(rgb.greenComponent * 255), 2, 16, QLatin1Char('0'))
+            .arg(qRound(rgb.blueComponent * 255), 2, 16, QLatin1Char('0'));
+    };
+    const auto foreground = colorName(NSColor.labelColor);
+    return {{QStringLiteral("background"), colorName(NSColor.windowBackgroundColor)},
+            {QStringLiteral("text"), foreground}, {QStringLiteral("outline"), foreground}};
 }
 
 } // namespace Aurora::Platform

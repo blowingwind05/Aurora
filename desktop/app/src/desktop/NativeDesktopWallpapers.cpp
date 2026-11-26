@@ -111,8 +111,8 @@ void NativeDesktop::refreshDeviceWallpapers()
 {
     if (!wallpaperClient)
         return;
-    const bool foreground = devicesForeground && !connection && !devicePower && !exitAfterSession && tailnetStatus.account &&
-        snapshot.value(QStringLiteral("windowVisible")).toBool();
+    const bool foreground = devicesForeground && !connection && !devicePower && !exitAfterSession && !tailnetSwitch &&
+        tailnetStatus.account && snapshot.value(QStringLiteral("windowVisible")).toBool();
     const auto authorization = wallpaperClient->setContext(quint64(deviceEpoch), foreground);
     if (!foreground) {
         releaseWallpaperPreview();
@@ -152,7 +152,7 @@ void NativeDesktop::refreshDeviceWallpapers()
 bool NativeDesktop::wallpaperRouteCurrent() const
 {
     if (!wallpaperAttempt || !wallpaperAttempt->selected || wallpaperAttempt->epoch != deviceEpoch ||
-        connection || !tailnetStatus.account || !devicesForeground ||
+        connection || tailnetSwitch || !tailnetStatus.account || !devicesForeground ||
         !snapshot.value(QStringLiteral("windowVisible")).toBool())
         return false;
     const auto devices = visible(*localPresence);

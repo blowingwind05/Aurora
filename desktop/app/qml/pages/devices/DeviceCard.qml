@@ -16,6 +16,7 @@ FocusScope {
     property url defaultWallpaper
     property var enabledTools: []
     property bool connectionPending: false
+    property bool reduceMotion: false
     property bool supportsPower: false
     property int deviceEpoch: -1
     signal connectRequested(string deviceId)
@@ -52,18 +53,31 @@ FocusScope {
             anchors.fill: parent
             color: "#446D66"
         }
-        Image {
+        Item {
+            id: wallpapers
+            objectName: "deviceWallpaper-" + card.deviceId
             anchors.fill: parent
-            fillMode: Image.PreserveAspectCrop
-            source: cachedWallpaper.status === Image.Ready ? "" : card.defaultWallpaper
-            asynchronous: true
-        }
-        Image {
-            id: cachedWallpaper
-            anchors.fill: parent
-            fillMode: Image.PreserveAspectCrop
-            source: card.wallpaperUrl
-            asynchronous: true
+            readonly property bool animateHover: card.ready && !card.connectionPending && !card.reduceMotion
+            scale: animateHover && connectButton.hovered ? 1.04 : 1
+            transformOrigin: Item.Center
+            Behavior on scale {
+                enabled: wallpapers.animateHover
+                NumberAnimation { duration: 180; easing.type: Easing.OutCubic }
+            }
+
+            Image {
+                anchors.fill: parent
+                fillMode: Image.PreserveAspectCrop
+                source: cachedWallpaper.status === Image.Ready ? "" : card.defaultWallpaper
+                asynchronous: true
+            }
+            Image {
+                id: cachedWallpaper
+                anchors.fill: parent
+                fillMode: Image.PreserveAspectCrop
+                source: card.wallpaperUrl
+                asynchronous: true
+            }
         }
         Rectangle {
             anchors.fill: parent
@@ -201,9 +215,11 @@ FocusScope {
                 hoverEnabled: true
                 acceptedButtons: Qt.NoButton
             }
-            ToolTip.text: status.Accessible.name
-            ToolTip.delay: 550
-            ToolTip.visible: statusHover.containsMouse
+            AuroraToolTip {
+                anchorItem: status
+                text: status.Accessible.name
+                active: statusHover.containsMouse
+            }
         }
     }
 
@@ -295,7 +311,7 @@ FocusScope {
                 hint: text
                 selected: toolsMenu.opened
                 display: AbstractButton.IconOnly
-                icon.source: AuroraTheme.icon("grid-2x2")
+                icon.source: Qt.resolvedUrl("../../../../../docs/visual-design/assets/icons/fluent/ic_fluent_apps_24_regular.svg")
                 onClicked: toolsMenu.open()
 
                 AuroraMenu {
@@ -332,6 +348,7 @@ FocusScope {
                     }
 
                     property Item powerHint: MouseArea {
+                        id: unavailablePower
                         parent: toolsMenu.contentItem ? toolsMenu.contentItem.parent : null
                         visible: toolsMenu.opened && !card.powerAvailable
                         readonly property point start: restartItem.parent && parent
@@ -343,9 +360,11 @@ FocusScope {
                         z: 1
                         hoverEnabled: true
                         acceptedButtons: Qt.NoButton
-                        ToolTip.text: toolsMenu.powerUnavailable
-                        ToolTip.delay: 550
-                        ToolTip.visible: containsMouse
+                        AuroraToolTip {
+                            anchorItem: unavailablePower
+                            text: toolsMenu.powerUnavailable
+                            active: unavailablePower.containsMouse
+                        }
                     }
 
                     AuroraMenuItem {

@@ -4,6 +4,8 @@
 #include "HostSleepPrevention.h"
 #include "StartupRegistration.h"
 
+#include <QVariantMap>
+
 namespace Aurora::Platform {
 
 // Native operations used by the controllers. Fixtures can supply in-memory implementations.
@@ -33,6 +35,7 @@ public:
 
 std::unique_ptr<StartupBackend> makeStartupBackend(const QString &windowsLauncherPath);
 std::unique_ptr<HostSleepBackend> makeHostSleepBackend();
+QVariantMap highContrastToolTipColors();
 
 #ifdef Q_OS_WIN
 QString windowsStartupCommand(const QString &launcher);

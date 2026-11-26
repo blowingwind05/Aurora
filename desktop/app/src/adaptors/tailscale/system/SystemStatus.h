@@ -12,6 +12,7 @@ struct Profile
     QString loginName;
     QString tailnet;
     bool isCurrent;
+    bool loginNameAuthoritative = true;
 };
 
 struct ProfilesResult

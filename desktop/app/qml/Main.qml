@@ -15,12 +15,19 @@ AuroraMainWindow {
     hostState: snapshot.host || ({})
     deviceAccess: snapshot.deviceAccess || "loading"
     accountName: snapshot.accountName || ""
-    accountSubtitle: snapshot.accountSubtitle || ""
+    accountSubtitle: {
+        const loginName = snapshot.accountSubtitle || ""
+        if (!loginName)
+            return tailscaleAccount.status || ""
+        return /^[^@]+@github$/i.test(loginName) ? "GitHub" : "Tailscale"
+    }
     accountAvatar: snapshot.accountAvatar || ""
     refreshAvailable: snapshot.refreshAvailable === true
     refreshing: snapshot.refreshing === true
     refreshFeedback: snapshot.refreshFeedback || ""
     refreshFailed: snapshot.refreshFailed === true
+    refreshRevision: snapshot.refreshRevision || 0
+    deviceRefreshResult: snapshot.deviceRefreshResult === true
     connectionPending: snapshot.connectionPending === true
     reduceMotion: snapshot.reduceMotion === true
     moreVersion: auroraMore.versionLabel
@@ -50,7 +57,7 @@ AuroraMainWindow {
 
     onTailscaleNoticeVersionChanged: {
         if (tailscaleNoticeVersion && tailscaleAccount.notice)
-            tailscaleToastTimer.restart()
+            shell.showMoreNotice(tailscaleAccount.notice, true)
     }
 
     Tailscale.TailscaleConfirmation {
@@ -60,30 +67,6 @@ AuroraMainWindow {
         onDecision: function(id, approved) {
             auroraBridge.sendTailscale(approved ? "tailscale.confirm" : "tailscale.cancel", String(id), 0)
         }
-    }
-
-    Rectangle {
-        anchors.centerIn: parent
-        z: 10
-        visible: tailscaleToastTimer.running
-        width: Math.min(shell.width - 32, notice.implicitWidth + 30)
-        height: notice.height + 20
-        radius: 9
-        color: "white"
-        border.color: AuroraTheme.panelLine
-        Text {
-            id: notice
-            x: 15
-            y: 10
-            width: parent.width - 30
-            text: shell.tailscaleAccount.notice || ""
-            textFormat: Text.PlainText
-            wrapMode: Text.Wrap
-            color: AuroraTheme.ink
-            font.family: AuroraTheme.font
-            font.pixelSize: 14
-        }
-        Timer { id: tailscaleToastTimer; interval: 3000 }
     }
 
     Component {

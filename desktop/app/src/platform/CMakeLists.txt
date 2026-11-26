@@ -14,7 +14,7 @@ elseif(APPLE)
     target_sources(aurora_native_platform PRIVATE PlatformMac.mm)
     set_target_properties(aurora_native_platform PROPERTIES OBJCXX_STANDARD 17 OBJCXX_STANDARD_REQUIRED YES)
     target_link_libraries(aurora_native_platform PRIVATE
-        "-framework Foundation" "-framework ServiceManagement" "-framework IOKit" "-framework CoreFoundation")
+        "-framework AppKit" "-framework Foundation" "-framework ServiceManagement" "-framework IOKit" "-framework CoreFoundation")
 else()
     target_sources(aurora_native_platform PRIVATE PlatformUnsupported.cpp)
 endif()
