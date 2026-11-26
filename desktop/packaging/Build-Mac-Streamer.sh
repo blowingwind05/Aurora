@@ -61,7 +61,7 @@ bitrate_source="$desktop/protocol/bitrate/ClientProtocol.h"
 cp "$bitrate_source" "$source/app/backend/aurora-bitrate.h"
 client_proof_source="$desktop/protocol/identity/ClientProof.h"
 cp "$client_proof_source" "$source/app/backend/aurora-client-proof.h"
-cp "$desktop/Assets/Aurora.icns" "$source/app/moonlight.icns"
+cp "$desktop/Assets/Aurora-mac-Dock-77.icns" "$source/app/moonlight.icns"
 source_ready=true
 
 echo '编译极光串流组件…'
@@ -87,16 +87,9 @@ cmake --build "$aurora_build" --config Release --target Aurora --parallel "$(sys
 /usr/bin/lipo "$stage/MacOS/Moonlight" -verify_arch "$native_arch"
 /usr/bin/lipo "$stage/MacOS/Aurora" -verify_arch "$native_arch"
 
-# Keep QML's relative asset paths identical to the Windows Qt bundle.
+# Share the same QML and application asset layout as the Windows package.
 ui="$stage/Resources/ui"
-mkdir -p "$ui/desktop/app" "$ui/desktop/Assets" "$ui/docs/visual-design/assets/brand"
-/usr/bin/ditto "$desktop/app/qml" "$ui/desktop/app/qml"
-for asset in Aurora.png Aurora-Windows-32.png tailscale-dot.svg panel-top-tight.svg; do
-  cp "$desktop/Assets/$asset" "$ui/desktop/Assets/"
-done
-/usr/bin/ditto "$desktop/Assets/Wallpapers" "$ui/desktop/Assets/Wallpapers"
-/usr/bin/ditto "$repository/docs/visual-design/assets/icons" "$ui/docs/visual-design/assets/icons"
-cp "$repository/docs/visual-design/assets/brand/Aurora-transparent-512.png" "$ui/docs/visual-design/assets/brand/"
+python3 "$here/Build-NativeDesktop.py" stage-ui --output "$ui"
 
 "$qt_bin/macdeployqt" "$build/app/Moonlight.app" \
   "-executable=$stage/MacOS/Aurora" "-qmldir=$source/app/qt-session" \

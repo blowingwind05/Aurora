@@ -74,7 +74,7 @@ private:
     bool handleSunshineAction(const QString &action, const QJsonObject &request);
     bool readHostSettings(bool reportRefresh = false);
     void publishHostState();
-    enum class HostRefresh { Idle, Starting, Reading };
+    enum class HostRefresh { Idle, Starting, Reading, ApplyingPermissions };
     void finishHostRefresh(const QString &text, bool failed);
     enum class RefreshTarget { Devices, Account };
     struct TailnetRefresh {
@@ -233,6 +233,7 @@ private:
     QList<Aurora::Sunshine::PendingPairing> manualPairings;
     QString hostPreferenceFeedback;
     HostRefresh hostRefresh = HostRefresh::Idle;
+    bool hostRefreshForPermissions = false;
     QString hostRefreshFeedback;
     bool hostRefreshFailed = false;
     int hostRefreshRevision = 0;

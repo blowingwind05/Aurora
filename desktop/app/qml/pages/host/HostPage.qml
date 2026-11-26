@@ -411,7 +411,7 @@ Item {
                     }
                     SunshineLink {
                         objectName: "hostOpenPermissions"
-                        enabled: !page.busy
+                        enabled: !page.busy && !page.hostState.refreshing
                         text: qsTr("打开 macOS 隐私设置")
                         onClicked: page.actionRequested("hostOpenPermissions")
                     }
@@ -419,8 +419,18 @@ Item {
                         objectName: "hostContinuePermissions"
                         primary: true
                         enabled: page.hostState.refreshAvailable === true && !page.busy
-                        text: qsTr("已授权，继续")
-                        onClicked: page.actionRequested("hostContinuePermissions")
+                            && !page.hostState.refreshing && !page.hostState.permissionsRetrying && !sunshineEditor.continuation
+                        text: page.hostState.permissionsRetrying ? qsTr("正在重试…") : qsTr("已授权，继续")
+                        onClicked: sunshineEditor.finish(function() { page.actionRequested("hostContinuePermissions") }, false)
+                    }
+                    HostText {
+                        objectName: "hostPermissionsFeedback"
+                        width: parent.width
+                        visible: text.length > 0
+                        text: page.hostState.permissionsFeedback || ""
+                        color: page.hostState.permissionsFailed ? "#9C2B2B" : AuroraTheme.muted
+                        wrapMode: Text.Wrap
+                        Accessible.role: Accessible.StaticText
                     }
                 }
             }

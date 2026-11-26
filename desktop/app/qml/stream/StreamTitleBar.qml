@@ -63,12 +63,69 @@ FocusScope {
         }
     }
 
+    MouseArea {
+        anchors.fill: parent
+        enabled: !!bar.session.windowControls && !bar.session.fullScreen
+        onDoubleClicked: bar.session.windowControls.toggleMaximized()
+    }
+    DragHandler {
+        target: null
+        enabled: !!bar.session.windowControls && !bar.session.fullScreen && !bar.session.maximized
+        onActiveChanged: if (active) bar.session.windowControls.startSystemMove()
+    }
+
     HoverHandler { id: barHover }
     readonly property bool pointerInside: barHover.hovered
     MouseArea {
         anchors.fill: parent
         enabled: bar.session.panelOpen
         onClicked: bar.session.closePanel(false)
+    }
+
+    Row {
+        id: caption
+        visible: !!bar.session.windowControls && !bar.session.fullScreen
+        anchors.right: parent.right
+        anchors.rightMargin: 5
+        anchors.verticalCenter: parent.verticalCenter
+        spacing: 2
+
+        Repeater {
+            model: [
+                { glyph: "\uE921", label: qsTr("最小化") },
+                { glyph: bar.session.maximized ? "\uE923" : "\uE922",
+                  label: bar.session.maximized ? qsTr("还原") : qsTr("最大化") },
+                { glyph: "\uE8BB", label: qsTr("关闭") }
+            ]
+
+            StreamButton {
+                id: captionButton
+                width: bar.session.compact ? 28 : 34
+                height: 32
+                text: modelData.label
+                hint: text
+                hoverFill: index === 2 ? "#C42B1C" : Aurora.AuroraTheme.hover
+                foreground: index === 2 && (hovered || down) ? "white" : Aurora.AuroraTheme.ink
+                contentItem: Text {
+                    text: modelData.glyph
+                    font.family: "Segoe MDL2 Assets"
+                    font.pixelSize: 10
+                    horizontalAlignment: Text.AlignHCenter
+                    verticalAlignment: Text.AlignVCenter
+                    renderType: Text.NativeRendering
+                    color: captionButton.foreground
+                    Accessible.ignored: true
+                }
+                onClicked: {
+                    if (index === 0)
+                        bar.session.windowControls.showMinimized()
+                    else if (index === 1)
+                        bar.session.windowControls.toggleMaximized()
+                    else
+                        bar.session.windowControls.close()
+                }
+            }
+        }
     }
 
     Row {
@@ -88,7 +145,7 @@ FocusScope {
             hint: bar.session.compact ? text : ""
             selected: bar.session.panelKind === "controls"
             enabled: bar.session.connected
-            icon.source: Qt.resolvedUrl("../../../../docs/visual-design/assets/icons/prototype/stream-control-center.svg")
+            icon.source: Aurora.AuroraTheme.iconAsset("aurora/stream-control-center.svg")
             onClicked: bar.session.togglePanel("controls", controls)
         }
 

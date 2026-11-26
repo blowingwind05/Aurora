@@ -99,7 +99,7 @@ Popup {
                 width: 14
                 height: 14
                 visible: option.modelData.current
-                icon.source: Qt.resolvedUrl("../../../../../docs/visual-design/assets/icons/phosphor/check-bold.svg")
+                icon.source: AuroraTheme.iconAsset("phosphor/check-bold.svg")
                 icon.color: AuroraTheme.statusBlue
             }
 

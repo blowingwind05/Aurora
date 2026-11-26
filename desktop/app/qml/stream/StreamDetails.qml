@@ -34,11 +34,11 @@ Column {
     readonly property bool hasHeader: connection ? !!session.connectionMetrics.latency : activeDisplay !== null
     spacing: 7
 
-    function focusInitial() {
+    function focusInitial(reason) {
         for (var i = 0; i < displayOptions.count; ++i) {
             var button = displayOptions.itemAt(i).entry
             if (button.enabled && button.selected) {
-                button.forceActiveFocus(Qt.TabFocusReason)
+                button.forceActiveFocus(reason)
                 return true
             }
         }

@@ -7,6 +7,7 @@
 
 #include <windows.h>
 #include <dwmapi.h>
+#include <shobjidl.h>
 
 namespace {
 
@@ -44,6 +45,18 @@ public:
         : QObject(&window), handle_(handle)
     {
         QCoreApplication::instance()->installNativeEventFilter(this);
+        connect(&window, &QWindow::windowStateChanged, this, [this, &window] {
+            markFullscreen(window.isVisible() && window.windowState() == Qt::WindowFullScreen);
+        });
+        connect(&window, &QWindow::visibleChanged, this, [this, &window](bool visible) {
+            markFullscreen(visible && window.windowState() == Qt::WindowFullScreen);
+        });
+    }
+
+    ~WindowsFrameFilter() override
+    {
+        if (IsWindow(handle_))
+            markFullscreen(false);
     }
 
     bool nativeEventFilter(const QByteArray &eventType, void *message, NativeEventResult *result) override
@@ -68,7 +81,20 @@ public:
     }
 
 private:
+    void markFullscreen(bool enabled)
+    {
+        if (fullscreenMarked_ == enabled)
+            return;
+        ITaskbarList2 *taskbar = nullptr;
+        if (FAILED(CoCreateInstance(CLSID_TaskbarList, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&taskbar))))
+            return;
+        if (SUCCEEDED(taskbar->HrInit()) && SUCCEEDED(taskbar->MarkFullscreenWindow(handle_, enabled)))
+            fullscreenMarked_ = enabled;
+        taskbar->Release();
+    }
+
     const HWND handle_;
+    bool fullscreenMarked_ = false;
 };
 
 } // namespace

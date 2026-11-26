@@ -7,6 +7,8 @@ AuroraButton {
     property bool leadingIcon: false
     quiet: true
     hoverFill: "transparent"
+    leftPadding: 0
+    rightPadding: 0
     implicitWidth: labelRow.implicitWidth
     contentItem: Row {
         id: labelRow

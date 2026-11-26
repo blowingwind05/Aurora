@@ -15,32 +15,32 @@ Column {
         { id: "input", label: qsTr("输入"), icon: Qt.resolvedUrl("icons/mouse.svg") },
         { id: "safety", label: qsTr("安全"), icon: Qt.resolvedUrl("icons/shield.svg") }
     ]
-    signal pageChangedByUser()
+    signal pageChangedByUser(int reason)
     signal nativeSettingsRequested()
 
-    function focusInitial() {
+    function focusInitial(reason) {
         if (page !== "") {
-            back.forceActiveFocus(Qt.TabFocusReason)
+            back.forceActiveFocus(reason)
             return
         }
         for (var i = 0; i < groups.length; ++i) {
             if (groups[i].id === previousPage) {
-                categories.itemAt(i).forceActiveFocus(Qt.TabFocusReason)
+                categories.itemAt(i).forceActiveFocus(reason)
                 return
             }
         }
         if (showSettingPages)
-            categories.itemAt(0).forceActiveFocus(Qt.TabFocusReason)
+            categories.itemAt(0).forceActiveFocus(reason)
         else
-            fullScreenButton.forceActiveFocus(Qt.TabFocusReason)
+            fullScreenButton.forceActiveFocus(reason)
     }
 
-    function goBack() {
+    function goBack(reason) {
         if (!page)
             return false
         previousPage = page
         page = ""
-        pageChangedByUser()
+        pageChangedByUser(reason)
         return true
     }
 
@@ -62,7 +62,7 @@ Column {
                 icon.source: modelData.icon
                 onClicked: {
                     center.page = modelData.id
-                    center.pageChangedByUser()
+                    center.pageChangedByUser(visualFocus ? Qt.TabFocusReason : Qt.MouseFocusReason)
                 }
             }
         }
@@ -134,7 +134,7 @@ Column {
             showLabel: false
             icon.source: Aurora.AuroraTheme.icon("chevron-right")
             contentItem.rotation: 180
-            onClicked: center.goBack()
+            onClicked: center.goBack(visualFocus ? Qt.TabFocusReason : Qt.MouseFocusReason)
         }
 
         StreamText {

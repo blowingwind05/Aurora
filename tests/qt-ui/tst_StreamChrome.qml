@@ -67,6 +67,8 @@ Item {
         function menu(page) {
             click("controlCenter")
             tryCompare(chrome, "panelKind", "controls")
+            verify(!lookup("controlPage:quality").visualFocus)
+            verify(lookup("streamPanelScroll").height >= lookup("fullScreen").height)
             click("controlPage:" + page)
             tryCompare(lookup("controlBack"), "activeFocus", true)
         }
@@ -228,6 +230,7 @@ Item {
             chrome.focusControls()
             keyClick(Qt.Key_Return)
             tryCompare(lookup("controlPage:quality"), "activeFocus", true)
+            verify(lookup("controlPage:quality").visualFocus)
             keyClick(Qt.Key_Return)
             tryCompare(lookup("controlBack"), "activeFocus", true)
             click("frameRate:30")

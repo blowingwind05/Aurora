@@ -8,11 +8,10 @@ Item {
     height: 480
     property alias chrome: chrome
 
-    readonly property int videoTop: chrome.fullScreen
-        ? (chrome.controlsVisible ? chrome.barHeight : 2) : chrome.contentTop
+    readonly property int videoTop: chrome.contentTop
 
     function updateViewport() {
-        streamSurface.setViewport(Qt.rect(0, videoTop, width, Math.max(0, height - videoTop)), chrome.panelOpen)
+        streamSurface.setViewport(Qt.rect(0, videoTop, width, Math.max(0, height - videoTop)), false)
     }
 
     onWidthChanged: updateViewport()
@@ -31,7 +30,7 @@ Item {
         canCancel: true
         canDisconnect: true
         canSetFullScreen: true
-        onPanelOpenChanged: preview.updateViewport()
+        windowsOverlays: true
         onCancelRequested: streamSurface.requestStop()
         onDisconnectRequested: streamSurface.requestStop()
         onFullScreenRequested: function(enabled) { fullScreen = enabled }

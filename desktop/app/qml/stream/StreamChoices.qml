@@ -44,7 +44,7 @@ Column {
                 rowStyle: group.vertical
                 idleFill: group.vertical ? "transparent" : Aurora.AuroraTheme.workspace
                 trailingIcon: group.vertical && selected
-                    ? Qt.resolvedUrl("../../../../docs/visual-design/assets/icons/phosphor/check-bold.svg") : ""
+                    ? Aurora.AuroraTheme.iconAsset("phosphor/check-bold.svg") : ""
 
                 TextMetrics {
                     id: optionText

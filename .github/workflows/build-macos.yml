@@ -96,6 +96,10 @@ jobs:
           test -x "$host/Contents/MacOS/AuroraHost"
           test "$("${clean_env[@]}" "$host/Contents/MacOS/AuroraHost" --aurora-runtime-info)" = aurora-host/1
           codesign --verify --deep --strict "$host"
+          dock_icon="desktop/Assets/Aurora-mac-Dock-77.icns"
+          cmp "$dock_icon" "$app/Contents/Resources/Aurora.icns"
+          cmp "$dock_icon" "$app/Contents/Resources/moonlight.icns"
+          cmp "$dock_icon" "$host/Contents/Resources/sunshine.icns"
           test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$host/Contents/Info.plist")" = org.aurora-remote.desktop.host
           python3 desktop/upstream/Prepare-EngineSource.py verify sunshine \
             "$host/Contents/Resources/licenses/SOURCE.txt"

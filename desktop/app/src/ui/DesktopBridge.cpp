@@ -5,11 +5,13 @@
 #include <QAction>
 #include <QCoreApplication>
 #include <QDir>
+#include <QEvent>
 #include <QFileInfo>
 #include <QJsonObject>
 #include <QKeySequence>
 #include <QMenu>
 #include <QMenuBar>
+#include <QTimer>
 
 DesktopBridge::DesktopBridge(NativeDesktop &desktop) : desktop_(desktop)
 {
@@ -35,6 +37,7 @@ QString DesktopBridge::packagedEntryPoint()
 void DesktopBridge::installApplicationMenu()
 {
 #ifdef Q_OS_MACOS
+    QCoreApplication::instance()->installEventFilter(this);
     applicationMenu_ = std::make_unique<QMenuBar>();
     auto *application = applicationMenu_->addMenu(tr("Aurora"));
     auto *settings = application->addAction(tr("设置…"), this, [this] { desktop_.activate(QStringLiteral("settings")); });
@@ -44,6 +47,19 @@ void DesktopBridge::installApplicationMenu()
     quit->setMenuRole(QAction::QuitRole);
     quit->setShortcut(QKeySequence::Quit);
 #endif
+}
+
+bool DesktopBridge::eventFilter(QObject *watched, QEvent *event)
+{
+#ifdef Q_OS_MACOS
+    if (watched == QCoreApplication::instance() && event->type() == QEvent::Quit) {
+        // Cocoa asks Qt to quit. Finish the managed shutdown before closing the app.
+        event->ignore();
+        QTimer::singleShot(0, &desktop_, &NativeDesktop::requestExit);
+        return true;
+    }
+#endif
+    return QObject::eventFilter(watched, event);
 }
 
 QVariantMap DesktopBridge::state() const

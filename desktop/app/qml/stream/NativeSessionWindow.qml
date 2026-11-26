@@ -10,15 +10,24 @@ Window {
     property string deviceName
     property bool finished: false
     readonly property bool switchingPicture: !!session && session.videoSettingsPending === true
-    readonly property int videoTop: chrome.fullScreen ? (chrome.controlsVisible ? chrome.barHeight : 2)
-                                                     : chrome.contentTop
+    property bool nativeWindowsFrame: false
+    readonly property int videoTop: chrome.contentTop
+    readonly property bool windowsChrome: Aurora.AuroraTheme.windows
 
     width: 1040
     height: 640
     minimumWidth: 420
     minimumHeight: 280
     title: deviceName
-    color: Aurora.AuroraTheme.workspace
+    flags: windowsChrome && !nativeWindowsFrame ? Qt.Window | Qt.FramelessWindowHint : Qt.Window
+    color: "#151D2A"
+
+    function toggleMaximized() {
+        if (visibility === Window.Maximized)
+            showNormal()
+        else if (visibility !== Window.FullScreen)
+            showMaximized()
+    }
 
     function picturePreferences() {
         const current = session ? session.videoSettings : null
@@ -52,7 +61,7 @@ Window {
 
     function updateViewport() {
         if (!finished && visible && session)
-            session.setViewport(Qt.rect(0, videoTop, width, Math.max(0, height - videoTop)), chrome.panelOpen)
+            session.setViewport(Qt.rect(0, videoTop, width, Math.max(0, height - videoTop)), false)
     }
 
     onWidthChanged: updateViewport()
@@ -81,6 +90,10 @@ Window {
         deviceName: window.deviceName
         phase: session && session.videoReady ? StreamSessionChrome.Connected : StreamSessionChrome.Connecting
         fullScreen: !!session && session.fullScreen
+        windowsOverlays: window.windowsChrome
+        windowControls: window.windowsChrome ? window : null
+        trailingWindowInset: window.windowsChrome ? (compact ? 96 : 114) : 0
+        maximized: window.visibility === Window.Maximized
         canSetFullScreen: connected
         canCancel: !connected
         canDisconnect: connected
@@ -93,7 +106,6 @@ Window {
         privacyScreen: session && !window.finished ? (session.privacyScreen || null) : null
         privacyScreenMessage: session && !window.finished ? session.privacyScreenMessage : ""
 
-        onPanelOpenChanged: window.updateViewport()
         onPanelKindChanged: {
             if (panelKind === "controls" && !window.finished && session) {
                 session.refreshPrivacyScreen()

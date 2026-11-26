@@ -2,7 +2,12 @@
 #include "StreamSessionWindow.h"
 #include "session/SessionSupervisor.h"
 
+#ifdef Q_OS_WIN
+#include "platform/WindowsWindowFrame.h"
+#endif
+
 #include <QCoreApplication>
+#include <QGuiApplication>
 #include <QDebug>
 #include <QQmlComponent>
 #include <QQmlEngine>
@@ -25,13 +30,25 @@ QString StreamSessionWindow::prepare(const QUuid &attempt, const QString &device
         return QCoreApplication::translate("NativeDesktop", "无法加载串流窗口。");
     }
 
-    std::unique_ptr<QObject> object(component.createWithInitialProperties({
+    QVariantMap properties{
         {QStringLiteral("session"), QVariant::fromValue(static_cast<QObject *>(&session))},
         {QStringLiteral("deviceName"), deviceName}
-    }));
+    };
+#ifdef Q_OS_WIN
+    const bool nativeFrame = QGuiApplication::platformName() == QStringLiteral("windows");
+    properties.insert(QStringLiteral("nativeWindowsFrame"), nativeFrame);
+#endif
+    std::unique_ptr<QObject> object(component.createWithInitialProperties(properties));
     auto *window = qobject_cast<QWindow *>(object.get());
     if (!window)
         return QCoreApplication::translate("NativeDesktop", "无法创建串流窗口。");
+
+#ifdef Q_OS_WIN
+    if (nativeFrame && !installWindowsWindowFrame(*window)) {
+        qWarning("Aurora could not install the native Windows stream frame.");
+        window->setProperty("nativeWindowsFrame", false);
+    }
+#endif
 
     object.release();
     window_.reset(window);

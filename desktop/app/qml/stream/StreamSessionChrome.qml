@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 import QtQuick 2.15
+import QtQuick.Window 2.15
 import "../common" as Aurora
 
 Item {
@@ -13,11 +14,16 @@ Item {
     property int networkQuality: StreamSessionChrome.Normal
     property bool reduceMotion: false
     property bool brandAtEnd: Aurora.AuroraTheme.mac
-    property url brandSource: Qt.resolvedUrl("../../../../docs/visual-design/assets/brand/Aurora-transparent-512.png")
+    property url brandSource: Aurora.AuroraTheme.desktopAsset("Aurora.png")
     property int leadingWindowInset: 0
     property int trailingWindowInset: 0
     property bool maximized: false
     property bool fullScreen: false
+    property bool windowsOverlays: false
+    property Window windowControls: null
+    property int panelFocusReason: Qt.MouseFocusReason
+    readonly property var overlays: nativeOverlays.item
+    readonly property bool floatingPanel: panelOpen && !!overlays && panelAnchor === overlays.floatingButton
     property bool revealControls: false
     property bool keyboardReveal: false
     property bool canSetFullScreen: false
@@ -48,7 +54,8 @@ Item {
     readonly property int barHeight: 44
     readonly property int contentTop: fullScreen ? 0 : barHeight
     readonly property bool controlsVisible: !fullScreen || revealControls || edge.hovered
-        || keyboardReveal || toolbar.activeFocus || toolbar.pointerInside || panelOpen
+        || keyboardReveal || toolbar.activeFocus || toolbar.pointerInside
+        || (!!overlays && overlays.edgeHovered) || (panelOpen && !floatingPanel)
     readonly property bool panelOpen: panelKind !== ""
     property string panelKind: ""
     property Item panelAnchor: null
@@ -94,9 +101,11 @@ Item {
             closePanel(true)
             return
         }
+        panelFocusReason = anchor && anchor.visualFocus ? Qt.TabFocusReason : Qt.MouseFocusReason
         panelAnchor = anchor
         panelKind = kind
-        popup.focusInitial()
+        if (!overlays)
+            popup.focusInitial()
     }
 
     function closePanel(restoreFocus) {
@@ -105,11 +114,15 @@ Item {
         var opener = panelAnchor
         panelKind = ""
         panelAnchor = null
-        if (restoreFocus && opener && opener.enabled && opener.visible)
+        if (restoreFocus && opener && opener.enabled && opener.visible) {
+            if (overlays && opener !== overlays.floatingButton && opener.Window.window)
+                opener.Window.window.requestActivate()
             opener.forceActiveFocus(Qt.BacktabFocusReason)
+        }
     }
 
     onConnectedChanged: if (!connected) closePanel(false)
+    onFullScreenChanged: closePanel(false)
     onCompactChanged: {
         if (panelKind === "displays") {
             panelAnchor = toolbar.displayEntry()
@@ -136,14 +149,15 @@ Item {
     Item {
         width: parent.width
         height: 2
-        visible: chrome.fullScreen
+        visible: chrome.fullScreen && !chrome.windowsOverlays
         HoverHandler { id: edge }
     }
 
     StreamTitleBar {
         id: toolbar
         objectName: "streamTitleBar"
-        width: parent.width
+        parent: chrome.fullScreen && chrome.overlays ? chrome.overlays.toolbarContent : chrome
+        width: chrome.width
         height: chrome.barHeight
         visible: chrome.controlsVisible
         session: chrome
@@ -152,14 +166,26 @@ Item {
     MouseArea {
         anchors.fill: parent
         anchors.topMargin: chrome.barHeight
-        visible: chrome.panelOpen
+        visible: chrome.panelOpen && !chrome.overlays
         acceptedButtons: Qt.AllButtons
         onClicked: chrome.closePanel(false)
         onWheel: function(wheel) { wheel.accepted = true }
     }
 
+    Loader {
+        id: nativeOverlays
+        active: chrome.windowsOverlays
+        sourceComponent: StreamWindowsOverlays {
+            owner: chrome.Window.window
+            session: chrome
+            panel: popup
+        }
+    }
+
     StreamPanel {
         id: popup
+        parent: chrome.overlays ? chrome.overlays.panelContent : chrome
+        overlayWindow: !!chrome.overlays
         session: chrome
         visible: chrome.panelOpen
     }

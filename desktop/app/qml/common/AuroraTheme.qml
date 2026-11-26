@@ -22,13 +22,17 @@ QtObject {
     readonly property color disabled: "#7A8494"
 
     function icon(name) {
-        return Qt.resolvedUrl("../../../../docs/visual-design/assets/icons/lucide/" + name + ".svg")
+        return iconAsset("lucide/" + name + ".svg")
     }
 
     function desktopAsset(path) {
         return Qt.resolvedUrl("../../../Assets/" + path)
     }
 
+    function iconAsset(path) {
+        return desktopAsset("icons/" + path)
+    }
+
     readonly property url tailscale: desktopAsset("tailscale-dot.svg")
-    readonly property url github: Qt.resolvedUrl("../../../../docs/visual-design/assets/icons/primer/mark-github-16.svg")
+    readonly property url github: iconAsset("primer/mark-github-16.svg")
 }

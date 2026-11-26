@@ -54,4 +54,4 @@ pwsh -NoProfile -File ./tests/qt-ui/Replay.ps1
 
 可用 Qt 5.15 的 `qmlscene tests/qt-ui/previews/Preview.qml` 浏览静态素材和演示数据。将窗口调整至 1000 × 620、760、759、490、489 和 400 × 280，查看页签圆脚、分隔线、留白、菜单对齐及滚动。用 Tab、Enter 和 Esc 操作。预览里的系统窗控区域按平台留白，系统行为由实际宿主提供。
 
-`icons/` 中的七个 SVG 来自[串流原型](../../../../docs/visual-design/aurora-stream-preview.html)的内联图标。其余图标和品牌图沿用设计目录中的资产。
+`icons/` 中的七个 SVG 来自[串流原型](../../../../docs/visual-design/aurora-stream-preview.html)的内联图标。其余图标和品牌图从 `desktop/Assets` 随应用分发。

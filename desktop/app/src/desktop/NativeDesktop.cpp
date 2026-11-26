@@ -249,7 +249,11 @@ void NativeDesktop::publishHostState()
     case Phase::Stopped: status = QStringLiteral("disabled"); break;
     case Phase::Failed: status = QStringLiteral("notReady"); break;
     }
-    if (hostRefresh == HostRefresh::Starting && !busy)
+    if (hostRefresh == HostRefresh::ApplyingPermissions && !busy)
+        finishHostRefresh(ready ? tr("本机被控已重新就绪。")
+                               : current.error.isEmpty() ? tr("本机被控未能就绪，请检查 macOS 权限后重试。") : current.error,
+                          !ready);
+    else if (hostRefresh == HostRefresh::Starting && !busy)
         finishHostRefresh(ready ? tr("检测完成，本机被控正在运行。") : tr("未能启动本机被控，请检查服务状态。"), !ready);
     else if (hostRefresh == HostRefresh::Reading && (!ready || settingsSessionChanged))
         finishHostRefresh(tr("本机被控状态已变化，请重新检测。"), true);
@@ -267,15 +271,18 @@ void NativeDesktop::publishHostState()
         {QStringLiteral("status"), status},
         {QStringLiteral("toggleAvailable"), bool(host)},
         {QStringLiteral("refreshAvailable"), bool(host) && !busy},
-        {QStringLiteral("refreshing"), hostRefresh != HostRefresh::Idle},
-        {QStringLiteral("refreshFeedback"), hostRefreshFeedback},
-        {QStringLiteral("refreshFailed"), hostRefreshFailed},
+        {QStringLiteral("refreshing"), hostRefresh != HostRefresh::Idle && !hostRefreshForPermissions},
+        {QStringLiteral("refreshFeedback"), hostRefreshForPermissions ? QString() : hostRefreshFeedback},
+        {QStringLiteral("refreshFailed"), !hostRefreshForPermissions && hostRefreshFailed},
         {QStringLiteral("refreshRevision"), hostRefreshRevision},
         {QStringLiteral("retryAvailable"), bool(host) && allowed && current.phase == Phase::Failed},
         {QStringLiteral("lanAddress"), lanAddress},
         {QStringLiteral("tailscaleAddress"), tailnetAddress},
 #ifdef Q_OS_MACOS
         {QStringLiteral("permissionsAvailable"), bool(host) && allowed},
+        {QStringLiteral("permissionsRetrying"), hostRefresh == HostRefresh::ApplyingPermissions},
+        {QStringLiteral("permissionsFeedback"), hostRefreshForPermissions ? hostRefreshFeedback : QString()},
+        {QStringLiteral("permissionsFailed"), hostRefreshForPermissions && hostRefreshFailed},
 #endif
         {QStringLiteral("hint"), hint},
     };
@@ -324,12 +331,27 @@ bool NativeDesktop::handleHostAction(const QString &action)
     if (phase == Phase::Starting || phase == Phase::Restarting || phase == Phase::Stopping)
         return true;
     hostPreferenceFeedback.clear();
-    if (action == QLatin1String("hostRefresh")) {
+    const bool applyPermissions = action == QLatin1String("hostContinuePermissions");
+    if (action == QLatin1String("hostRefresh") || applyPermissions) {
         if (hostRefresh != HostRefresh::Idle)
             return true;
+        hostRefreshForPermissions = applyPermissions;
         hostRefreshFeedback.clear();
         hostRefreshFailed = false;
-        if (phase == Phase::Ready) {
+        if (applyPermissions) {
+            if (!preferences.managedHostAllowed()) {
+                finishHostRefresh(tr("请先启用本机被控。"), true);
+            } else if (host->settingsBusy()) {
+                finishHostRefresh(tr("Sunshine 正在处理其他操作，请稍后重试。"), true);
+            } else {
+                // Ready confirms the management endpoint. Relaunch Aurora Host so
+                // its startup permission checks run against the updated settings.
+                hostRefresh = HostRefresh::ApplyingPermissions;
+                const bool accepted = phase == Phase::Ready ? host->restart() : host->start();
+                if (!accepted)
+                    finishHostRefresh(tr("当前无法重试本机被控，请稍后再试。"), true);
+            }
+        } else if (phase == Phase::Ready) {
             hostRefresh = HostRefresh::Reading;
             if (!readHostSettings(true))
                 finishHostRefresh(tr("Sunshine 正在处理其他操作，请稍后重新检测。"), true);
@@ -358,13 +380,17 @@ bool NativeDesktop::handleHostAction(const QString &action)
         const auto address = snapshot.value(QStringLiteral("host")).toMap().value(addressField).toString();
         if (!address.isEmpty() && QGuiApplication::clipboard())
             QGuiApplication::clipboard()->setText(address);
-    } else if ((action == QLatin1String("hostRetry") || action == QLatin1String("hostContinuePermissions")) &&
-               preferences.managedHostAllowed() && (phase == Phase::Stopped || phase == Phase::Failed)) {
+    } else if (action == QLatin1String("hostRetry") && preferences.managedHostAllowed() &&
+               (phase == Phase::Stopped || phase == Phase::Failed)) {
         host->start();
     }
 #ifdef Q_OS_MACOS
     else if (action == QLatin1String("hostOpenPermissions") && preferences.managedHostAllowed()) {
-        QDesktopServices::openUrl(QUrl(QStringLiteral("x-apple.systempreferences:com.apple.preference.security?Privacy")));
+        if (!QDesktopServices::openUrl(QUrl(QStringLiteral("x-apple.systempreferences:com.apple.preference.security?Privacy")))
+            && hostRefresh == HostRefresh::Idle) {
+            hostRefreshForPermissions = true;
+            finishHostRefresh(tr("无法打开 macOS 隐私设置。"), true);
+        }
     }
 #endif
     publishHostState();

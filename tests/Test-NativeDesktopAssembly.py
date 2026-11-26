@@ -78,6 +78,8 @@ class AssemblyTest(unittest.TestCase):
         assembly.assemble(output, lambda target: assembly.stage_windows(target, *inputs))
         self.assertTrue((output / "Aurora.exe").is_file())
         self.assertTrue((output / "Components/Sunshine/assets/box.png").is_file())
+        self.assertTrue((output / "ui/desktop/Assets/icons/lucide/monitor.svg").is_file())
+        self.assertFalse((output / "ui/docs").exists())
         self.assertFalse((output / "Components/Sunshine/assets/web").exists())
         self.assertTrue((output / "ui/desktop/app/qml/stream/NativeSessionWindow.qml").is_file())
         self.assertFalse((output / "ui/stale.txt").exists())
@@ -146,6 +148,11 @@ class AssemblyTest(unittest.TestCase):
         self.assertTrue((result / "Helpers/AuroraHost.app/Contents/MacOS/AuroraHost").is_file())
         host_assets = result / "Helpers/AuroraHost.app/Contents/Resources/assets"
         self.assertTrue((host_assets / "box.png").is_file())
+        resources = output / "Contents/Resources"
+        self.assertEqual((resources / "Aurora.icns").read_bytes(),
+                         (assembly.DESKTOP / "Assets/Aurora-mac-Dock-77.icns").read_bytes())
+        self.assertTrue((resources / "ui/desktop/Assets/icons/lucide/monitor.svg").is_file())
+        self.assertFalse((resources / "ui/docs").exists())
         self.assertFalse((host_assets / "web").exists())
         self.assertFalse((result / "MacOS/AuroraQtShell").exists())
         self.assertEqual((contents / "MacOS/Aurora").read_bytes(), b"obsolete managed launcher")

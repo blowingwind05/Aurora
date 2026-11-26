@@ -29,6 +29,9 @@ public:
 signals:
     void stateChanged();
 
+protected:
+    bool eventFilter(QObject *watched, QEvent *event) override;
+
 private:
     NativeDesktop &desktop_;
     std::unique_ptr<QMenuBar> applicationMenu_;

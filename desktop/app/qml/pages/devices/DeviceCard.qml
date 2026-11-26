@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 import QtQuick 2.15
 import QtQuick.Controls 2.15
+import QtQuick.Layouts 1.15
 import "../../common"
 
 FocusScope {
@@ -33,6 +34,28 @@ FocusScope {
     readonly property real cardRadius: 14
     readonly property real coverHeight: Math.max(176, (width - 2) / 1.88)
     height: coverHeight + 47
+
+    component DeviceMenuItem: AuroraMenuItem {
+        id: menuItem
+        // Keep the label and glyph on the same foreground across Qt styles.
+        contentItem: RowLayout {
+            spacing: menuItem.spacing
+            AuroraGlyph {
+                Layout.preferredWidth: menuItem.icon.width
+                Layout.preferredHeight: menuItem.icon.height
+                icon.source: menuItem.icon.source
+                icon.color: menuItem.icon.color
+            }
+            Text {
+                Layout.fillWidth: true
+                text: menuItem.text
+                textFormat: Text.PlainText
+                font: menuItem.font
+                color: menuItem.icon.color
+                elide: Text.ElideRight
+            }
+        }
+    }
 
     Rectangle {
         anchors.fill: parent
@@ -311,7 +334,7 @@ FocusScope {
                 hint: text
                 selected: toolsMenu.opened
                 display: AbstractButton.IconOnly
-                icon.source: Qt.resolvedUrl("../../../../../docs/visual-design/assets/icons/fluent/ic_fluent_apps_24_regular.svg")
+                icon.source: AuroraTheme.iconAsset("fluent/ic_fluent_apps_24_regular.svg")
                 onClicked: toolsMenu.open()
 
                 AuroraMenu {
@@ -321,7 +344,17 @@ FocusScope {
                     property real anchorTop: 0
                     y: anchorTop >= height + 8 ? -height - 3 : more.height + 3
                     property var powerChoice: null
-                    readonly property string powerUnavailable: qsTr("远程电源操作需要被控端在线并支持此功能")
+                    readonly property string powerUnavailable: {
+                        if (card.powerAvailable)
+                            return ""
+                        if (!card.online)
+                            return qsTr("设备离线。")
+                        if (card.deviceId === "" || card.deviceEpoch < 0)
+                            return qsTr("设备列表状态已失效，请刷新。")
+                        if (!card.canConnect)
+                            return qsTr("未发现可用的被控服务。")
+                        return qsTr("被控端未声明支持远程电源操作。")
+                    }
 
                     function choosePower(restart) {
                         if (!card.powerAvailable)
@@ -347,27 +380,7 @@ FocusScope {
                             card.powerConfirmationRequested(choice.restart, choice.epoch, more)
                     }
 
-                    property Item powerHint: MouseArea {
-                        id: unavailablePower
-                        parent: toolsMenu.contentItem ? toolsMenu.contentItem.parent : null
-                        visible: toolsMenu.opened && !card.powerAvailable
-                        readonly property point start: restartItem.parent && parent
-                            ? restartItem.parent.mapToItem(parent, restartItem.x, restartItem.y) : Qt.point(0, 0)
-                        x: start.x
-                        y: start.y
-                        width: restartItem.width
-                        height: restartItem.height + shutdownItem.height
-                        z: 1
-                        hoverEnabled: true
-                        acceptedButtons: Qt.NoButton
-                        AuroraToolTip {
-                            anchorItem: unavailablePower
-                            text: toolsMenu.powerUnavailable
-                            active: unavailablePower.containsMouse
-                        }
-                    }
-
-                    AuroraMenuItem {
+                    DeviceMenuItem {
                         visible: card.lanAddress.length > 0
                         height: visible ? 32 : 0
                         objectName: "copyLan-" + card.deviceId
@@ -375,7 +388,7 @@ FocusScope {
                         icon.source: AuroraTheme.icon("copy")
                         onTriggered: card.copyRequested(card.lanAddress)
                     }
-                    AuroraMenuItem {
+                    DeviceMenuItem {
                         visible: card.tailscaleAddress.length > 0
                         height: visible ? 32 : 0
                         objectName: "copyTailnet-" + card.deviceId
@@ -388,8 +401,7 @@ FocusScope {
                         height: visible ? 6 : 0
                         contentItem: Item {}
                     }
-                    AuroraMenuItem {
-                        id: restartItem
+                    DeviceMenuItem {
                         objectName: "restart-" + card.deviceId
                         enabled: card.powerAvailable
                         text: qsTr("重启")
@@ -397,14 +409,30 @@ FocusScope {
                         Accessible.description: enabled ? "" : toolsMenu.powerUnavailable
                         onTriggered: toolsMenu.choosePower(true)
                     }
-                    AuroraMenuItem {
-                        id: shutdownItem
+                    DeviceMenuItem {
                         objectName: "shutdown-" + card.deviceId
                         enabled: card.powerAvailable
                         text: qsTr("关机")
                         icon.source: AuroraTheme.icon("power")
                         Accessible.description: enabled ? "" : toolsMenu.powerUnavailable
                         onTriggered: toolsMenu.choosePower(false)
+                    }
+                    AuroraMenuItem {
+                        objectName: "powerUnavailable-" + card.deviceId
+                        enabled: false
+                        visible: text !== ""
+                        height: visible ? contentItem.implicitHeight + topPadding + bottomPadding : 0
+                        text: toolsMenu.powerUnavailable
+                        Accessible.role: Accessible.StaticText
+                        Accessible.name: text
+                        contentItem: Text {
+                            text: toolsMenu.powerUnavailable
+                            textFormat: Text.PlainText
+                            color: AuroraTheme.muted
+                            font.family: AuroraTheme.font
+                            font.pixelSize: 12
+                            wrapMode: Text.Wrap
+                        }
                     }
                 }
             }

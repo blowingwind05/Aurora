@@ -98,15 +98,12 @@ def copy_tree(source, target, ignore=None):
 def stage_ui(ui_directory):
     app = DESKTOP / "app"
     assets = DESKTOP / "Assets"
-    design = REPOSITORY / "docs/visual-design/assets"
     target_app = ui_directory / "desktop/app"
     copy_tree(app / "qml", target_app / "qml")
     for name in ("Aurora.png", "Aurora-Windows-32.png", "tailscale-dot.svg", "panel-top-tight.svg"):
         copy_file(assets / name, ui_directory / "desktop/Assets" / name)
     copy_tree(assets / "Wallpapers", ui_directory / "desktop/Assets/Wallpapers")
-    copy_tree(design / "icons", ui_directory / "docs/visual-design/assets/icons")
-    brand = "brand/Aurora-transparent-512.png"
-    copy_file(design / brand, ui_directory / "docs/visual-design/assets" / brand)
+    copy_tree(assets / "icons", ui_directory / "desktop/Assets/icons")
 
 
 def stage_windows(destination, launcher, streamer, sunshine, tailscale):
@@ -212,7 +209,7 @@ def stage_macos_components(destination, launcher, streamer_contents, host, tailn
         copy_file(streamer_resources / "AuroraStreamBrand.png", resources / "AuroraStreamBrand.png")
         if (streamer_resources / "moonlight.icns").is_file():
             copy_file(streamer_resources / "moonlight.icns", resources / "moonlight.icns")
-    copy_file(DESKTOP / "Assets/Aurora.icns", resources / "Aurora.icns")
+    copy_file(DESKTOP / "Assets/Aurora-mac-Dock-77.icns", resources / "Aurora.icns")
     for notice in ("LICENSE", "THIRD-PARTY-NOTICES.txt"):
         copy_file(REPOSITORY / notice, resources / notice)
     if host:
@@ -283,7 +280,7 @@ def assemble(output, stage):
 
 
 def check_output_location(output, *input_trees):
-    sources = input_trees + (DESKTOP / "app", DESKTOP / "Assets", REPOSITORY / "docs/visual-design/assets")
+    sources = input_trees + (DESKTOP / "app", DESKTOP / "Assets", REPOSITORY / "docs")
     if any(output.resolve().is_relative_to(tree.resolve()) for tree in sources):
         raise ValueError("Choose an output outside the runtime and source input trees.")
 
@@ -291,6 +288,8 @@ def check_output_location(output, *input_trees):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     platform = parser.add_subparsers(dest="platform", required=True)
+    ui = platform.add_parser("stage-ui", help="Stage desktop QML and runtime assets")
+    ui.add_argument("--output", type=Path, required=True)
     windows = platform.add_parser("windows")
     for flag in ("launcher", "streamer-directory", "sunshine-directory", "tailscale-directory", "output"):
         windows.add_argument("--" + flag, type=Path, required=True)
@@ -316,7 +315,12 @@ def main():
             mac.error("Supply --launcher and --qt-bin together, or use the launcher from --streamer-contents")
 
     try:
-        if args.platform == "windows":
+        if args.platform == "stage-ui":
+            check_output_location(args.output)
+            if args.output.exists() or args.output.is_symlink():
+                raise FileExistsError(args.output)
+            stage_ui(args.output)
+        elif args.platform == "windows":
             if sys.platform != "win32" or args.output.suffix.lower() == ".app":
                 raise ValueError("Stage the Windows portable folder on Windows.")
             check_output_location(args.output, args.streamer_directory, args.sunshine_directory, args.tailscale_directory)

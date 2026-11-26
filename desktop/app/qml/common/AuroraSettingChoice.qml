@@ -91,7 +91,7 @@ T.ComboBox {
             width: 16
             height: 16
             visible: option.selected
-            icon.source: Qt.resolvedUrl("../../../../docs/visual-design/assets/icons/phosphor/check-bold.svg")
+            icon.source: AuroraTheme.iconAsset("phosphor/check-bold.svg")
             icon.color: "#2350B4"
         }
 

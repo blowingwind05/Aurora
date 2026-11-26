@@ -186,7 +186,8 @@ Window {
         }
         DragHandler {
             target: null
-            enabled: window.customWindowChrome && !window.expanded
+            enabled: (window.customWindowChrome || AuroraTheme.mac) && !window.expanded
+            acceptedButtons: Qt.LeftButton
             onActiveChanged: {
                 if (active)
                     window.startSystemMove()
@@ -420,7 +421,7 @@ Window {
             anchors.verticalCenter: parent.verticalCenter
             width: 18
             height: 18
-            icon.source: Qt.resolvedUrl("../../../../docs/visual-design/assets/icons/phosphor/check-bold.svg")
+            icon.source: AuroraTheme.iconAsset("phosphor/check-bold.svg")
             icon.color: AuroraTheme.statusBlue
         }
 
