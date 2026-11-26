@@ -65,22 +65,26 @@ FocusScope {
 
     MouseArea {
         anchors.fill: parent
-        enabled: !!bar.session.windowControls && !bar.session.fullScreen
-        onDoubleClicked: bar.session.windowControls.toggleMaximized()
+        enabled: bar.session.panelOpen || (!!bar.session.windowControls && !bar.session.fullScreen)
+        onPressed: if (bar.session.panelOpen) bar.session.closePanel(false)
+        onDoubleClicked: {
+            if (bar.session.windowControls && !bar.session.fullScreen)
+                bar.session.windowControls.toggleMaximized()
+        }
     }
     DragHandler {
         target: null
         enabled: !!bar.session.windowControls && !bar.session.fullScreen && !bar.session.maximized
-        onActiveChanged: if (active) bar.session.windowControls.startSystemMove()
+        onActiveChanged: {
+            if (active) {
+                bar.session.closePanel(false)
+                bar.session.windowControls.startSystemMove()
+            }
+        }
     }
 
     HoverHandler { id: barHover }
     readonly property bool pointerInside: barHover.hovered
-    MouseArea {
-        anchors.fill: parent
-        enabled: bar.session.panelOpen
-        onClicked: bar.session.closePanel(false)
-    }
 
     Row {
         id: caption
@@ -271,8 +275,9 @@ FocusScope {
                         Accessible.ignored: true
                     }
                     Aurora.AuroraGlyph {
-                        width: bar.session.phase === StreamSessionChrome.Connecting || bar.session.tight ? 10 : 6
-                        height: 10
+                        objectName: "connectionDetailsChevron"
+                        width: 14
+                        height: 14
                         anchors.verticalCenter: parent.verticalCenter
                         visible: bar.session.connected && !bar.session.tight
                         rotation: status.selected ? 180 : 0

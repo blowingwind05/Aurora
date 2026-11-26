@@ -138,6 +138,9 @@ Item {
             chrome.phase = Stream.StreamSessionChrome.Connected
             chrome.networkQuality = Stream.StreamSessionChrome.Poor
             compare(lookup("connectionStatus").text, "网络较差")
+            const arrow = lookup("connectionDetailsChevron")
+            verify(arrow.visible)
+            compare(arrow.width, 14)
             click("connectionStatus")
             tryCompare(chrome, "panelKind", "connection")
             compare(lookup("metric:接收帧率").text, "59.9 fps")
@@ -202,6 +205,13 @@ Item {
             click("disconnectRemote")
             compare(disconnectSpy.count, 1)
             compare(chrome.panelKind, "")
+
+            click("controlCenter")
+            const bar = lookup("streamTitleBar")
+            mousePress(bar, 3, bar.height / 2)
+            const panelWhilePressed = chrome.panelKind
+            mouseRelease(bar, 3, bar.height / 2)
+            compare(panelWhilePressed, "")
         }
 
         function test_compactAndScrolling() {
