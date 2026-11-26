@@ -51,6 +51,7 @@ jobs:
           host: mac
           target: desktop
           arch: clang_64
+          modules: qtimageformats
 
       - uses: actions/setup-python@v5
         with:
@@ -94,6 +95,7 @@ jobs:
           launcher="$app/Contents/MacOS/Aurora"
           test -x "$launcher"
           test -f "$app/Contents/Resources/ui/desktop/app/qml/Main.qml"
+          test -f "$app/Contents/PlugIns/imageformats/libqwebp.dylib"
           "${clean_env[@]}" "$launcher" --check-native
           runtime="$app/Contents/MacOS/AuroraStream"
           test -x "$runtime"

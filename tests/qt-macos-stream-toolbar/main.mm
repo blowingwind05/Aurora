@@ -35,6 +35,14 @@ AuroraPrivacyAppearanceReply runAuroraPrivacyAppearance(const AuroraPrivacyTarge
     std::abort();
 }
 
+QByteArray runAuroraDisplayCommand(const AuroraPrivacyTarget& target, const QString& operation, const QString& id,
+                                   const std::atomic<bool>& live)
+{
+    if (target.program == QStringLiteral("toolbar-fixture") && operation == QStringLiteral("list") && id.isEmpty() && live)
+        return QByteArrayLiteral("unsupported");
+    std::abort();
+}
+
 QByteArray runAuroraBitrateCommand(const AuroraPrivacyTarget&, const AuroraBitrate::Request&,
                                   const std::atomic<bool>&)
 {
