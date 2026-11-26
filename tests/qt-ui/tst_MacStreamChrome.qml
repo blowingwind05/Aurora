@@ -26,6 +26,7 @@ Item {
     SignalSpy { id: quitPrevious; target: connection; signalName: "quitPreviousRequested" }
     SignalSpy { id: page; target: menu; signalName: "nativeSettingPageRequested" }
     SignalSpy { id: fullscreen; target: menu; signalName: "toggleFullscreenRequested" }
+    SignalSpy { id: details; target: menu; signalName: "connectionDetailsRequested" }
     SignalSpy { id: disconnect; target: menu; signalName: "disconnectRequested" }
 
     TestCase {
@@ -40,6 +41,7 @@ Item {
         }
 
         function test_connectionActions() {
+            connection.visible = true
             var titleBar = findChild(connection, "streamTitleBar")
             verify(titleBar !== null)
             var device = findChild(titleBar, "streamDeviceName")
@@ -60,6 +62,22 @@ Item {
             compare(quitPrevious.count, 1)
             click(titleBar, "endSession")
             compare(cancel.count, 2)
+        }
+
+        function test_fullscreenMenuActions() {
+            connection.visible = false
+            menu.visible = true
+            menu.fullScreen = true
+            const initial = fullscreen.count
+            click(menu, "controlConnectionDetails")
+            compare(details.count, 1)
+            const exit = click(menu, "fullScreen")
+            compare(exit.text, "退出全屏")
+            compare(fullscreen.count, initial + 1)
+            menu.fullScreen = false
+            menu.visible = false
+            connection.visible = true
+            fullscreen.clear()
         }
 
         function test_windowedMenuActions() {

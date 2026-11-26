@@ -37,6 +37,7 @@ public:
             QMetaObject::invokeMethod(menu, "layoutNativeHome");
             connect(menu, SIGNAL(nativeSettingPageRequested(QString)), this, SLOT(openPage(QString)));
             connect(menu, SIGNAL(toggleFullscreenRequested()), this, SLOT(toggleFullscreen()));
+            connect(menu, SIGNAL(connectionDetailsRequested()), this, SLOT(showConnectionDetails()));
             connect(menu, SIGNAL(disconnectRequested()), this, SLOT(disconnectStream()));
         }
     }
@@ -50,6 +51,7 @@ public:
     std::function<void(int)> onOpenPage;
     std::function<void()> onToggleFullscreen;
     std::function<void()> onDisconnect;
+    std::function<void()> onShowConnectionDetails;
 
 private slots:
     void openPage(const QString& page)
@@ -62,4 +64,5 @@ private slots:
 
     void toggleFullscreen() { if (onToggleFullscreen) onToggleFullscreen(); }
     void disconnectStream() { if (onDisconnect) onDisconnect(); }
+    void showConnectionDetails() { if (onShowConnectionDetails) onShowConnectionDetails(); }
 };

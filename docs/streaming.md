@@ -12,7 +12,7 @@
 
 ## Qt Quick 会话界面
 
-Aurora 默认启用 `AURORA_QT_SESSION=1`。Windows 的 Aurora 会话窗和两端的串流组件共用 [QML 连接页](../desktop/app/qml/stream/ConnectionStage.qml)。Windows 在 Aurora 会话窗中嵌入串流画面。macOS 的 AuroraStream 用 Qt Quick 绘制连接页顶栏，并在开始播放时交给 SDL 视频窗口。窗口化控制中心首页复用 Qt Quick，系统窗口边框、已连接顶栏和控制中心设置子页由 AppKit 承载。
+Aurora 默认启用 `AURORA_QT_SESSION=1`。Windows 的 Aurora 会话窗和两端的串流组件共用 [QML 连接页](../desktop/app/qml/stream/ConnectionStage.qml)。Windows 在 Aurora 会话窗中嵌入串流画面。macOS 的 AuroraStream 用 Qt Quick 绘制连接页顶栏，并在开始播放时交给 SDL 视频窗口。控制中心首页复用 Qt Quick，系统窗口边框、已连接顶栏和控制中心设置子页由 AppKit 承载。
 
 ## 已配对设备的建连优化
 

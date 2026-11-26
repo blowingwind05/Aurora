@@ -8,6 +8,7 @@ Column {
     property bool showSettingPages: true
     property bool offerNativeSettings: false
     property bool nativeSettingPages: false
+    property bool offerConnectionDetails: false
     property string page: ""
     property string previousPage: ""
     readonly property var groups: [
@@ -19,6 +20,7 @@ Column {
     signal pageChangedByUser(int reason)
     signal nativeSettingsRequested()
     signal nativeSettingPageRequested(string page)
+    signal connectionDetailsRequested()
 
     function layoutNativeHome() {
         home.forceLayout()
@@ -110,6 +112,18 @@ Column {
             width: 1
             height: 5
         }
+        StreamButton {
+            objectName: "controlConnectionDetails"
+            width: parent.width
+            height: 34
+            cornerRadius: 6
+            rowStyle: true
+            visible: center.offerConnectionDetails
+            text: qsTr("连接详情")
+            icon.source: Aurora.AuroraTheme.icon("info")
+            onClicked: center.connectionDetailsRequested()
+        }
+
         StreamButton {
             id: fullScreenButton
             objectName: "fullScreen"

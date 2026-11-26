@@ -10,6 +10,8 @@ FocusScope {
     property var session
     property bool nativePopup: false
     property bool nativeSettingPages: false
+    property bool offerConnectionDetails: false
+    signal connectionDetailsRequested()
     signal nativeSettingPageRequested(string page)
     property bool overlayWindow: false
     property int heightLimit: session.height - placementTop - gutter
@@ -141,6 +143,8 @@ FocusScope {
             showSettingPages: !panel.nativePopup || panel.nativeSettingPages
             offerNativeSettings: panel.nativePopup && !panel.nativeSettingPages
             nativeSettingPages: panel.nativeSettingPages
+            offerConnectionDetails: panel.offerConnectionDetails
+            onConnectionDetailsRequested: panel.connectionDetailsRequested()
             onNativeSettingPageRequested: function(page) { panel.nativeSettingPageRequested(page) }
             onNativeSettingsRequested: panel.session.nativeSettingsRequested()
             onPageChangedByUser: function(reason) { panel.focusInitial(reason) }

@@ -6,6 +6,8 @@ StreamPanel {
 
     nativePopup: true
     nativeSettingPages: true
+    property bool fullScreen: false
+    offerConnectionDetails: fullScreen
     heightLimit: 430
 
     signal toggleFullscreenRequested()
@@ -19,7 +21,7 @@ StreamPanel {
         readonly property int width: menu.width
         readonly property Item panelAnchor: null
         readonly property int panelFocusReason: Qt.MouseFocusReason
-        readonly property bool fullScreen: false
+        readonly property bool fullScreen: menu.fullScreen
         readonly property bool canSetFullScreen: true
         readonly property bool canDisconnect: true
 
