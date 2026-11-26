@@ -78,6 +78,10 @@ struct Viewer {
         SDL_VERSION(&info.version);
         if (!SDL_GetWindowWMInfo(sdl, &info) || info.subsystem != SDL_SYSWM_COCOA) return;
         window = info.info.cocoa.window;
+        // Production starts with a visible SDL window. Capture the baseline
+        // after Cocoa applies its initial on-screen frame and backing scale.
+        SDL_ShowWindow(sdl);
+        SDL_PumpEvents();
         metal = SDL_Metal_CreateView(sdl);
         video = window.contentView;
         videoSize = video.bounds.size;
@@ -144,14 +148,29 @@ bool testQtToolbar()
     if (!check(viewer.wait([&] { return frame && viewer.window.keyWindow; }), "draw through the SDL Cocoa pump")) return false;
 
     auto* view = reinterpret_cast<NSView*>(bar->winId());
-    const NSRect toolbarRect = [view convertRect:view.bounds toView:nil];
-    const NSRect videoRect = [viewer.video convertRect:viewer.video.bounds toView:nil];
-    if (!check(view.window == viewer.window && NSHeight(toolbarRect) == 44 &&
-           NSMinY(toolbarRect) >= NSMaxY(videoRect) - 1 &&
-           viewer.video == viewer.window.contentView &&
-           NSEqualSizes(viewer.videoSize, viewer.video.bounds.size) &&
-           NSEqualRects(viewer.metalFrame, reinterpret_cast<NSView*>(viewer.metal).frame), "44-point toolbar outside the SDL/Metal view"))
+    const auto preservesVideoGeometry = [&] {
+        if (!bar) return false;
+        const NSRect toolbar = [view convertRect:view.bounds toView:nil];
+        const NSRect video = [viewer.video convertRect:viewer.video.bounds toView:nil];
+        return view.window == viewer.window && NSHeight(toolbar) == 44 &&
+               NSMinY(toolbar) >= NSMaxY(video) - 1 &&
+               viewer.video == viewer.window.contentView &&
+               NSEqualSizes(viewer.videoSize, viewer.video.bounds.size) &&
+               NSEqualRects(viewer.metalFrame, reinterpret_cast<NSView*>(viewer.metal).frame);
+    };
+    if (!check(viewer.wait(preservesVideoGeometry), "44-point toolbar outside the SDL/Metal view")) {
+        const auto height = bar ? NSHeight(view.bounds) : 0;
+        const auto title = bar ? [view convertRect:view.bounds toView:nil] : NSZeroRect;
+        const auto video = [viewer.video convertRect:viewer.video.bounds toView:nil];
+        const auto metal = reinterpret_cast<NSView*>(viewer.metal).frame;
+        std::fprintf(stderr,
+            "Cocoa layout: title=%s, height=%.2f, video=%s, expected video=%s, metal=%s, expected metal=%s, same content=%d, same window=%d\n",
+            NSStringFromRect(title).UTF8String, double(height), NSStringFromRect(video).UTF8String,
+            NSStringFromSize(viewer.videoSize).UTF8String, NSStringFromRect(metal).UTF8String,
+            NSStringFromRect(viewer.metalFrame).UTF8String, viewer.video == viewer.window.contentView,
+            bar && view.window == viewer.window);
         return false;
+    }
     if (!check([viewer.window standardWindowButton:NSWindowCloseButton] &&
                [viewer.window standardWindowButton:NSWindowMiniaturizeButton] &&
                [viewer.window standardWindowButton:NSWindowZoomButton], "three native window buttons")) return false;

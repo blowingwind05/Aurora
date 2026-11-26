@@ -64,6 +64,15 @@ cp "$client_proof_source" "$source/app/backend/aurora-client-proof.h"
 cp "$desktop/Assets/Aurora-mac-Dock-77.icns" "$source/app/moonlight.icns"
 source_ready=true
 
+qt_prefix="$("$qmake" -query QT_INSTALL_PREFIX)"
+if [[ "${AURORA_VERIFY_COCOA_TOOLBAR:-0}" == 1 ]]; then
+  fixture="$work/cocoa-toolbar"
+  cmake -S "$repository/tests/qt-macos-stream-toolbar" -B "$fixture" -DCMAKE_BUILD_TYPE=Release \
+    "-DCMAKE_PREFIX_PATH=$qt_prefix" "-DMOONLIGHT_SOURCE=$source"
+  cmake --build "$fixture" --config Release --parallel
+  ctest --test-dir "$fixture" -C Release --output-on-failure
+fi
+
 echo '编译极光串流组件…'
 mkdir "$build"
 (
@@ -75,7 +84,6 @@ mkdir "$build"
 stage="$build/app/Moonlight.app/Contents"
 
 echo '编译 Aurora…'
-qt_prefix="$("$qmake" -query QT_INSTALL_PREFIX)"
 min_os="$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$destination/Info.plist")"
 aurora_build="$work/aurora"
 cmake -S "$desktop" -B "$aurora_build" -DCMAKE_BUILD_TYPE=Release \

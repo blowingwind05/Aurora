@@ -74,18 +74,11 @@ jobs:
           "$QT_ROOT_DIR/bin/qmltestrunner" -input tests/qt-ui/tst_MacConnectedTitleBar.qml -o -,txt
 
       - name: Build and sign Aurora.app
+        env:
+          AURORA_VERIFY_COCOA_TOOLBAR: '1'
         run: |
           pwsh -NoProfile -File ./desktop/tailnet/Build-Tailnet.ps1 -Runtime "osx-$AURORA_ARCHITECTURE" -OutputDirectory "$RUNNER_TEMP/aurora-tailnet" -RunTests
           pwsh -NoProfile -File ./desktop/packaging/Build-Mac.ps1 -Architecture "$AURORA_ARCHITECTURE" -Qmake "$QT_ROOT_DIR/bin/qmake" -TailscaleDirectory "$RUNNER_TEMP/aurora-tailnet"
-
-      - name: Verify the Qt toolbar with an SDL Cocoa window
-        run: |
-          source="$(cat "desktop/obj/upstream-sources/moonlight/macos-$AURORA_ARCHITECTURE/latest-source.txt")"
-          build="$RUNNER_TEMP/aurora-cocoa-toolbar"
-          cmake -S tests/qt-macos-stream-toolbar -B "$build" -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_PREFIX_PATH="$QT_ROOT_DIR" -DMOONLIGHT_SOURCE="$source"
-          cmake --build "$build" --config Release --parallel
-          ctest --test-dir "$build" -C Release --output-on-failure
 
       - name: Verify the packaged launcher and runtimes
         run: |
