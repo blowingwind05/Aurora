@@ -56,6 +56,18 @@ Item {
             verify(!findChild(chrome, "addDisplay").enabled)
             verify(!findChild(chrome, "closeTab:20").enabled)
             chrome.displayRequestBusy = false
+            virtual.selectable = true
+            chrome.displaySnapshot = {activeDisplayId: "10", canCreate: true, canSelect: true,
+                                      displays: [physical, virtual]}
+            var tab = findChild(chrome, "displayTab:20")
+            verify(tab.enabled)
+            mouseClick(tab)
+            compare(displayRequests.count, 1)
+            compare(displayRequests.signalArguments[0][0], "20")
+            compare(chrome.activeDisplayId, "10")
+            chrome.switchingDisplayId = "20"
+            verify(chrome.activeDisplayId !== chrome.switchingDisplayId)
+            chrome.switchingDisplayId = ""
             chrome.displaySnapshot = {}
         }
 

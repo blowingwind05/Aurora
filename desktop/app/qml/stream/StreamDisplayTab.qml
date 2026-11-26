@@ -8,6 +8,8 @@ Item {
 
     property var display
     property bool selected: false
+    property bool switching: false
+    property bool reduceMotion: false
     property bool detailsOpen: false
     property bool sessionActive: false
     property bool readOnly: false
@@ -75,7 +77,8 @@ Item {
         enabled: !tab.readOnly && tab.sessionActive && (tab.selected || tab.display.ready === true)
         Accessible.role: tab.readOnly ? Accessible.StaticText : Accessible.Button
         text: tab.display.shortName || tab.display.name
-        hint: tab.display.name
+        hint: tab.switching ? qsTr("正在切换至 %1…").arg(tab.display.name)
+            : tab.display.aspectBlocked ? qsTr("当前串流比例与这块显示器不匹配") : tab.display.name
         Accessible.name: tab.display.name
         Accessible.selected: tab.selected
         background: Rectangle {
@@ -94,8 +97,17 @@ Item {
                 anchors.verticalCenter: parent.verticalCenter
                 width: 14
                 height: 14
+                visible: !tab.switching
                 icon.source: Aurora.AuroraTheme.icon("monitor")
                 icon.color: title.color
+            }
+            StreamRing {
+                anchors.verticalCenter: parent.verticalCenter
+                width: 14
+                height: 14
+                visible: tab.switching
+                spinning: true
+                reduceMotion: tab.reduceMotion
             }
             StreamText {
                 id: title

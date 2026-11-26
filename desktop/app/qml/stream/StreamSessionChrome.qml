@@ -36,6 +36,7 @@ Item {
     property var connectionMetrics: ({})
     property var displays: []
     property string activeDisplayId
+    property string switchingDisplayId
     property bool canCreateDisplay: false
     property bool creatingDisplay: false
     property string createDisplayUnavailableReason

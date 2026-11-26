@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #pragma once
 
+#include <QDeadlineTimer>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -8,8 +9,18 @@
 #include <QVariantMap>
 
 #include <limits>
+#include <optional>
 
 namespace AuroraDisplayControls {
+
+inline std::optional<quint32> frameNumber(const QJsonValue& value)
+{
+    const double number = value.toDouble(-1);
+    if (!(number >= 0 && number <= std::numeric_limits<quint32>::max()))
+        return {};
+    const auto integer = static_cast<quint32>(number);
+    return number == integer ? std::optional<quint32>(integer) : std::nullopt;
+}
 
 inline QString displayId(const QJsonValue& value)
 {
@@ -53,6 +64,10 @@ inline QVariantMap snapshot(const QByteArray& response)
             {QStringLiteral("name"), name},
             {QStringLiteral("kind"), kind},
             {QStringLiteral("ready"), ready.toBool()},
+            {QStringLiteral("selectable"), ready.toBool() &&
+                display.value(QStringLiteral("selectable")).toBool()},
+            {QStringLiteral("aspectBlocked"), display.value(QStringLiteral("selectBlockReason")) ==
+                QStringLiteral("incompatible-aspect")},
             {QStringLiteral("removable"), kind == QStringLiteral("virtual") && removable.toBool()},
         };
         const auto width = display.value(QStringLiteral("width")).toInt();
@@ -66,10 +81,76 @@ inline QVariantMap snapshot(const QByteArray& response)
     }
     if (!seen.contains(selected))
         return {};
-    return {{QStringLiteral("status"), status},
-            {QStringLiteral("displays"), displays},
-            {QStringLiteral("activeDisplayId"), selected},
-            {QStringLiteral("canSelect"), object.value(QStringLiteral("canSelect")).toBool()},
-            {QStringLiteral("canCreate"), object.value(QStringLiteral("canCreate")).toBool()}};
+    QVariantMap result{{QStringLiteral("status"), status},
+                       {QStringLiteral("displays"), displays},
+                       {QStringLiteral("activeDisplayId"), selected},
+                       {QStringLiteral("canSelect"), object.value(QStringLiteral("canSelect")).toBool()},
+                       {QStringLiteral("canCreate"), object.value(QStringLiteral("canCreate")).toBool()}};
+    const auto pending = object.value(QStringLiteral("pendingDisplayId"));
+    if (!pending.isUndefined() && !pending.isNull()) {
+        const auto pendingId = displayId(pending);
+        const auto generation = frameNumber(object.value(QStringLiteral("switchGeneration")));
+        if (pendingId == selected || !seen.contains(pendingId) || !generation || !*generation)
+            return {};
+        result.insert(QStringLiteral("pendingDisplayId"), pendingId);
+        result.insert(QStringLiteral("switchGeneration"), *generation);
+        const auto firstFrame = object.value(QStringLiteral("firstFrame"));
+        if (!firstFrame.isUndefined() && !firstFrame.isNull()) {
+            const auto frame = frameNumber(firstFrame);
+            if (!frame)
+                return {};
+            result.insert(QStringLiteral("firstFrame"), *frame);
+        }
+    }
+    return result;
 }
+
+enum class SwitchProgress { Poll, Present, Applied, Rejected, Uncertain };
+
+class DisplaySwitch {
+public:
+    void begin(const QString& target)
+    {
+        target_ = target;
+        deadline_ = QDeadlineTimer(18000);
+        generation_ = 0;
+        presentationRequested_ = false;
+    }
+
+    void clear() { target_.clear(); }
+    bool active() const { return !target_.isEmpty(); }
+    bool expired() const { return deadline_.hasExpired(); }
+    const QString& target() const { return target_; }
+    quint32 generation() const { return generation_; }
+    quint32 firstFrame() const { return firstFrame_; }
+    void presentationRequested() { presentationRequested_ = true; }
+
+    SwitchProgress observe(const QVariantMap& state)
+    {
+        if (state.isEmpty())
+            return SwitchProgress::Poll;
+        const auto pending = state.value(QStringLiteral("pendingDisplayId")).toString();
+        if (pending.isEmpty()) {
+            if (state.value(QStringLiteral("activeDisplayId")).toString() != target_)
+                return SwitchProgress::Rejected;
+            return presentationRequested_ ? SwitchProgress::Applied : SwitchProgress::Uncertain;
+        }
+        const auto generation = state.value(QStringLiteral("switchGeneration")).toUInt();
+        if (pending != target_ || !generation || (generation_ && generation != generation_))
+            return SwitchProgress::Uncertain;
+        generation_ = generation;
+        if (!state.contains(QStringLiteral("firstFrame")) || presentationRequested_)
+            return SwitchProgress::Poll;
+        firstFrame_ = state.value(QStringLiteral("firstFrame")).toUInt();
+        return SwitchProgress::Present;
+    }
+
+private:
+    QString target_;
+    QDeadlineTimer deadline_;
+    quint32 generation_ = 0;
+    quint32 firstFrame_ = 0;
+    bool presentationRequested_ = false;
+};
+
 }  // namespace AuroraDisplayControls

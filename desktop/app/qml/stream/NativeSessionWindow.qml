@@ -214,12 +214,14 @@ Window {
         canDisconnect: connected
         readonly property var displayState: session && !window.finished ? session.displayState : ({})
         displays: (displayState.displays || []).map(function(entry) {
-            return { id: entry.id, name: entry.name, ready: entry.ready && displayState.canSelect === true && !displayState.busy,
+            return { id: entry.id, name: entry.name, ready: entry.selectable && displayState.canSelect === true && !displayState.busy,
+                aspectBlocked: entry.aspectBlocked,
                 kind: entry.kind === "virtual" ? qsTr("虚拟显示器") : qsTr("系统显示器"),
                 resolution: entry.resolution, refreshRate: entry.refreshRate,
                 removable: entry.removable, removalPending: displayState.busy }
         })
         activeDisplayId: displayState.activeDisplayId || ""
+        switchingDisplayId: displayState.switchTarget || ""
         displayControls: displays.length > 0
         canCreateDisplay: displayState.canCreate === true && !displayState.busy
         creatingDisplay: displayState.creating === true

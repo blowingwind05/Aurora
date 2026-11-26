@@ -297,6 +297,9 @@ void SessionSupervisor::launchPlayback()
     }
     auto environment = QProcessEnvironment::systemEnvironment();
     environment.remove(StreamSession::SwitchChannel);
+    environment.remove(StreamSession::DisplayChannel);
+    if (embed)
+        environment.insert(StreamSession::DisplayChannel, QStringLiteral("1"));
     if (platform_ == Stream::RuntimePlatform::MacOS && resolved_.certificateSha256.size() == 32)
         environment.insert(StreamSession::SwitchChannel, QStringLiteral("1"));
     if (!environment.contains("AURORA_QT_SESSION"))
@@ -352,7 +355,8 @@ void SessionSupervisor::launchWorker(const Stream::Command &command, bool probin
     output_.clear();
     discardLine_ = false;
     auto *child = new Stream::MoonlightProcess(this);
-    if (!probing && command.environment.contains(StreamSession::SwitchChannel))
+    if (!probing && (command.environment.contains(StreamSession::SwitchChannel) ||
+                     command.environment.contains(StreamSession::DisplayChannel)))
         child->setInputChannelMode(QProcess::ManagedInputChannel);
     worker_ = child;
     if (bindSurface && !surface_.bindWorker(child))
@@ -430,6 +434,10 @@ void SessionSupervisor::handleLine(QByteArray line)
     }
 
     if (platform_ == Stream::RuntimePlatform::Windows) {
+        if (line == StreamSession::DisplayPaused || line == StreamSession::DisplayPauseDenied) {
+            beginPausedDisplaySwitch(line == StreamSession::DisplayPaused);
+            return;
+        }
         if (line == StreamSession::PinnedControlAvailable && controlRoute_ && !controlRoute_->revalidated) {
             if (!std::exchange(pinnedControlAvailable_, true)) {
                 refreshPrivacyScreen();
@@ -634,7 +642,6 @@ void SessionSupervisor::completeFinish()
     privacyRequest_ = {};
     displayRequest_ = {};
     displayOperation_.clear();
-    displayId_.clear();
     controlRoute_.reset();
     surface_.requestStop();
     if (lease_) {

@@ -13,7 +13,8 @@ StreamSessionChrome {
     brandAtEnd: true
     displays: !displayControls ? [{ id: "current", name: qsTr("显示器 1") }]
         : displaySnapshot.displays.map(function(entry) {
-            return { id: entry.id, name: entry.name, ready: entry.ready && displaySnapshot.canSelect === true && !displayRequestBusy,
+            return { id: entry.id, name: entry.name, ready: entry.selectable && displaySnapshot.canSelect === true && !displayRequestBusy,
+                aspectBlocked: entry.aspectBlocked,
                 kind: entry.kind === "virtual" ? qsTr("虚拟显示器") : qsTr("系统显示器"),
                 resolution: entry.resolution, refreshRate: entry.refreshRate,
                 removable: entry.removable, removalPending: displayRequestBusy }

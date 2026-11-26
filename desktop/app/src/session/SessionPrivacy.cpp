@@ -64,7 +64,7 @@ bool SessionSupervisor::canQueryPrivacy() const
 
 bool SessionSupervisor::privacyAllowsPlaybackReplacement() const
 {
-    return privacyRequest_.isNull() &&
+    return privacyRequest_.isNull() && !displaySwitch_.active() &&
         (displayRequest_.isNull() || displayOperation_ == QLatin1String("list")) && (!canQueryPrivacy() || privacyState_ == PrivacyState::Off ||
         privacyState_ == PrivacyState::Unsupported);
 }
@@ -133,7 +133,7 @@ bool SessionSupervisor::requestPrivacyAppearance(const QString &action, const QU
 bool SessionSupervisor::startPrivacy(Operation operation, const QString &appearanceFile)
 {
     if (phase_ != Phase::Streaming || videoSettingsPending() || !canQueryPrivacy() || !privacyRequest_.isNull() ||
-        (!displayRequest_.isNull() && displayOperation_ != QLatin1String("list")) ||
+        displaySwitch_.active() || (!displayRequest_.isNull() && displayOperation_ != QLatin1String("list")) ||
         !worker_ || worker_->state() != QProcess::Running || !surface_.videoReady()) {
         return false;
     }

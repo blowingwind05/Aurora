@@ -43,7 +43,7 @@ void SessionSupervisor::requestVideoSetting(QString option, QString value)
 bool SessionSupervisor::reconfigureVideo(SessionPlaybackSettings settings)
 {
     Q_ASSERT(thread() == QThread::currentThread());
-    if (!hasWindowsVideo() || !canRestartVideo())
+    if (!hasWindowsVideo() || !canRestartVideo() || displaySwitch_.active())
         return false;
 
     const auto reject = [this](const QString &message) {

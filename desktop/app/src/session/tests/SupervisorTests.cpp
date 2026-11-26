@@ -167,6 +167,7 @@ class SupervisorTests final : public QObject
     Q_OBJECT
 
 private slots:
+    void displayCutoverRequiresThePendingGeneration();
     void authorizationAndView();
     void relayStaysThroughWorkerExit();
     void cancelSentOpenDrainsItsLease();
@@ -198,6 +199,44 @@ private slots:
     void privacyStopsWithPlayback();
 #endif
 };
+
+
+void SupervisorTests::displayCutoverRequiresThePendingGeneration()
+{
+    using namespace AuroraDisplayControls;
+    const QByteArray list = R"("canSelect":true,"canCreate":true,"displays":[
+        {"id":10,"kind":"physical","name":"Main","ready":true,"removable":false},
+        {"id":20,"kind":"virtual","name":"Virtual","ready":true,"removable":true}])";
+    const auto old = snapshot(QByteArrayLiteral(R"({"status":"ok","activeDisplayId":10,)") + list + '}');
+    const auto done = snapshot(QByteArrayLiteral(R"({"status":"ok","activeDisplayId":20,)") + list + '}');
+    const auto pending = snapshot(QByteArrayLiteral(R"({"status":"pending","activeDisplayId":10,
+        "pendingDisplayId":20,"switchGeneration":7,)") + list + '}');
+    const auto frame = snapshot(QByteArrayLiteral(R"({"status":"pending","activeDisplayId":10,
+        "pendingDisplayId":20,"switchGeneration":7,"firstFrame":0,)") + list + '}');
+
+    QVERIFY(!old.isEmpty() && !done.isEmpty() && !pending.isEmpty() && !frame.isEmpty());
+    DisplaySwitch switching;
+    switching.begin(QStringLiteral("20"));
+    QCOMPARE(switching.observe(done), SwitchProgress::Uncertain);
+    QCOMPARE(switching.observe({}), SwitchProgress::Poll);
+    QCOMPARE(switching.observe(pending), SwitchProgress::Poll);
+    QCOMPARE(switching.observe(frame), SwitchProgress::Present);
+    QCOMPARE(switching.generation(), quint32(7));
+    QCOMPARE(switching.firstFrame(), quint32(0));
+    QCOMPARE(switching.observe(done), SwitchProgress::Uncertain);
+
+    auto stale = frame;
+    stale.insert(QStringLiteral("switchGeneration"), 6);
+    QCOMPARE(switching.observe(stale), SwitchProgress::Uncertain);
+    switching.presentationRequested();
+    QCOMPARE(switching.observe(frame), SwitchProgress::Poll);
+    QCOMPARE(switching.observe(old), SwitchProgress::Rejected);
+    QCOMPARE(switching.observe(done), SwitchProgress::Applied);
+
+    const auto invalid = QByteArrayLiteral(R"({"status":"pending","activeDisplayId":10,
+        "pendingDisplayId":20,"switchGeneration":7,"firstFrame":4294967296,)") + list + '}';
+    QVERIFY(snapshot(invalid).isEmpty());
+}
 
 #ifdef Q_OS_WIN
 void SupervisorTests::weakRouteObservationResets()

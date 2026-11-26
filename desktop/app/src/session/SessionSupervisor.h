@@ -6,6 +6,7 @@
 #include "ServerInfoClient.h"
 #include "StreamSurface.h"
 #include "EmbeddedStatusClient.h"
+#include "../../../runtime/stream/qt-session/AuroraDisplayControls.h"
 
 #include <QQueue>
 #include <QElapsedTimer>
@@ -230,6 +231,10 @@ private:
     void revokePrivacy();
     void displayFinished(const QUuid &token, const Stream::Control::Result &result);
     void resetDisplays();
+    void beginPausedDisplaySwitch(bool paused);
+    bool startDisplayOperation(const QString &operation, const QString &id = {});
+    bool sendDisplayCommand(const QByteArray &command);
+    void finishDisplaySwitch(const QString &message, bool uncertain = false);
 
     const QString executable_;
     const Stream::RuntimePlatform platform_;
@@ -268,9 +273,10 @@ private:
     std::optional<Stream::Control::Operation> appearanceRequest_;
     std::unique_ptr<Stream::Control::Adapter> displayControl_;
     QUuid displayRequest_;
+    bool displayPausePending_ = false;
+    AuroraDisplayControls::DisplaySwitch displaySwitch_;
     QVariantMap displaySnapshot_;
     QString displayOperation_;
-    QString displayId_;
     QString displayMessage_;
     std::unique_ptr<Stream::Control::Adapter> bitrateControl_;
     std::optional<Stream::Control::VideoBitrate> liveBitrate_;

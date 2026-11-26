@@ -363,6 +363,8 @@ FocusScope {
                             display: modelData
                             selected: display.id === bar.session.activeDisplayId
                             sessionActive: bar.session.connected
+                            switching: display.id === bar.session.switchingDisplayId
+                            reduceMotion: bar.session.reduceMotion
                             readOnly: !bar.session.displayControls
                             detailsOpen: selected && bar.session.panelKind === "displays"
                             showDivider: !selected && !hovered
