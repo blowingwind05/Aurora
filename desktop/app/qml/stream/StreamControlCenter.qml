@@ -366,6 +366,16 @@ Column {
                 })
                 onRequested: function(mode) { center.session.privacyModeRequested(mode) }
             }
+            StreamButton {
+                width: parent.width
+                height: 32
+                rowStyle: true
+                text: qsTr("设置隐私屏保")
+                enabled: center.session.privacyAppearanceAvailable
+                icon.source: Aurora.AuroraTheme.icon("settings")
+                trailingIcon: Aurora.AuroraTheme.icon("chevron-right")
+                onClicked: center.session.privacyAppearanceRequested()
+            }
             StreamText {
                 width: parent.width
                 text: center.session.privacyScreenMessage

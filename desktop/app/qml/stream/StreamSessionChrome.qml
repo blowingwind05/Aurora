@@ -48,6 +48,7 @@ Item {
     property var mouseMode: null
     property var privacyScreen: null
     property string privacyScreenMessage
+    property bool privacyAppearanceAvailable: false
     property bool mouseCaptured: false
     property string releaseMouseShortcut
 
@@ -91,6 +92,7 @@ Item {
     signal swapMouseButtonsRequested(bool enabled)
     signal reverseScrollRequested(bool enabled)
     signal privacyModeRequested(string mode)
+    signal privacyAppearanceRequested()
 
     function focusControls(reason) {
         if (!connected)

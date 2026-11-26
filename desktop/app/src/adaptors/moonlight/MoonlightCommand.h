@@ -34,7 +34,8 @@ struct Route
 };
 
 enum class Operation { Stream, Pair, BackgroundPair, List, Wallpaper, Restart, Shutdown,
-                       PrivacyStatus, PrivacyOn, PrivacyOff, PrivacyDisplayOff, BitrateStatus, BitrateSet, RouteProbe };
+                       PrivacyStatus, PrivacyOn, PrivacyOff, PrivacyDisplayOff, AppearanceRead, AppearanceSave, AppearanceReset,
+                       BitrateStatus, BitrateSet, DisplayControl, RouteProbe };
 enum class Probe { Runtime, EmbeddedWindow, GameStreamRelay, BackgroundPair, HostIdentity };
 
 struct BitrateChange
@@ -62,6 +63,12 @@ struct PreferenceDefaults
     bool useBundledDefaults;
 };
 
+struct DisplayChange
+{
+    QString operation;
+    quint32 id = 0;
+};
+
 struct Request
 {
     Operation operation = Operation::Stream;
@@ -78,6 +85,8 @@ struct Request
     QJsonObject sessionPreferences;
     std::optional<BitrateChange> bitrate;
     bool resumeOnly = false;
+    QString appearanceFile;
+    DisplayChange display;
 };
 
 struct Command

@@ -113,8 +113,12 @@ QStringList operationArguments(const Request &request, const QString &endpoint)
     case Operation::PrivacyOn:
     case Operation::PrivacyOff:
     case Operation::PrivacyDisplayOff:
+    case Operation::AppearanceRead:
+    case Operation::AppearanceSave:
+    case Operation::AppearanceReset:
     case Operation::BitrateStatus:
     case Operation::BitrateSet:
+    case Operation::DisplayControl:
     case Operation::RouteProbe:
         break;
     }
@@ -133,6 +137,25 @@ QStringList operationArguments(const Request &request, const QString &endpoint)
     case Operation::PrivacyOn: return {QStringLiteral("privacy"), endpoint, id, QStringLiteral("on")};
     case Operation::PrivacyOff: return {QStringLiteral("privacy"), endpoint, id, QStringLiteral("off")};
     case Operation::PrivacyDisplayOff: return {QStringLiteral("privacy"), endpoint, id, QStringLiteral("display-off")};
+    case Operation::AppearanceRead:
+        return {QStringLiteral("privacy-appearance"), endpoint, id, QStringLiteral("read")};
+    case Operation::AppearanceReset:
+        return {QStringLiteral("privacy-appearance"), endpoint, id, QStringLiteral("reset")};
+    case Operation::AppearanceSave:
+        if (!absoluteFilesystemPath(request.appearanceFile) || !QFileInfo(request.appearanceFile).isFile())
+            return {};
+        return {QStringLiteral("privacy-appearance"), endpoint, id, QStringLiteral("save"), request.appearanceFile};
+    case Operation::DisplayControl: {
+        const auto &display = request.display;
+        QStringList args{QStringLiteral("display-control"), endpoint, id, display.operation};
+        if (display.id == 0 && (display.operation == QLatin1String("list") || display.operation == QLatin1String("create")))
+            return args;
+        if (display.id != 0 && (display.operation == QLatin1String("select") || display.operation == QLatin1String("remove"))) {
+            args.append(QString::number(display.id));
+            return args;
+        }
+        return {};
+    }
     case Operation::BitrateStatus: return {QStringLiteral("bitrate"), endpoint, id, QStringLiteral("status")};
     case Operation::BitrateSet: {
         if (!request.bitrate || !validBitrateSession(request.bitrate->session) ||

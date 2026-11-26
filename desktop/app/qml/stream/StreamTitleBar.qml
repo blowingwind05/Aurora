@@ -304,6 +304,7 @@ FocusScope {
 
         Row {
             id: displayGroup
+            objectName: "streamDisplayGroup"
             height: bar.height
             spacing: 3
 

@@ -17,12 +17,13 @@ namespace Aurora::Stream { class MoonlightProcess; }
 
 namespace Aurora::Stream::Control {
 
-enum class Operation { Restart, Shutdown, PrivacyStatus, PrivacyOn, PrivacyOff, PrivacyDisplayOff, BitrateStatus, BitrateSet };
+enum class Operation { Restart, Shutdown, PrivacyStatus, PrivacyOn, PrivacyOff, PrivacyDisplayOff,
+                       BitrateStatus, BitrateSet, AppearanceRead, AppearanceSave, AppearanceReset, DisplayControl };
 enum class PrivacyState { Off, On, DisplayOff, Unavailable, Unsupported };
 enum class Status {
     Accepted, PrivacyReported, BitrateReported, BitrateApplied, BitrateStale, BitrateBusy,
     BitratePending, BitrateExpired, BitrateRejected, BitrateFailed,
-    PairingRequired, Unconfirmed, InvalidAuthorization,
+    AppearanceReported, DisplayReported, InvalidImage, PairingRequired, Unconfirmed, InvalidAuthorization,
     RouteChanged, CapabilityUnavailable, RuntimeUnavailable, RelayProbeFailed, StartFailed,
     WorkerCrashed, TimedOut, Cancelled, OutputLimitExceeded
 };
@@ -41,6 +42,8 @@ struct Result
     Status status = Status::InvalidAuthorization;
     std::optional<PrivacyState> privacy;
     std::optional<VideoBitrate> bitrate;
+    QByteArray appearanceImage;
+    QByteArray displaySnapshot;
 };
 
 // An active, certificate-pinned public playback supplies its authenticated route.
@@ -57,6 +60,8 @@ struct Authorization
     std::function<bool(const QUuid &)> stillCurrent;
     std::optional<BitrateChange> bitrateChange;
     QByteArray certificateSha256;
+    QString appearanceFile;
+    DisplayChange display;
 };
 
 // Operate on the caller's Qt event-loop thread, shared with any stream lease.

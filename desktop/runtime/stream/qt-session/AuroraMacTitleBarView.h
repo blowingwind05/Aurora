@@ -20,7 +20,11 @@ public:
         if (auto* chrome = rootObject()) {
             controls = chrome->findChild<QQuickItem*>(QStringLiteral("controlCenter"));
             statusButton = chrome->findChild<QQuickItem*>(QStringLiteral("connectionStatus"));
+            displayGroup = chrome->findChild<QQuickItem*>(QStringLiteral("streamDisplayGroup"));
             connect(chrome, SIGNAL(nativePanelRequested(QString,bool)), this, SLOT(openPanel(QString,bool)));
+            connect(chrome, SIGNAL(displayRequested(QString)), this, SLOT(selectDisplay(QString)));
+            connect(chrome, SIGNAL(createDisplayRequested()), this, SLOT(createDisplay()));
+            connect(chrome, SIGNAL(removeDisplayRequested(QString)), this, SLOT(removeDisplay(QString)));
         }
     }
 
@@ -28,7 +32,8 @@ public:
 
     bool hasButtonAt(const QPointF& scenePoint) const
     {
-        return hit(controls, scenePoint) || hit(statusButton, scenePoint);
+        return hit(controls, scenePoint) || hit(statusButton, scenePoint) ||
+            (displayGroup && rootObject()->property("displayControls").toBool() && hit(displayGroup, scenePoint));
     }
 
     QRectF controlsRect() const { return itemRect(controls); }
@@ -48,12 +53,30 @@ public:
 
     std::function<void(bool)> onControls;
     std::function<void(const QRectF&)> onConnection;
+    std::function<void(const QRectF&)> onDisplays;
+    std::function<void(const QString&, const QString&)> onDisplayAction;
 
 private slots:
     void openPanel(const QString& kind, bool keyboard)
     {
         if (kind == QStringLiteral("controls") && onControls) onControls(keyboard);
         if (kind == QStringLiteral("connection") && onConnection) onConnection(connectionRect());
+        if (kind == QStringLiteral("displays") && onDisplays) onDisplays(itemRect(displayGroup));
+    }
+
+    void selectDisplay(const QString& id)
+    {
+        if (onDisplayAction) onDisplayAction(QStringLiteral("select"), id);
+    }
+
+    void createDisplay()
+    {
+        if (onDisplayAction) onDisplayAction(QStringLiteral("create"), {});
+    }
+
+    void removeDisplay(const QString& id)
+    {
+        if (onDisplayAction) onDisplayAction(QStringLiteral("remove"), id);
     }
 
 private:
@@ -69,4 +92,5 @@ private:
 
     QQuickItem* controls = nullptr;
     QQuickItem* statusButton = nullptr;
+    QQuickItem* displayGroup = nullptr;
 };

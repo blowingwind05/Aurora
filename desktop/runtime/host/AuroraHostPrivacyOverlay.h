@@ -2,6 +2,8 @@
 #pragma once
 
 #ifdef _WIN32
+#include "AuroraHostPrivacyImage.h"
+
 #include <windows.h>
 #include <shlobj.h>
 
@@ -34,7 +36,12 @@ public:
         }
     }
 
-    static std::unique_ptr<PrivacyTestOverlay> start()
+    /**
+     * @brief Start the installed UIAccess test overlay and optionally share the host's opaque artwork.
+     * @param profile The active Aurora host profile.
+     * @return An overlay that passed the existing token and readiness checks.
+     */
+    static std::unique_ptr<PrivacyTestOverlay> start(const std::filesystem::path &profile)
     {
         PWSTR programFiles = nullptr;
         if (FAILED(SHGetKnownFolderPath(FOLDERID_ProgramFiles, 0, nullptr, &programFiles)) || !programFiles) {
@@ -59,6 +66,10 @@ public:
         overlay->lost_ = makeEvent(prefix + L".lost");
         if (!overlay->ready_ || !overlay->stop_ || !overlay->lost_) {
             return {};
+        }
+
+        if (const auto image = PrivacyScreensaverImage::load(profile)) {
+            overlay->image_ = image->share(prefix + L".image");
         }
 
         const auto installDirectory = executable.parent_path();
@@ -125,6 +136,7 @@ private:
             && !elevation.TokenIsElevated;
     }
 
+    PrivacyImageMapping image_;
     Handle ready_;
     Handle stop_;
     Handle lost_;

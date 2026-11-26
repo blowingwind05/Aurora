@@ -18,6 +18,9 @@ Item {
 
     SignalSpy { id: panels; target: chrome; signalName: "nativePanelRequested" }
 
+    SignalSpy { id: displayRequests; target: chrome; signalName: "displayRequested" }
+    SignalSpy { id: createRequests; target: chrome; signalName: "createDisplayRequested" }
+
     TestCase {
         name: "MacConnectedTitleBar"
         when: windowShown
@@ -33,6 +36,27 @@ Item {
             verify(!findChild(chrome, "displayTab:current").enabled)
             verify(!findChild(chrome, "addDisplay").visible)
             verify(!findChild(chrome, "endSession").visible)
+        }
+
+        function test_displayInventoryRespectsHostCapability() {
+            var physical = {id: "10", name: "主显示器", kind: "physical", ready: true}
+            var virtual = {id: "20", name: "Aurora 虚拟显示器", kind: "virtual", ready: true, removable: true}
+            displayRequests.clear()
+            createRequests.clear()
+            chrome.displaySnapshot = {activeDisplayId: "10", canCreate: true, canSelect: false,
+                                      displays: [physical, virtual]}
+            tryVerify(function() { return !!findChild(chrome, "displayTab:20") })
+            verify(!findChild(chrome, "displayTab:20").enabled)
+            verify(findChild(chrome, "addDisplay").enabled)
+            mouseClick(findChild(chrome, "addDisplay"))
+            compare(createRequests.count, 1)
+            compare(displayRequests.count, 0)
+
+            chrome.displayRequestBusy = true
+            verify(!findChild(chrome, "addDisplay").enabled)
+            verify(!findChild(chrome, "closeTab:20").enabled)
+            chrome.displayRequestBusy = false
+            chrome.displaySnapshot = {}
         }
 
         function test_panelActions() {

@@ -9,6 +9,8 @@ enum class AuroraStreamOperation {
     Wallpaper,
     Power,
     Privacy,
+    PrivacyAppearance,
+    DisplayControl,
     Bitrate,
     RouteProbe,
     ClientProof,

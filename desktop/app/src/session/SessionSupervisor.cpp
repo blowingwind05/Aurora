@@ -76,6 +76,9 @@ SessionSupervisor::SessionSupervisor(QString bundledExecutable, aurora::tailscal
         privacyControl_ = std::make_unique<Stream::Control::Adapter>();
         connect(privacyControl_.get(), &Stream::Control::Adapter::finished,
                 this, &SessionSupervisor::privacyFinished, Qt::QueuedConnection);
+        displayControl_ = std::make_unique<Stream::Control::Adapter>();
+        connect(displayControl_.get(), &Stream::Control::Adapter::finished,
+                this, &SessionSupervisor::displayFinished, Qt::QueuedConnection);
         bitrateControl_ = std::make_unique<Stream::Control::Adapter>();
         connect(bitrateControl_.get(), &Stream::Control::Adapter::finished,
                 this, &SessionSupervisor::videoBitrateFinished, Qt::QueuedConnection);
@@ -144,6 +147,7 @@ SessionSupervisor::SessionSupervisor(QString bundledExecutable, aurora::tailscal
 SessionSupervisor::~SessionSupervisor()
 {
     privacyControl_.reset();
+    displayControl_.reset();
     bitrateControl_.reset();
     disconnect(&surface_, nullptr, this, nullptr);
     if (tailnet_) {
@@ -427,8 +431,10 @@ void SessionSupervisor::handleLine(QByteArray line)
 
     if (platform_ == Stream::RuntimePlatform::Windows) {
         if (line == StreamSession::PinnedControlAvailable && controlRoute_ && !controlRoute_->revalidated) {
-            if (!std::exchange(pinnedControlAvailable_, true))
+            if (!std::exchange(pinnedControlAvailable_, true)) {
                 refreshPrivacyScreen();
+                requestDisplay(QStringLiteral("list"));
+            }
             return;
         }
         if (surface_.handleWorkerLine(worker_, line))
@@ -613,6 +619,7 @@ void SessionSupervisor::finish(SessionResult result)
     if (sessionControlBusy())
         setPhase(Phase::Stopping);
     revokePrivacy();
+    resetDisplays();
     resetVideoBitrate();
     completeFinish();
 }
@@ -625,6 +632,9 @@ void SessionSupervisor::completeFinish()
     const auto generation = candidate_.generation;
     const auto result = *pendingFinish_;
     privacyRequest_ = {};
+    displayRequest_ = {};
+    displayOperation_.clear();
+    displayId_.clear();
     controlRoute_.reset();
     surface_.requestStop();
     if (lease_) {

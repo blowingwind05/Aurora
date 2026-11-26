@@ -106,7 +106,8 @@ void SessionSupervisor::resetVideoBitrate()
 
 bool SessionSupervisor::sessionControlBusy() const
 {
-    return (privacyControl_ && privacyControl_->busy()) || (bitrateControl_ && bitrateControl_->busy());
+    return (privacyControl_ && privacyControl_->busy()) || (bitrateControl_ && bitrateControl_->busy()) ||
+        (displayControl_ && displayControl_->busy());
 }
 
 } // namespace Aurora::Session

@@ -72,6 +72,7 @@ jobs:
         run: |
           "$QT_ROOT_DIR/bin/qmltestrunner" -input tests/qt-ui/tst_MacStreamChrome.qml -o -,txt
           "$QT_ROOT_DIR/bin/qmltestrunner" -input tests/qt-ui/tst_MacConnectedTitleBar.qml -o -,txt
+          "$QT_ROOT_DIR/bin/qmltestrunner" -input tests/qt-ui/tst_PrivacyScreensaverEditor.qml -o -,txt
 
       - name: Build and sign Aurora.app
         env:

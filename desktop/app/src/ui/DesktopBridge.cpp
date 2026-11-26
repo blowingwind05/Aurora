@@ -6,6 +6,7 @@
 #include <QCoreApplication>
 #include <QDir>
 #include <QEvent>
+#include <QFileDialog>
 #include <QFileInfo>
 #include <QJsonObject>
 #include <QKeySequence>
@@ -60,6 +61,13 @@ bool DesktopBridge::eventFilter(QObject *watched, QEvent *event)
     }
 #endif
     return QObject::eventFilter(watched, event);
+}
+
+QUrl DesktopBridge::choosePrivacyAppearanceImage()
+{
+    const auto file = QFileDialog::getOpenFileName(nullptr, tr("选择隐私屏保图片"), {},
+        tr("图片 (*.png *.jpg *.jpeg)"));
+    return file.isEmpty() ? QUrl() : QUrl::fromLocalFile(file);
 }
 
 QVariantMap DesktopBridge::state() const

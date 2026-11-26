@@ -2,6 +2,7 @@
 #pragma once
 
 #include <QObject>
+#include <QUrl>
 #include <QVariantMap>
 
 #include <memory>
@@ -25,6 +26,7 @@ public:
     Q_INVOKABLE void sendPreference(const QString &action, int requestId, const QVariant &value);
     Q_INVOKABLE void sendTailscale(const QString &action, const QString &target, int revision);
     Q_INVOKABLE void sendSunshine(const QString &action, const QVariantMap &data);
+    Q_INVOKABLE QUrl choosePrivacyAppearanceImage();
 
 signals:
     void stateChanged();

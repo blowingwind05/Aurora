@@ -29,7 +29,8 @@ foreach(name aurora-session-toolbar.mm aurora-session-toolbar.h aurora-session-t
              aurora-session-privacy.h aurora-connection-details.h)
     configure_file("${moonlight}/app/streaming/${name}" "${engine}/streaming/${name}" COPYONLY)
 endforeach()
-foreach(name AuroraMacTitleBarView.h AuroraMacControlsView.h)
+foreach(name AuroraMacTitleBarView.h AuroraMacControlsView.h AuroraMacPrivacyAppearanceView.h
+             AuroraPrivacyArtwork.h)
     configure_file("${desktop}/runtime/stream/qt-session/${name}" "${engine}/qt-session/${name}" COPYONLY)
 endforeach()
 configure_file("${desktop}/protocol/bitrate/ClientProtocol.h" "${engine}/backend/aurora-bitrate.h" COPYONLY)
@@ -37,7 +38,8 @@ configure_file("${desktop}/protocol/bitrate/ClientProtocol.h" "${engine}/backend
 add_executable(AuroraMacStreamToolbar MACOSX_BUNDLE main.mm
     "${engine}/streaming/aurora-session-toolbar.mm"
     "${engine}/qt-session/AuroraMacTitleBarView.h"
-    "${engine}/qt-session/AuroraMacControlsView.h")
+    "${engine}/qt-session/AuroraMacControlsView.h"
+    "${engine}/qt-session/AuroraMacPrivacyAppearanceView.h")
 target_include_directories(AuroraMacStreamToolbar PRIVATE "${engine}" "${frameworks}/SDL2.framework/Versions/A/Headers")
 target_link_libraries(AuroraMacStreamToolbar PRIVATE Qt${QT_VERSION_MAJOR}::Quick
     Qt${QT_VERSION_MAJOR}::QuickControls2 Qt${QT_VERSION_MAJOR}::Svg
@@ -49,6 +51,7 @@ add_custom_target(StageStreamToolbarFixture ALL
     COMMAND "${CMAKE_COMMAND}" -E make_directory "${ui}/app" "${ui}/Assets"
     COMMAND "${CMAKE_COMMAND}" -E copy_directory "${desktop}/app/qml" "${ui}/app/qml"
     COMMAND "${CMAKE_COMMAND}" -E copy_directory "${desktop}/Assets/icons" "${ui}/Assets/icons"
+    COMMAND "${CMAKE_COMMAND}" -E copy_directory "${desktop}/Assets/Wallpapers" "${ui}/Assets/Wallpapers"
     COMMAND "${CMAKE_COMMAND}" -E copy "${desktop}/Assets/Aurora.png" "${ui}/Assets/Aurora.png"
     VERBATIM)
 add_dependencies(StageStreamToolbarFixture AuroraMacStreamToolbar)

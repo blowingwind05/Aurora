@@ -64,7 +64,8 @@ bool SessionSupervisor::canQueryPrivacy() const
 
 bool SessionSupervisor::privacyAllowsPlaybackReplacement() const
 {
-    return privacyRequest_.isNull() && (!canQueryPrivacy() || privacyState_ == PrivacyState::Off ||
+    return privacyRequest_.isNull() &&
+        (displayRequest_.isNull() || displayOperation_ == QLatin1String("list")) && (!canQueryPrivacy() || privacyState_ == PrivacyState::Off ||
         privacyState_ == PrivacyState::Unsupported);
 }
 
@@ -118,11 +119,23 @@ void SessionSupervisor::setPrivacyMode(const QString &mode)
         startPrivacy(Operation::PrivacyOff);
 }
 
-void SessionSupervisor::startPrivacy(Operation operation)
+bool SessionSupervisor::requestPrivacyAppearance(const QString &action, const QUrl &image)
+{
+    if (action == QLatin1String("read"))
+        return startPrivacy(Operation::AppearanceRead);
+    if (action == QLatin1String("reset"))
+        return startPrivacy(Operation::AppearanceReset);
+    if (action == QLatin1String("save") && image.isLocalFile())
+        return startPrivacy(Operation::AppearanceSave, image.toLocalFile());
+    return false;
+}
+
+bool SessionSupervisor::startPrivacy(Operation operation, const QString &appearanceFile)
 {
     if (phase_ != Phase::Streaming || videoSettingsPending() || !canQueryPrivacy() || !privacyRequest_.isNull() ||
+        (!displayRequest_.isNull() && displayOperation_ != QLatin1String("list")) ||
         !worker_ || worker_->state() != QProcess::Running || !surface_.videoReady()) {
-        return;
+        return false;
     }
 
     const auto token = QUuid::createUuid();
@@ -131,9 +144,19 @@ void SessionSupervisor::startPrivacy(Operation operation)
         controlRoute_->checkedRelay, lease_, [this, attempt](const QUuid &current) {
             return attempt_ == attempt && privacyRequest_ == current && canQueryPrivacy() &&
                 phase_ == Phase::Streaming && surface_.videoReady() && worker_ && worker_->state() == QProcess::Running;
-        }, {}, resolved_.certificateSha256};
+        }, {}, resolved_.certificateSha256, appearanceFile};
     if (privacyControl_->start(std::move(grant))) {
         privacyRequest_ = token;
+        const bool appearance = operation == Operation::AppearanceRead || operation == Operation::AppearanceSave ||
+                                operation == Operation::AppearanceReset;
+        if (appearance) {
+            appearanceRequest_ = operation;
+            privacyAppearance_.insert(QStringLiteral("state"), operation == Operation::AppearanceRead
+                ? QStringLiteral("loading") : QStringLiteral("saving"));
+            privacyAppearance_.remove(QStringLiteral("message"));
+            emit privacyAppearanceChanged();
+            return true;
+        }
         privacyFeedback_.clear();
         switch (operation) {
         case Operation::PrivacyOn: privacyTarget_ = PrivacyState::On; break;
@@ -142,7 +165,9 @@ void SessionSupervisor::startPrivacy(Operation operation)
         default: privacyTarget_.reset(); break;
         }
         emit privacyScreenChanged();
+        return true;
     }
+    return false;
 }
 
 void SessionSupervisor::privacyFinished(const QUuid &token, const Control::Result &result)
@@ -151,8 +176,36 @@ void SessionSupervisor::privacyFinished(const QUuid &token, const Control::Resul
         return;
     privacyRequest_ = {};
     const auto requestedMode = std::exchange(privacyTarget_, std::nullopt);
+    const auto appearance = std::exchange(appearanceRequest_, std::nullopt);
     if (pendingFinish_) {
         completeFinish();
+        return;
+    }
+    if (appearance) {
+        QString state;
+        QString message;
+        if (result.status == Control::Status::AppearanceReported) {
+            state = QStringLiteral("ready");
+            privacyAppearance_.insert(QStringLiteral("image"), result.appearanceImage.isEmpty() ? QString() :
+                QStringLiteral("data:image/png;base64,") + QString::fromLatin1(result.appearanceImage));
+        } else if (result.status == Control::Status::Accepted) {
+            state = QStringLiteral("saved");
+            message = tr("样式已保存，下次开启隐私屏保时生效。");
+        } else if (result.status == Control::Status::CapabilityUnavailable) {
+            state = QStringLiteral("unsupported");
+            message = tr("被控端暂不支持自定义屏保。");
+        } else if (result.status == Control::Status::TimedOut || result.status == Control::Status::RouteChanged ||
+                   result.status == Control::Status::Cancelled) {
+            state = QStringLiteral("unconfirmed");
+            message = tr("保存结果待确认，重新连接这台设备后可核对。");
+        } else {
+            state = QStringLiteral("failed");
+            message = result.status == Control::Status::InvalidImage ? tr("无法读取这张图片。")
+                : tr("未收到被控端确认，请重试。");
+        }
+        privacyAppearance_.insert(QStringLiteral("state"), state);
+        privacyAppearance_.insert(QStringLiteral("message"), message);
+        emit privacyAppearanceChanged();
         return;
     }
     if (phase_ == Phase::Streaming && canQueryPrivacy() && surface_.videoReady() &&
@@ -173,6 +226,8 @@ void SessionSupervisor::revokePrivacy()
         return;
     privacyState_.reset();
     privacyFeedback_.clear();
+    privacyAppearance_.clear();
+    emit privacyAppearanceChanged();
     if (!privacyRequest_.isNull())
         privacyControl_->cancel(privacyRequest_);
     emit privacyScreenChanged();

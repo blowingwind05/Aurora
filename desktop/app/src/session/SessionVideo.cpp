@@ -186,6 +186,7 @@ void SessionSupervisor::playbackReady()
         if (view_.startFullScreen)
             setFullScreen(true);
         emit videoSettingsChanged();
+        requestDisplay(QStringLiteral("list"));
         return;
     }
 
@@ -199,8 +200,10 @@ void SessionSupervisor::playbackReady()
     videoChange_.reset();
     emit videoSettingsApplied(applied);
     emit videoSettingsChanged();
-    if (attempt_ == token && phase_ == Phase::Streaming)
+    if (attempt_ == token && phase_ == Phase::Streaming) {
         refreshPrivacyScreen();
+        requestDisplay(QStringLiteral("list"));
+    }
 }
 
 } // namespace Aurora::Session

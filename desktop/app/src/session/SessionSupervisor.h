@@ -10,6 +10,7 @@
 #include <QQueue>
 #include <QElapsedTimer>
 #include <QUuid>
+#include <QUrl>
 #include <QVariantMap>
 
 #include <variant>
@@ -108,6 +109,8 @@ class SessionSupervisor final : public QObject
     Q_PROPERTY(bool networkPoor READ networkPoor NOTIFY connectionChanged)
     Q_PROPERTY(QVariant privacyScreen READ privacyScreen NOTIFY privacyScreenChanged)
     Q_PROPERTY(QString privacyScreenMessage READ privacyScreenMessage NOTIFY privacyScreenChanged)
+    Q_PROPERTY(QVariantMap privacyAppearance READ privacyAppearance NOTIFY privacyAppearanceChanged)
+    Q_PROPERTY(QVariantMap displayState READ displayState NOTIFY displaysChanged)
     Q_PROPERTY(QVariantMap videoSettings READ videoSettings NOTIFY videoSettingsChanged)
     Q_PROPERTY(bool videoSettingsPending READ videoSettingsPending NOTIFY videoSettingsChanged)
     Q_PROPERTY(QString videoSettingsMessage READ videoSettingsMessage NOTIFY videoSettingsChanged)
@@ -144,6 +147,8 @@ public:
     }
     QVariant privacyScreen() const;
     QString privacyScreenMessage() const;
+    QVariantMap privacyAppearance() const { return privacyAppearance_; }
+    QVariantMap displayState() const;
     QVariantMap videoSettings() const;
     bool videoSettingsPending() const { return videoChange_.has_value(); }
     QString videoSettingsMessage() const { return videoMessage_; }
@@ -156,6 +161,8 @@ public:
     Q_INVOKABLE void refreshPrivacyScreen();
     Q_INVOKABLE void setPrivacyScreen(bool enabled);
     Q_INVOKABLE void setPrivacyMode(const QString &mode);
+    Q_INVOKABLE bool requestDisplay(const QString &operation, const QString &id = {});
+    Q_INVOKABLE bool requestPrivacyAppearance(const QString &action, const QUrl &image = {});
     Q_INVOKABLE void requestVideoSetting(QString option, QString value);
     Q_INVOKABLE void refreshVideoBitrate();
 
@@ -168,6 +175,8 @@ signals:
     void connectionChanged();
     void clientPixelSizeChanged(const QSize &size);
     void privacyScreenChanged();
+    void privacyAppearanceChanged();
+    void displaysChanged();
     void videoSettingsChanged();
     void videoSettingsApplied(bool success);
     void videoSettingRequested(QString option, QString value);
@@ -212,13 +221,15 @@ private:
     bool canUseSessionControls() const;
     bool canQueryPrivacy() const;
     bool privacyAllowsPlaybackReplacement() const;
-    void startPrivacy(Stream::Control::Operation operation);
+    bool startPrivacy(Stream::Control::Operation operation, const QString &appearanceFile = {});
     void privacyFinished(const QUuid &token, const Stream::Control::Result &result);
     bool startVideoBitrate(Stream::Control::Operation operation, std::optional<Stream::BitrateChange> change = {});
     void videoBitrateFinished(const QUuid &token, const Stream::Control::Result &result);
     void resetVideoBitrate();
     bool sessionControlBusy() const;
     void revokePrivacy();
+    void displayFinished(const QUuid &token, const Stream::Control::Result &result);
+    void resetDisplays();
 
     const QString executable_;
     const Stream::RuntimePlatform platform_;
@@ -253,6 +264,14 @@ private:
     QUuid privacyRequest_;
     std::optional<Stream::Control::PrivacyState> privacyTarget_;
     QString privacyFeedback_;
+    QVariantMap privacyAppearance_;
+    std::optional<Stream::Control::Operation> appearanceRequest_;
+    std::unique_ptr<Stream::Control::Adapter> displayControl_;
+    QUuid displayRequest_;
+    QVariantMap displaySnapshot_;
+    QString displayOperation_;
+    QString displayId_;
+    QString displayMessage_;
     std::unique_ptr<Stream::Control::Adapter> bitrateControl_;
     std::optional<Stream::Control::VideoBitrate> liveBitrate_;
     bool bitrateCapabilityReported_ = false;

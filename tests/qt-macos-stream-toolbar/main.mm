@@ -3,6 +3,8 @@
 #include "streaming/aurora-session-toolbar.h"
 #include "streaming/aurora-session-privacy.h"
 #include "qt-session/AuroraMacTitleBarView.h"
+#include "qt-session/AuroraMacControlsView.h"
+#include "qt-session/AuroraMacPrivacyAppearanceView.h"
 
 #import <AppKit/AppKit.h>
 #include <SDL_metal.h>
@@ -15,9 +17,21 @@
 #include <cstdio>
 #include <cstdlib>
 
-AuroraPrivacyState runAuroraPrivacyCommand(const AuroraPrivacyTarget&, AuroraPrivacyOperation,
+AuroraPrivacyState runAuroraPrivacyCommand(const AuroraPrivacyTarget& target, AuroraPrivacyOperation action,
                                            const std::atomic<bool>&)
 {
+    if (target.program == QStringLiteral("toolbar-fixture") && action == AuroraPrivacyOperation::Status)
+        return AuroraPrivacyState::Off;
+    std::abort();
+}
+
+AuroraPrivacyAppearanceReply runAuroraPrivacyAppearance(const AuroraPrivacyTarget& target,
+    AuroraPrivacyAppearanceAction action, const QString& file, const std::atomic<bool>& sessionLive,
+    const std::atomic<bool>& editorLive)
+{
+    if (target.program == QStringLiteral("toolbar-fixture") && action == AuroraPrivacyAppearanceAction::Read &&
+        file.isEmpty() && sessionLive && editorLive)
+        return {AuroraPrivacyAppearanceState::Default, {}};
     std::abort();
 }
 
@@ -96,10 +110,10 @@ struct Viewer {
         SDL_DestroyWindow(sdl);
     }
 
-    bool install()
+    bool install(const std::shared_ptr<AuroraSessionPrivacy>& privacy = {})
     {
         if (!window || !metal ||
-            !installAuroraSessionToolbar(sdl, QStringLiteral("Fixture"), false, {}, 850, 440)) return false;
+            !installAuroraSessionToolbar(sdl, QStringLiteral("Fixture"), false, privacy, 850, 440)) return false;
         SDL_ShowWindow(sdl);
         [NSApp activateIgnoringOtherApps:YES];
         [window makeKeyAndOrderFront:nil];
@@ -130,10 +144,59 @@ struct Viewer {
     }
 };
 
+NSButton* appearanceButton(NSView* root)
+{
+    if ([root isKindOfClass:NSButton.class] && [root.identifier isEqualToString:@"auroraPrivacyAppearance"])
+        return (NSButton*)root;
+    for (NSView* child in root.subviews) {
+        if (auto* button = appearanceButton(child)) return button;
+    }
+    return nil;
+}
+
+bool testAppearanceEditor(Viewer& viewer)
+{
+    QPointer<AuroraMacControlsView> home;
+    for (auto* window : QGuiApplication::allWindows()) {
+        if (auto* controls = qobject_cast<AuroraMacControlsView*>(window)) home = controls;
+    }
+    if (!check(home, "find the Qt controls panel")) return false;
+    auto* homeView = reinterpret_cast<NSView*>(home->winId());
+    auto* panel = homeView.window;
+    auto* safety = home->rootObject()->findChild<QQuickItem*>(QStringLiteral("controlPage:safety"));
+    if (!check(panel && safety, "locate the safety page button")) return false;
+    postClick(homeView, safety->mapRectToScene(QRectF(0, 0, safety->width(), safety->height())));
+    if (!check(viewer.wait([&] { return appearanceButton(panel.contentView).enabled; }), "open the AppKit safety page"))
+        return false;
+    auto* button = appearanceButton(panel.contentView);
+    postClick(button, QRectF(0, 0, NSWidth(button.bounds), NSHeight(button.bounds)));
+
+    QPointer<AuroraMacPrivacyAppearanceView> editor;
+    if (!check(viewer.wait([&] {
+        for (auto* window : QGuiApplication::allWindows()) {
+            if (auto* view = qobject_cast<AuroraMacPrivacyAppearanceView*>(window)) editor = view;
+        }
+        return editor && editor->rootObject()->property("available").toBool();
+    }), "load the appearance editor and read the fixture default")) return false;
+    auto* view = reinterpret_cast<NSView*>(editor->winId());
+    if (!check(view.window == panel && panel.parentWindow == viewer.window &&
+               (panel.collectionBehavior & NSWindowCollectionBehaviorFullScreenAuxiliary) && auroraPrivacyEditorOwnsInput(),
+        "reuse the playback auxiliary panel and route input locally")) return false;
+    auto* close = editor->rootObject()->findChild<QQuickItem*>(QStringLiteral("privacyEditorClose"));
+    if (!check(close, "locate the appearance editor close button")) return false;
+    postClick(view, close->mapRectToScene(QRectF(0, 0, close->width(), close->height())));
+    return check(viewer.wait([&] { return !auroraPrivacyEditorOwnsInput() &&
+                       appearanceButton(panel.contentView).enabled; }), "close editor and restore the safety page");
+}
+
 bool testQtToolbar()
 {
     Viewer viewer;
-    if (!check(viewer.install(), "create SDL/Metal window and install toolbar")) return false;
+    auto privacy = std::make_shared<AuroraSessionPrivacy>(
+        AuroraPrivacyTarget{QStringLiteral("toolbar-fixture"), {}, {}, {}, {}});
+    privacy->state = AuroraPrivacyState::Off;
+    privacy->lastStatusCheck.start();
+    if (!check(viewer.install(privacy), "create SDL/Metal window and install toolbar")) return false;
 
     QPointer<AuroraMacTitleBarView> bar;
     for (auto* window : QGuiApplication::allWindows()) {
@@ -202,6 +265,14 @@ bool testQtToolbar()
         return bar && bar->rootObject()->property("panelKind").toString() == QStringLiteral("controls");
     }) && viewer.forwardedKeys == forwarded, "Space opens controls without forwarding a video key")) return false;
 
+    if (!testAppearanceEditor(viewer)) return false;
+    postKey(NSApp.keyWindow, 53, @"\033");
+    if (!check(viewer.wait([&] {
+        for (auto* window : QGuiApplication::allWindows()) {
+            if (auto* view = qobject_cast<AuroraMacControlsView*>(window)) return view->isVisible();
+        }
+        return false;
+    }), "return to the control center home")) return false;
     postKey(NSApp.keyWindow, 53, @"\033");
     if (!check(viewer.wait([&] { return bar && bar->rootObject()->property("panelKind").toString().isEmpty(); }),
                "close the menu before resizing")) return false;

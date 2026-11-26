@@ -54,6 +54,13 @@ Window {
         }
     }
 
+    function openPrivacyAppearance() {
+        if (finished || !session)
+            return
+        chrome.closePanel(false)
+        artwork.openEditor()
+    }
+
     function requestPictureSetting(option, value) {
         if (!window.finished && session && !switchingPicture)
             session.requestVideoSetting(option, String(value))
@@ -84,6 +91,114 @@ Window {
         heading: window.switchingPicture ? qsTr("正在切换画质…") : qsTr("正在连接…")
     }
 
+    Window {
+        id: artwork
+
+        transientParent: window
+        modality: Qt.WindowModal
+        flags: Qt.Dialog | Qt.FramelessWindowHint
+        color: "transparent"
+        title: qsTr("设置隐私屏保")
+        width: Math.min(686, window.width - 24)
+        height: Math.min(520, window.height - 24)
+        x: window.x + (window.width - width) / 2
+        y: window.y + (window.height - height) / 2
+
+        property int pendingSave: 0
+        property var submittedStyle: null
+        property bool ready: false
+        property string reason
+        readonly property var defaultStyle: ({id: "default", kind: "default"})
+
+        function openEditor() {
+            ready = false
+            reason = qsTr("读取被控设备的已保存样式…")
+            editor.beginEdit(window.deviceName, defaultStyle, defaultStyle)
+            show()
+            if (!window.session.requestPrivacyAppearance("read"))
+                reason = qsTr("当前无法读取被控设备的屏保设置。")
+            editor.focusEditor()
+        }
+
+        onClosing: {
+            pendingSave = 0
+            submittedStyle = null
+            editor.endEdit()
+            if (!window.finished && chrome.connected)
+                chrome.focusControls()
+        }
+
+        Connections {
+            target: window.session
+            function onPrivacyAppearanceChanged() {
+                if (!artwork.visible)
+                    return
+                const reply = window.session.privacyAppearance
+                if (reply.state === "ready") {
+                    artwork.ready = true
+                    artwork.reason = ""
+                    const confirmed = reply.image ? {id: "remote", kind: "custom",
+                        previewUrl: reply.image, name: qsTr("已保存样式")} : artwork.defaultStyle
+                    if (artwork.pendingSave && editor.saveState === PrivacyScreensaverEditor.Unconfirmed) {
+                        editor.reconcileSaved(artwork.pendingSave, confirmed)
+                        artwork.pendingSave = 0
+                        artwork.submittedStyle = null
+                    } else {
+                        editor.beginEdit(window.deviceName, confirmed, artwork.defaultStyle)
+                        editor.focusEditor()
+                    }
+                } else if (reply.state === "saved" && artwork.pendingSave) {
+                    editor.completeSave(artwork.pendingSave, PrivacyScreensaverEditor.Succeeded,
+                        reply.message, artwork.submittedStyle)
+                    artwork.pendingSave = 0
+                    artwork.submittedStyle = null
+                } else if (reply.state === "unconfirmed" && artwork.pendingSave) {
+                    editor.completeSave(artwork.pendingSave, PrivacyScreensaverEditor.Unconfirmed, reply.message)
+                } else if (reply.state === "failed" || reply.state === "unsupported" || reply.state === "unconfirmed") {
+                    if (artwork.pendingSave) {
+                        editor.completeSave(artwork.pendingSave, PrivacyScreensaverEditor.Failed, reply.message)
+                        artwork.pendingSave = 0
+                        artwork.submittedStyle = null
+                    } else {
+                        artwork.reason = reply.message || qsTr("当前无法读取被控设备的屏保设置。")
+                    }
+                }
+            }
+        }
+
+        PrivacyScreensaverEditor {
+            id: editor
+            anchors.fill: parent
+            available: artwork.ready
+            disabledReason: artwork.reason
+            screensaverActive: !!chrome.privacyScreen && chrome.privacyScreen.mode === "screensaver"
+            importHint: qsTr("JPG 或 PNG")
+            reduceMotion: chrome.reduceMotion
+            onCloseRequested: artwork.close()
+            onImportRequested: function(id) {
+                const source = auroraBridge.choosePrivacyAppearanceImage()
+                const path = String(source)
+                if (!path) {
+                    editor.finishImport(id, "")
+                    return
+                }
+                editor.provideImport(id, {id: "local-" + id, kind: "custom",
+                    name: decodeURIComponent(path.slice(path.lastIndexOf("/") + 1)), previewUrl: path})
+            }
+            onSaveRequested: function(id, style) {
+                artwork.pendingSave = id
+                artwork.submittedStyle = style
+                const accepted = style.kind === "default" ? window.session.requestPrivacyAppearance("reset")
+                    : window.session.requestPrivacyAppearance("save", style.previewUrl)
+                if (!accepted) {
+                    editor.completeSave(id, PrivacyScreensaverEditor.Failed, qsTr("当前无法同步屏保样式。"))
+                    artwork.pendingSave = 0
+                    artwork.submittedStyle = null
+                }
+            }
+        }
+    }
+
     StreamSessionChrome {
         id: chrome
         anchors.fill: parent
@@ -97,6 +212,21 @@ Window {
         canSetFullScreen: connected
         canCancel: !connected
         canDisconnect: connected
+        readonly property var displayState: session && !window.finished ? session.displayState : ({})
+        displays: (displayState.displays || []).map(function(entry) {
+            return { id: entry.id, name: entry.name, ready: entry.ready && displayState.canSelect === true && !displayState.busy,
+                kind: entry.kind === "virtual" ? qsTr("虚拟显示器") : qsTr("系统显示器"),
+                resolution: entry.resolution, refreshRate: entry.refreshRate,
+                removable: entry.removable, removalPending: displayState.busy }
+        })
+        activeDisplayId: displayState.activeDisplayId || ""
+        displayControls: displays.length > 0
+        canCreateDisplay: displayState.canCreate === true && !displayState.busy
+        creatingDisplay: displayState.creating === true
+        displayActionError: displayState.message || ""
+        onDisplayRequested: function(id) { if (session) session.requestDisplay("select", id) }
+        onCreateDisplayRequested: if (session) session.requestDisplay("create")
+        onRemoveDisplayRequested: function(id) { if (session) session.requestDisplay("remove", id) }
         connectionMetrics: session ? session.connectionMetrics : ({})
         preferences: window.picturePreferences()
         videoSettingsApplyDuringSession: !!preferences.resolution
@@ -105,6 +235,8 @@ Window {
         networkQuality: session && session.networkPoor ? StreamSessionChrome.Poor : StreamSessionChrome.Normal
         privacyScreen: session && !window.finished ? (session.privacyScreen || null) : null
         privacyScreenMessage: session && !window.finished ? session.privacyScreenMessage : ""
+        privacyAppearanceAvailable: connected && !!privacyScreen
+        onPrivacyAppearanceRequested: window.openPrivacyAppearance()
 
         onPanelKindChanged: {
             if (panelKind === "controls" && !window.finished && session) {

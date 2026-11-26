@@ -21,6 +21,8 @@ constexpr Command Commands[] = {
     {"wallpaper", Operation::Wallpaper},
     {"power", Operation::Power},
     {"privacy", Operation::Privacy},
+    {"privacy-appearance", Operation::PrivacyAppearance},
+    {"display-control", Operation::DisplayControl},
     {"bitrate", Operation::Bitrate},
     {"route-probe", Operation::RouteProbe},
     {"client-proof", Operation::ClientProof},
