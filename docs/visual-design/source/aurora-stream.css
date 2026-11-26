@@ -152,12 +152,11 @@ button:focus-visible, .mode:has(input:focus-visible), .control-choices label:has
   white-space: nowrap;
 }
 .controls { width: 94px; }
-.disconnect { width: 58px; }
-.session[data-phase="failed"] .disconnect { visibility: hidden; }
+.cancel-connection { width: 58px; }
 .tool:hover:not(:disabled) { background: var(--hover); }
 .tool[aria-expanded="true"] { background: var(--selected); }
 .tool:disabled { opacity: .37; }
-.disconnect:hover:not(:disabled) { background: #f6e4e7; color: #9a3241; }
+.cancel-connection:hover:not(:disabled), .control-row.disconnect:hover:not(:disabled) { background: #f6e4e7; color: #9a3241; }
 
 .captions { height: 100%; display: flex; flex: none; }
 .captions button {
@@ -313,8 +312,8 @@ button:focus-visible, .mode:has(input:focus-visible), .control-choices label:has
   .status span { position: absolute; inline-size: 1px; block-size: 1px; overflow: hidden; clip-path: inset(50%); }
   .captions button { width: 38px; }
   .display-add, .compact-display { width: 25px; }
-  .disconnect { width: 32px; }
-  .disconnect span { display: none; }
+  .cancel-connection { width: 32px; }
+  .cancel-connection span { display: none; }
   .detail-panel, .display-error { top: calc(100% + 2px); left: 8px; }
 }
 @media (width < 540px) {
@@ -332,4 +331,61 @@ button:focus-visible, .mode:has(input:focus-visible), .control-choices label:has
   .display-tabs { transition: none; }
   .spinner, [data-phase="connecting"] .status i { animation: none; }
   .session.is-fullscreen .session-bar { transition: none; }
+}
+
+/* Privacy screensaver editor */
+.privacy-mode-heading, .privacy-preview-header, .privacy-picker-heading {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0;
+}
+.privacy-mode-heading { font-size: 13px; }
+.privacy-mode-heading span, .privacy-preview-header span { color: var(--muted); font-size: 12px; }
+.privacy-modes button { flex: 1 0 auto; min-width: 0; padding: 5px 6px; border: 0; border-radius: 5px; background: var(--paper); font-size: 12px; }
+.privacy-modes button[aria-pressed="true"] { background: var(--selected); color: #173d83; }
+.privacy-modes button:disabled, .privacy-open:disabled { opacity: .55; }
+.privacy-open { padding-inline: 0; }
+.privacy-editor {
+  width: min(686px, calc(100vw - 24px)); max-height: min(630px, calc(100dvh - 24px));
+  padding: 0; overflow: hidden; border: 1px solid #dbe2ed; border-radius: 13px;
+  background: #fff; color: var(--ink); box-shadow: 0 14px 36px #19283f29;
+}
+.privacy-editor[open] { display: flex; flex-direction: column; }
+.privacy-editor::backdrop { background: #19283f58; }
+.privacy-header { display: flex; justify-content: space-between; gap: 12px; padding: 17px 20px 12px; }
+.privacy-header h2 { margin: 0 0 3px; font-size: 21px; font-weight: 600; }
+.privacy-header p, .privacy-preview p, .privacy-import-name { color: var(--muted); font-size: 12px; }
+.privacy-close { width: 30px; height: 30px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 7px; background: none; }
+.privacy-close:not(:disabled):hover { background: var(--hover); }
+.privacy-editor-body { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); align-items: start; gap: 16px; padding: 4px 20px 16px; overflow: auto; }
+.privacy-preview { min-width: 0; display: grid; gap: 7px; }
+.privacy-preview-header strong, .privacy-picker-heading h3 { font-size: 14px; font-weight: 600; }
+.privacy-preview-header span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.privacy-preview img { display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: cover; border: 1px solid #dbe2ed; border-radius: 11px; background: var(--paper); }
+.privacy-picker-heading { margin-bottom: 6px; }
+.privacy-picker-heading h3 { margin: 0; }
+.privacy-presets { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+.privacy-preset { min-width: 0; padding: 3px; border: 1px solid transparent; border-radius: 8px; background: var(--paper); font-size: 11px; text-align: left; }
+.privacy-preset img { display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: cover; border-radius: 5px; }
+.privacy-preset span { display: block; padding: 3px 2px 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.privacy-preset[aria-pressed="true"] { border-color: var(--accent); background: #edf4fd; color: #173d83; }
+.privacy-preset:not(:disabled):hover { background: var(--hover); }
+.privacy-import-name { margin-top: 6px; overflow-wrap: anywhere; }
+.privacy-save-status { padding: 0 20px 9px; font-size: 12px; color: var(--muted); }
+.privacy-save-status.is-error { color: #a43b47; }
+.privacy-footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 11px 20px 13px; border-top: 1px solid #e7ebf3; }
+.privacy-footer > div { display: flex; gap: 8px; }
+.privacy-text-button { background: transparent; border: 0; border-radius: 6px; color: #2350b4; font-size: 12px; padding: 4px 6px; white-space: nowrap; }
+.privacy-text-button:not(:disabled):hover { background: var(--hover); }
+.privacy-action { display: flex; align-items: center; gap: 6px; min-height: 34px; padding: 0 11px; border: 1px solid #cdd7e6; border-radius: 7px; background: #fff; white-space: nowrap; font-size: 13px; }
+.privacy-action:not(:disabled):hover { background: var(--hover); }
+.extension-save { border-color: #087cf5; background: #087cf5; color: white; font-weight: 600; }
+.extension-save:not(:disabled):hover { background: #076bd3; }
+.privacy-editor button:disabled { opacity: .55; cursor: default; }
+.privacy-spinner { inline-size: 13px; block-size: 13px; border: 1.5px solid #ffffff75; border-top-color: white; border-radius: 50%; animation: orbit .85s linear infinite; }
+.privacy-editor[data-large="true"] .privacy-editor-body { grid-template-columns: minmax(0, 1fr); }
+.privacy-editor[data-large="true"] :is(.privacy-picker,[data-privacy-reset],[data-privacy-save]) { display: none; }
+.privacy-editor[data-large="true"] .privacy-footer { justify-content: flex-end; }
+@media (prefers-reduced-motion: reduce) { .privacy-spinner { animation: none; } }
+@media (width < 550px) {
+  .privacy-editor-body { grid-template-columns: minmax(0, 1fr); padding-inline: 14px; gap: 13px; }
+  .privacy-header, .privacy-footer, .privacy-save-status { padding-inline: 14px; }
 }

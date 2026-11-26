@@ -6,6 +6,7 @@
   <title>Aurora 串流窗口</title>
   <link rel="stylesheet" href="source/aurora-stream.css">
   <script src="source/aurora-stream.js" defer></script>
+  <script src="source/aurora-stream-privacy.js" defer></script>
 </head>
 <body>
   <svg class="glyph-library" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
@@ -41,6 +42,13 @@
       <label class="preview-quality">网络质量
         <select aria-label="网络质量" data-preview-quality>
           <option value="good">良好</option><option value="poor">较差</option><option value="bad">很差</option>
+        </select>
+      </label>
+      <label class="preview-quality">隐私场景
+        <select aria-label="隐私场景" data-preview-privacy>
+          <option value="ready">支持自定义</option><option value="legacy">仅支持切换模式</option>
+          <option value="unsupported">不支持隐私保护</option><option value="failed">保存失败</option>
+          <option value="offline">保存时断线</option>
         </select>
       </label>
       <div class="segmented" role="group" aria-label="平台">
@@ -116,6 +124,9 @@
         </div>
 
         <div class="tools" role="group" aria-label="会话操作">
+          <button class="tool cancel-connection" type="button" aria-label="取消连接" title="取消连接" hidden>
+            <svg class="icon" aria-hidden="true"><use href="#glyph-close"/></svg><span>取消</span>
+          </button>
           <div class="controls-wrap">
             <button class="tool controls" type="button" aria-label="控制中心" title="控制中心" aria-expanded="false" aria-controls="control-panel">
               <svg class="icon" aria-hidden="true"><use href="#glyph-controls"/></svg><span>控制中心</span>
@@ -128,6 +139,7 @@
                 <button class="control-row" type="button" data-control-page="safety"><svg class="icon" aria-hidden="true"><use href="#glyph-shield"/></svg><span>安全</span><svg class="icon next" aria-hidden="true"><use href="#glyph-next"/></svg></button>
                 <div class="control-actions">
                   <button class="control-row fullscreen" type="button" aria-pressed="false"><svg class="icon" aria-hidden="true"><use href="#glyph-full"/></svg><span>全屏</span></button>
+                  <button class="control-row disconnect" type="button"><svg class="icon" aria-hidden="true"><use href="#glyph-disconnect"/></svg><span>断开远控</span></button>
                 </div>
               </div>
               <div data-control-view="quality" hidden>
@@ -182,15 +194,19 @@
               <div data-control-view="safety" hidden>
                 <div class="control-heading"><button type="button" data-control-back aria-label="返回控制中心"><svg class="icon" aria-hidden="true"><use href="#glyph-back"/></svg></button><strong>安全</strong></div>
                 <div class="control-fields">
-                  <label class="control-switch"><span>隐私屏保</span><input type="checkbox" role="switch" disabled></label>
-                  <p class="control-timing">此预览会话的远端不支持隐私屏保。</p>
+                  <div class="privacy-mode-heading"><strong>隐私保护</strong><span data-privacy-state role="status">关闭</span></div>
+                  <div class="control-choices privacy-modes" role="group" aria-label="隐私保护模式">
+                    <button type="button" data-privacy-mode="off" aria-pressed="true">关闭</button>
+                    <button type="button" data-privacy-mode="display-off" aria-pressed="false">关闭显示器</button>
+                    <button type="button" data-privacy-mode="screensaver" aria-pressed="false">隐私屏保</button>
+                  </div>
+                  <p class="control-timing" data-privacy-capability>被控设备为书房主机。选择模式后立即切换。</p>
+                  <button class="control-row privacy-open" type="button" data-privacy-open><svg class="icon" aria-hidden="true"><use href="#glyph-monitor"/></svg><span>设置隐私屏保</span><svg class="icon next" aria-hidden="true"><use href="#glyph-next"/></svg></button>
+                  <p class="control-timing" data-privacy-saved>已保存样式 · 晴空山谷</p>
                 </div>
               </div>
             </section>
           </div>
-          <button class="tool disconnect" type="button" aria-label="断开" title="断开">
-            <svg class="icon" aria-hidden="true"><use href="#glyph-disconnect"/></svg><span>断开</span>
-          </button>
         </div>
 
         <div class="captions" role="group" aria-label="Windows 窗口控制">
@@ -223,5 +239,36 @@
       <button type="button" class="retry reopen">重新打开窗口</button>
     </div>
   </main>
+
+  <dialog class="privacy-editor" aria-labelledby="privacy-editor-title">
+    <header class="privacy-header">
+      <div>
+        <h2 id="privacy-editor-title">设置隐私屏保</h2>
+        <p>被控设备 · 书房主机</p>
+      </div>
+      <button class="privacy-close" type="button" data-privacy-close aria-label="关闭设置"><svg class="icon" aria-hidden="true"><use href="#glyph-close"/></svg></button>
+    </header>
+    <div class="privacy-editor-body">
+      <section class="privacy-preview" aria-label="本地预览">
+        <div class="privacy-preview-header"><strong>本地预览</strong><span data-privacy-choice>晴空山谷</span></div>
+        <img data-privacy-image alt="隐私屏保样式预览">
+        <p data-privacy-apply-rule>保存样式后，下次开启隐私屏保时使用。</p>
+      </section>
+      <section class="privacy-picker" aria-labelledby="privacy-presets-title">
+        <div class="privacy-picker-heading"><h3 id="privacy-presets-title">内置壁纸</h3><button type="button" class="privacy-text-button" data-privacy-import>导入图片</button></div>
+        <input data-privacy-file type="file" accept="image/*" hidden>
+        <div class="privacy-presets" data-privacy-presets></div>
+        <p class="privacy-import-name" data-privacy-file-name hidden></p>
+      </section>
+    </div>
+    <p class="privacy-save-status" data-privacy-feedback role="status" hidden></p>
+    <footer class="privacy-footer">
+      <button class="privacy-text-button" type="button" data-privacy-reset>恢复默认</button>
+      <div>
+        <button class="privacy-action" type="button" data-privacy-large>大图预览</button>
+        <button class="extension-save privacy-action" type="button" data-privacy-save disabled><i class="privacy-spinner" hidden aria-hidden="true"></i><span>保存样式</span></button>
+      </div>
+    </footer>
+  </dialog>
 </body>
 </html>

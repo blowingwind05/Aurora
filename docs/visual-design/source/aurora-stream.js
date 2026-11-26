@@ -17,6 +17,7 @@ const frame = session.querySelector('.frame');
 const fullscreen = session.querySelector('.fullscreen');
 const controls = session.querySelector('.controls');
 const disconnect = session.querySelector('.disconnect');
+const cancelConnection = session.querySelector('.cancel-connection');
 const menu = session.querySelector('.control-panel');
 const controlViews = menu.querySelectorAll('[data-control-view]');
 const bitrate = menu.querySelector('#control-bitrate');
@@ -26,8 +27,8 @@ const reopen = preview.querySelector('.preview-closed');
 const closedReason = reopen.querySelector('[data-preview-closed-reason]');
 const qualitySelect = preview.querySelector('[data-preview-quality]');
 const phases = {
-  connecting: { status: '连接中', action: '取消', glyph: 'close' },
-  connected: { status: '已连接', action: '断开', glyph: 'disconnect' },
+  connecting: { status: '连接中' },
+  connected: { status: '已连接' },
   failed: { status: '连接失败' }
 };
 const qualities = {
@@ -221,7 +222,6 @@ function setMaximized(active) {
 }
 
 function setPhase(phase) {
-  const current = phases[phase];
   closePopover();
   session.dataset.phase = phase;
   const connected = phase === 'connected';
@@ -235,8 +235,8 @@ function setPhase(phase) {
     desktopMode.checked = true;
     keyHint.hidden = true;
   }
-  disconnect.disabled = !current.action;
-  if (current.action) nameButton(disconnect, current.action, current.glyph);
+  disconnect.disabled = !connected;
+  cancelConnection.hidden = phase !== 'connecting';
   for (const button of preview.querySelectorAll('[data-preview-phase]')) {
     button.setAttribute('aria-pressed', String(button.dataset.previewPhase === phase));
   }
@@ -265,6 +265,7 @@ function hideWindow(reason = '') {
   nextVirtualDisplay = 1;
   renderDisplays();
   session.hidden = true;
+  session.dispatchEvent(new Event('preview-session-closed'));
   closedReason.textContent = reason;
   closedReason.hidden = !reason;
   reopen.hidden = false;
@@ -353,6 +354,7 @@ document.addEventListener('pointerdown', (event) => {
 });
 
 document.addEventListener('keydown', (event) => {
+  if (preview.ownerDocument.querySelector('.privacy-editor[open]')) return;
   if (event.key === 'Escape' && openPopover) {
     if (openPopover.panel === menu && controlView !== 'root') backToControls();
     else closePopover(true);
@@ -380,10 +382,11 @@ fullscreen.addEventListener('click', () => {
   if (!active) controls.focus({ preventScroll: true });
 });
 disconnect.addEventListener('click', () => hideWindow());
+cancelConnection.addEventListener('click', () => hideWindow());
 preview.querySelector('[data-preview-offline]').addEventListener('click', () => hideWindow('书房主机已离线'));
 preview.querySelector('.failure .retry').addEventListener('click', () => {
   setPhase('connecting');
-  disconnect.focus({ preventScroll: true });
+  cancelConnection.focus({ preventScroll: true });
 });
 reopen.querySelector('button').addEventListener('click', showWindow);
 

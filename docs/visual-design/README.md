@@ -33,7 +33,7 @@ Aurora 使用这枚**青蓝渐变的折带 A**作为主图标。全系列的 **A
 | --- | --- |
 | 页面、菜单、状态与反馈 | [交互设计](interaction.md) · [刷新提示](interaction.md#刷新提示) · [Tailscale 账户](interaction.md#tailscale-账户) · [退出登录确认](interaction.md#退出登录确认) · [未登录时的引导](interaction.md#未登录时的引导) |
 | Tailscale 运行方式与账号切换 | [交互、双平台原型和状态截图](tailscale-runtime.md) |
-| 独立串流窗口 | [三态原型、截图与实现规格](stream-session.md) |
+| 独立串流窗口 | [三态原型、截图与实现规格](stream-session.md) · [串流隐私屏保](stream-privacy-screen.md) |
 | 对齐基线、间距、尺寸与响应式 | [布局与距离](layout.md) · [侧边栏宽度](layout.md#侧边栏宽度) |
 | 配色、组件状态与新增元素验收 | [视觉与组件规范](visual-guidelines.md) · [字体与字重](visual-guidelines.md#字体与文案) · [圆角规范](visual-guidelines.md#圆角规范) · [次级文字操作](visual-guidelines.md#次级文字操作) · [设置和配置的分隔线](visual-guidelines.md#设置和配置的分隔线) · [设置下拉菜单](visual-guidelines.md#设置下拉菜单) · [开关状态](visual-guidelines.md#开关状态) |
 | 两个平台的差异与窗口约定 | [Windows 托盘右键菜单](windows.md#托盘右键菜单) · [macOS 适配](macos.md) · [macOS 菜单栏右键菜单](macos.md#菜单栏右键菜单) |
