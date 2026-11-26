@@ -158,7 +158,9 @@ FocusScope {
             text: bar.session.phase === StreamSessionChrome.Connecting ? qsTr("取消") : qsTr("断开")
             showLabel: !bar.session.tight
             hint: bar.session.tight ? text : ""
-            hoverFill: "#FBE7E7"
+            hoverFill: "#F6E4E7"
+            foreground: !enabled ? Aurora.AuroraTheme.disabled
+                : hovered || down ? "#9A3241" : Aurora.AuroraTheme.ink
             enabled: bar.session.connected ? bar.session.canDisconnect : bar.session.canCancel
             icon.source: Aurora.AuroraTheme.icon(bar.session.connected ? "log-out" : "x")
             onClicked: {

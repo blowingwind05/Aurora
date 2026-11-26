@@ -186,6 +186,22 @@ Item {
             compare(createSpy.count, 2)
         }
 
+        function test_controlMenuFitsItsRowsOnReturn() {
+            click("controlCenter")
+            tryCompare(lookup("streamPanel"), "height", 227)
+            click("controlPage:quality")
+            tryVerify(function() { return lookup("streamPanel").height > 227 })
+            keyClick(Qt.Key_Escape)
+            tryCompare(lookup("streamPanel"), "height", 227)
+            const disconnect = lookup("disconnectRemote")
+            mouseMove(disconnect, disconnect.width / 2, disconnect.height / 2)
+            tryCompare(disconnect, "hovered", true)
+            compare(disconnect.foreground.toString(), "#9a3241")
+            click("disconnectRemote")
+            compare(disconnectSpy.count, 1)
+            compare(chrome.panelKind, "")
+        }
+
         function test_compactAndScrolling() {
             chrome.width = 760
             verify(lookup("displayStrip").visible)
@@ -258,7 +274,7 @@ Item {
             keyClick(Qt.Key_Return)
             tryCompare(lookup("controlPage:quality"), "activeFocus", true)
             keyClick(Qt.Key_Tab, Qt.ShiftModifier)
-            tryCompare(lookup("fullScreen"), "activeFocus", true)
+            tryCompare(lookup("disconnectRemote"), "activeFocus", true)
             keyClick(Qt.Key_Tab)
             tryCompare(lookup("controlPage:quality"), "activeFocus", true)
             click("controlPage:audio")

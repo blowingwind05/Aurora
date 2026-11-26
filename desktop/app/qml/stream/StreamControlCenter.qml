@@ -115,6 +115,24 @@ Column {
                 center.session.fullScreenRequested(next)
             }
         }
+
+        StreamButton {
+            objectName: "disconnectRemote"
+            width: parent.width
+            height: 34
+            cornerRadius: 6
+            rowStyle: true
+            enabled: center.session.canDisconnect
+            text: qsTr("断开远控")
+            icon.source: Aurora.AuroraTheme.icon("log-out")
+            hoverFill: "#F6E4E7"
+            foreground: !enabled ? Aurora.AuroraTheme.disabled
+                : hovered || down ? "#9A3241" : Aurora.AuroraTheme.ink
+            onClicked: {
+                center.session.closePanel(false)
+                center.session.disconnectRequested()
+            }
+        }
     }
 
     Item {
@@ -166,6 +184,7 @@ Column {
         id: pageBody
         x: 8
         width: parent.width - 16
+        visible: center.page !== ""
         active: center.page !== ""
         sourceComponent: center.page === "quality" ? qualityPage
                        : center.page === "audio" ? audioPage

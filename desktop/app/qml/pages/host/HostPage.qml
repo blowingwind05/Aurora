@@ -405,7 +405,7 @@ Item {
                     }
                     HostText {
                         width: parent.width
-                        text: qsTr("请在 macOS 隐私设置中允许 Aurora Host 录制屏幕并使用辅助功能。授权后可重启被控组件。")
+                        text: qsTr("请在系统设置中为 Aurora Host 开启屏幕录制和辅助功能。修改权限后，重新启动被控服务使其生效。重启会断开正在进行的远控。")
                         color: AuroraTheme.muted
                         wrapMode: Text.Wrap
                     }
@@ -420,7 +420,8 @@ Item {
                         primary: true
                         enabled: page.hostState.refreshAvailable === true && !page.busy
                             && !page.hostState.refreshing && !page.hostState.permissionsRetrying && !sunshineEditor.continuation
-                        text: page.hostState.permissionsRetrying ? qsTr("正在重试…") : qsTr("已授权，继续")
+                        text: page.hostState.permissionsRetrying ? qsTr("正在重新启动…")
+                            : page.hostState.status === "running" ? qsTr("重启被控服务") : qsTr("授权后重试启动")
                         onClicked: sunshineEditor.finish(function() { page.actionRequested("hostContinuePermissions") }, false)
                     }
                     HostText {

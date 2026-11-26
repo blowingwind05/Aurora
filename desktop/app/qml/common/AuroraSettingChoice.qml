@@ -6,6 +6,7 @@ import QtQuick.Templates 2.15 as T
 T.ComboBox {
     id: field
     property int selectedIndex: -1
+    property int disabledIndex: -1
     signal selectionRequested(int index)
 
     currentIndex: selectedIndex
@@ -21,7 +22,7 @@ T.ComboBox {
     onActivated: function(index) {
         // Continue to show the last value confirmed by the host after a user edit.
         currentIndex = Qt.binding(function() { return field.selectedIndex })
-        if (index !== selectedIndex)
+        if (index !== selectedIndex && index !== disabledIndex)
             selectionRequested(index)
     }
 
@@ -70,7 +71,8 @@ T.ComboBox {
         width: ListView.view.width
         height: 32
         text: modelData
-        highlighted: field.highlightedIndex === index
+        enabled: index !== field.disabledIndex
+        highlighted: enabled && field.highlightedIndex === index
         hoverEnabled: true
         leftPadding: 8
         rightPadding: 28
@@ -80,7 +82,7 @@ T.ComboBox {
             textFormat: Text.PlainText
             elide: Text.ElideRight
             font: field.font
-            color: option.selected ? "#2350B4" : AuroraTheme.ink
+            color: !option.enabled ? AuroraTheme.disabled : option.selected ? "#2350B4" : AuroraTheme.ink
             verticalAlignment: Text.AlignVCenter
         }
 

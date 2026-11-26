@@ -250,7 +250,7 @@ void NativeDesktop::publishHostState()
     case Phase::Failed: status = QStringLiteral("notReady"); break;
     }
     if (hostRefresh == HostRefresh::ApplyingPermissions && !busy)
-        finishHostRefresh(ready ? tr("本机被控已重新就绪。")
+        finishHostRefresh(ready ? tr("被控服务已启动。")
                                : current.error.isEmpty() ? tr("本机被控未能就绪，请检查 macOS 权限后重试。") : current.error,
                           !ready);
     else if (hostRefresh == HostRefresh::Starting && !busy)

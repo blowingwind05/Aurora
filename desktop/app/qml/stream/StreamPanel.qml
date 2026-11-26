@@ -113,7 +113,7 @@ FocusScope {
         anchors.fill: parent
         anchors.margins: 6
         contentWidth: width
-        contentHeight: body.height
+        contentHeight: body.item ? body.item.implicitHeight : 0
         flickableDirection: Flickable.VerticalFlick
         boundsBehavior: Flickable.StopAtBounds
         clip: true

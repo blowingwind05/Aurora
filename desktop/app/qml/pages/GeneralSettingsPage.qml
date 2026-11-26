@@ -278,7 +278,6 @@ Item {
                 title: qsTr("开发")
                 visible: AuroraTheme.windows && page.preferences !== null
                     && typeof page.preferences.privacyUiAccessTest === "boolean"
-                    && (page.preferences.privacyHelperInstalled || page.preferences.privacyUiAccessTest)
 
                 SettingRow {
                     id: privacyModeRow
@@ -293,6 +292,7 @@ Item {
                         Accessible.name: privacyModeRow.label
                         enabled: !page.updating && page.preferences !== null
                         model: [qsTr("标准模式"), qsTr("UIAccess 本机测试")]
+                        disabledIndex: page.preferences && page.preferences.privacyHelperInstalled ? -1 : 1
                         selectedIndex: page.preferences && page.preferences.privacyUiAccessTest ? 1 : 0
                         onSelectionRequested: function(index) { page.privacyUiAccessTestRequested(index === 1) }
                     }
@@ -302,7 +302,9 @@ Item {
                     text: page.preferences ? (page.preferences.privacyTestFeedback
                         || (page.preferences.privacyHelperInstalled
                             ? qsTr("下次开启隐私屏保时生效。")
-                            : qsTr("UIAccess 本机测试需要已签名并安装的测试组件。"))) : ""
+                            : page.preferences.privacyUiAccessTest
+                                ? qsTr("UIAccess 测试组件不可用。切回标准模式可继续使用隐私屏保。")
+                                : qsTr("此电脑尚未安装已签名的 UIAccess 测试组件。"))) : ""
                 }
             }
         }
