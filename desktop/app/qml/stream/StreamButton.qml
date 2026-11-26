@@ -22,13 +22,19 @@ Aurora.AuroraButton {
         readonly property int leading: button.rowStyle ? 9 : 0
         readonly property int trailing: button.rowStyle ? 9 + (button.trailingIcon.toString() ? 16 : 0) : 4
         readonly property int iconSpace: glyph.visible ? glyph.width + (label.visible ? button.spacing : 0) : 0
-        implicitWidth: leading + iconSpace + (label.visible ? label.implicitWidth : 0) + trailing
+        implicitWidth: leading + iconSpace + (label.visible ? labelMetrics.advanceWidth : 0) + trailing
         implicitHeight: 16
+
+        TextMetrics {
+            id: labelMetrics
+            text: button.showLabel ? button.text : ""
+            font: button.font
+        }
 
         Item {
             id: line
             width: Math.max(0, Math.min(parent.width - parent.leading - parent.trailing,
-                                       parent.iconSpace + (label.visible ? label.implicitWidth : 0)))
+                                       parent.iconSpace + (label.visible ? labelMetrics.advanceWidth : 0)))
             x: button.rowStyle ? parent.leading : (parent.width - width) / 2
             height: parent.height
 

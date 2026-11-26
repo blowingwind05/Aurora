@@ -152,7 +152,9 @@ Item {
             keyClick(Qt.Key_Escape)
             compare(chrome.panelKind, "")
             verify(lookup("connectionStatus").activeFocus)
-            click("endSession")
+            verify(!lookup("endSession").visible)
+            click("controlCenter")
+            click("disconnectRemote")
             compare(disconnectSpy.count, 1)
         }
 

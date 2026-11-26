@@ -136,6 +136,22 @@ FocusScope {
         spacing: 4
 
         StreamButton {
+            objectName: "endSession"
+            width: bar.session.tight ? 32 : 58
+            height: 32
+            visible: bar.session.phase === StreamSessionChrome.Connecting
+            enabled: bar.session.canCancel
+            text: qsTr("取消")
+            showLabel: !bar.session.tight
+            hint: bar.session.tight ? text : ""
+            hoverFill: "#F6E4E7"
+            foreground: !enabled ? Aurora.AuroraTheme.disabled
+                : hovered || down ? "#9A3241" : Aurora.AuroraTheme.ink
+            icon.source: Aurora.AuroraTheme.icon("x")
+            onClicked: bar.session.cancelRequested()
+        }
+
+        StreamButton {
             id: controls
             objectName: "controlCenter"
             width: bar.session.compact ? 32 : 94
@@ -147,35 +163,6 @@ FocusScope {
             enabled: bar.session.connected
             icon.source: Aurora.AuroraTheme.iconAsset("aurora/stream-control-center.svg")
             onClicked: bar.session.togglePanel("controls", controls)
-        }
-
-        StreamButton {
-            id: endSession
-            objectName: "endSession"
-            width: bar.session.tight ? 32 : 58
-            height: 32
-            visible: bar.session.phase !== StreamSessionChrome.Failed
-            text: bar.session.phase === StreamSessionChrome.Connecting ? qsTr("取消") : qsTr("断开")
-            showLabel: !bar.session.tight
-            hint: bar.session.tight ? text : ""
-            hoverFill: "#F6E4E7"
-            foreground: !enabled ? Aurora.AuroraTheme.disabled
-                : hovered || down ? "#9A3241" : Aurora.AuroraTheme.ink
-            enabled: bar.session.connected ? bar.session.canDisconnect : bar.session.canCancel
-            icon.source: Aurora.AuroraTheme.icon(bar.session.connected ? "log-out" : "x")
-            onClicked: {
-                bar.session.closePanel(false)
-                if (bar.session.connected)
-                    bar.session.disconnectRequested()
-                else
-                    bar.session.cancelRequested()
-            }
-        }
-
-        Item {
-            width: endSession.width
-            height: endSession.height
-            visible: !endSession.visible
         }
 
         Image {
