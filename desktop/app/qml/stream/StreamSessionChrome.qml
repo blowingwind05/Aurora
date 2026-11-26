@@ -20,6 +20,9 @@ Item {
     property bool maximized: false
     property bool fullScreen: false
     property bool windowsOverlays: false
+    property bool nativePanels: false
+    property bool displayControls: true
+    property int layoutWidth: width
     property Window windowControls: null
     property int panelFocusReason: Qt.MouseFocusReason
     readonly property var overlays: nativeOverlays.item
@@ -49,8 +52,8 @@ Item {
     property string releaseMouseShortcut
 
     readonly property bool connected: phase === StreamSessionChrome.Connected
-    readonly property bool compact: width < 760
-    readonly property bool tight: width < 490
+    readonly property bool compact: layoutWidth < 760
+    readonly property bool tight: layoutWidth < 490
     readonly property int barHeight: 44
     readonly property int contentTop: fullScreen ? 0 : barHeight
     readonly property bool controlsVisible: !fullScreen || revealControls || edge.hovered
@@ -68,6 +71,7 @@ Item {
         : networkQuality === StreamSessionChrome.Bad ? "#BF3444"
         : networkQuality === StreamSessionChrome.Poor ? "#A56814" : Aurora.AuroraTheme.statusBlue
 
+    signal nativePanelRequested(string kind, bool keyboard)
     signal cancelRequested()
     signal disconnectRequested()
     signal displayRequested(string displayId)
@@ -88,15 +92,19 @@ Item {
     signal reverseScrollRequested(bool enabled)
     signal privacyModeRequested(string mode)
 
-    function focusControls() {
+    function focusControls(reason) {
         if (!connected)
             return
         keyboardReveal = true
-        toolbar.controlsButton.forceActiveFocus(Qt.ShortcutFocusReason)
+        toolbar.controlsButton.forceActiveFocus(reason === undefined ? Qt.ShortcutFocusReason : reason)
         keyboardReveal = false
     }
 
     function togglePanel(kind, anchor) {
+        if (nativePanels) {
+            nativePanelRequested(kind, !!anchor && anchor.visualFocus)
+            return
+        }
         if (panelKind === kind && panelAnchor === anchor) {
             closePanel(true)
             return
@@ -166,7 +174,7 @@ Item {
     MouseArea {
         anchors.fill: parent
         anchors.topMargin: chrome.barHeight
-        visible: chrome.panelOpen && !chrome.overlays
+        visible: chrome.panelOpen && !chrome.overlays && !chrome.nativePanels
         acceptedButtons: Qt.AllButtons
         onClicked: chrome.closePanel(false)
         onWheel: function(wheel) { wheel.accepted = true }
@@ -187,7 +195,7 @@ Item {
         parent: chrome.overlays ? chrome.overlays.panelContent : chrome
         overlayWindow: !!chrome.overlays
         session: chrome
-        visible: chrome.panelOpen
+        visible: chrome.panelOpen && !chrome.nativePanels
     }
 
     Rectangle {

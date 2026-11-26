@@ -65,8 +65,9 @@ FocusScope {
 
     MouseArea {
         anchors.fill: parent
-        enabled: bar.session.panelOpen || (!!bar.session.windowControls && !bar.session.fullScreen)
-        onPressed: if (bar.session.panelOpen) bar.session.closePanel(false)
+        enabled: (bar.session.panelOpen && !bar.session.nativePanels)
+            || (!!bar.session.windowControls && !bar.session.fullScreen)
+        onPressed: if (bar.session.panelOpen && !bar.session.nativePanels) bar.session.closePanel(false)
         onDoubleClicked: {
             if (bar.session.windowControls && !bar.session.fullScreen)
                 bar.session.windowControls.toggleMaximized()
@@ -319,7 +320,10 @@ FocusScope {
                 icon.width: 14
                 icon.height: 14
                 selected: bar.session.panelKind === "displays"
-                enabled: bar.session.connected && bar.session.displays.length > 0
+                enabled: bar.session.connected && bar.session.displayControls && bar.session.displays.length > 0
+                Accessible.role: bar.session.displayControls ? Accessible.Button : Accessible.StaticText
+                Accessible.name: bar.session.displayControls ? text
+                    : bar.session.displays.length ? bar.session.displays[0].name : qsTr("显示器")
                 icon.source: Aurora.AuroraTheme.icon("monitor")
                 onClicked: bar.session.togglePanel("displays", compactDisplays)
             }
@@ -358,6 +362,7 @@ FocusScope {
                             display: modelData
                             selected: display.id === bar.session.activeDisplayId
                             sessionActive: bar.session.connected
+                            readOnly: !bar.session.displayControls
                             detailsOpen: selected && bar.session.panelKind === "displays"
                             showDivider: !selected && !hovered
                                 && (!nextTab || (!nextTab.selected && !nextTab.hovered))
@@ -395,7 +400,8 @@ FocusScope {
 
             Item {
                 id: addSlot
-                width: bar.session.tight ? 25 : 28
+                visible: bar.session.displayControls
+                width: !bar.session.displayControls ? 0 : bar.session.tight ? 25 : 28
                 height: bar.height
 
                 StreamButton {

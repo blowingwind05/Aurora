@@ -10,6 +10,7 @@ Item {
     property bool selected: false
     property bool detailsOpen: false
     property bool sessionActive: false
+    property bool readOnly: false
     property bool showDivider: false
     readonly property bool hovered: hover.hovered || activate.hovered || closeDisplay.hovered
     readonly property alias button: activate
@@ -71,7 +72,8 @@ Item {
         anchors.right: closeDisplay.visible ? closeDisplay.left : parent.right
         anchors.verticalCenter: parent.verticalCenter
         height: 27
-        enabled: tab.sessionActive && (tab.selected || tab.display.ready === true)
+        enabled: !tab.readOnly && tab.sessionActive && (tab.selected || tab.display.ready === true)
+        Accessible.role: tab.readOnly ? Accessible.StaticText : Accessible.Button
         text: tab.display.shortName || tab.display.name
         hint: tab.display.name
         Accessible.name: tab.display.name
@@ -102,7 +104,7 @@ Item {
                 font.pixelSize: 12
                 elide: Text.ElideRight
                 text: activate.text
-                color: !activate.enabled ? Aurora.AuroraTheme.disabled
+                color: !tab.readOnly && !activate.enabled ? Aurora.AuroraTheme.disabled
                      : tab.selected ? Aurora.AuroraTheme.ink : Aurora.AuroraTheme.muted
                 Accessible.ignored: true
             }
@@ -110,7 +112,7 @@ Item {
                 anchors.verticalCenter: parent.verticalCenter
                 width: 12
                 height: 12
-                visible: tab.selected
+                visible: tab.selected && !tab.readOnly
                 rotation: tab.detailsOpen ? 180 : 0
                 icon.source: Aurora.AuroraTheme.icon("chevron-down")
             }

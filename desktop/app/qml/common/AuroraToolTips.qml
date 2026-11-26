@@ -11,7 +11,8 @@ QtObject {
     property bool showing: false
     property var colors: ({})
     readonly property Item anchorItem: request ? request.anchorItem : null
-    readonly property Window owner: anchorItem ? anchorItem.Window.window : null
+    // The owner can be a QQuickView embedded by the native stream host.
+    readonly property var owner: anchorItem ? anchorItem.Window.window : null
     readonly property string message: request ? request.text : ""
     readonly property var environment: typeof auroraToolTipEnvironment === "undefined" ? null : auroraToolTipEnvironment
 
