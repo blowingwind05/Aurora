@@ -63,6 +63,14 @@ jobs:
           "$RUNNER_TEMP/aurora-host-python/bin/python" -m pip install 'Jinja2==3.1.6'
           echo "$RUNNER_TEMP/aurora-host-python/bin" >> "$GITHUB_PATH"
 
+      - name: Verify Qt session chrome
+        env:
+          QT_QPA_PLATFORM: offscreen
+          QT_QUICK_BACKEND: software
+          QT_QUICK_CONTROLS_STYLE: Fusion
+          QML_DISABLE_DISK_CACHE: '1'
+        run: '"$QT_ROOT_DIR/bin/qmltestrunner" -input tests/qt-ui/tst_MacStreamChrome.qml -o -,txt'
+
       - name: Build and sign Aurora.app
         run: |
           pwsh -NoProfile -File ./desktop/tailnet/Build-Tailnet.ps1 -Runtime "osx-$AURORA_ARCHITECTURE" -OutputDirectory "$RUNNER_TEMP/aurora-tailnet" -RunTests

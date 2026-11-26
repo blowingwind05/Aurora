@@ -15,14 +15,16 @@ class AuroraConnectionView final : public QQuickView {
 public:
     enum class Stage { Connecting, Failed, ConfirmQuit };
 
-    AuroraConnectionView()
+    explicit AuroraConnectionView(const QUrl& source = {})
     {
         setResizeMode(SizeRootObjectToView);
         setColor(QColor(0xf9, 0xfa, 0xfc));
-        setSource(QUrl(QStringLiteral("qrc:/aurora/session/ConnectionStage.qml")));
+        setSource(source.isEmpty() ? QUrl(QStringLiteral("qrc:/aurora/session/ConnectionStage.qml")) : source);
         if (auto* stage = rootObject()) {
             connect(stage, SIGNAL(retryRequested()), this, SLOT(retry()));
             connect(stage, SIGNAL(quitPreviousRequested()), this, SLOT(quitPrevious()));
+            if (!source.isEmpty())
+                connect(stage, SIGNAL(cancelRequested()), this, SLOT(dismiss()));
         }
     }
 
@@ -53,6 +55,7 @@ protected:
     }
 
 private slots:
+    void dismiss() { if (onDismiss) onDismiss(); }
     void retry() { if (onRetry) onRetry(); }
     void quitPrevious() { if (onQuitPrevious) onQuitPrevious(); }
 };

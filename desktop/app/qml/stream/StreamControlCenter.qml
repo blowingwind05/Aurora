@@ -7,6 +7,7 @@ Column {
     property var session
     property bool showSettingPages: true
     property bool offerNativeSettings: false
+    property bool nativeSettingPages: false
     property string page: ""
     property string previousPage: ""
     readonly property var groups: [
@@ -17,6 +18,12 @@ Column {
     ]
     signal pageChangedByUser(int reason)
     signal nativeSettingsRequested()
+    signal nativeSettingPageRequested(string page)
+
+    function layoutNativeHome() {
+        home.forceLayout()
+        center.forceLayout()
+    }
 
     function focusInitial(reason) {
         if (page !== "") {
@@ -45,6 +52,7 @@ Column {
     }
 
     Column {
+        id: home
         width: parent.width
         visible: center.page === ""
 
@@ -61,8 +69,12 @@ Column {
                 text: modelData.label
                 icon.source: modelData.icon
                 onClicked: {
-                    center.page = modelData.id
-                    center.pageChangedByUser(visualFocus ? Qt.TabFocusReason : Qt.MouseFocusReason)
+                    if (center.nativeSettingPages) {
+                        center.nativeSettingPageRequested(modelData.id)
+                    } else {
+                        center.page = modelData.id
+                        center.pageChangedByUser(visualFocus ? Qt.TabFocusReason : Qt.MouseFocusReason)
+                    }
                 }
             }
         }

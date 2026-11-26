@@ -9,6 +9,8 @@ FocusScope {
     objectName: "streamPanel"
     property var session
     property bool nativePopup: false
+    property bool nativeSettingPages: false
+    signal nativeSettingPageRequested(string page)
     property bool overlayWindow: false
     property int heightLimit: session.height - placementTop - gutter
     readonly property bool controls: session.panelKind === "controls"
@@ -35,6 +37,11 @@ FocusScope {
     x: nativePopup || overlayWindow ? 0 : placementLeft
     width: nativePopup ? preferredWidth : Math.max(0, Math.min(preferredWidth, session.width - 2 * gutter))
     height: Math.max(0, Math.min(430, heightLimit, scroller.contentHeight + 12))
+
+    function layoutNativeHome() {
+        if (body.item)
+            body.item.layoutNativeHome()
+    }
 
     function focusInitial(reason) {
         if (!visible || !body.item)
@@ -131,8 +138,10 @@ FocusScope {
         id: controlCenter
         StreamControlCenter {
             session: panel.session
-            showSettingPages: !panel.nativePopup
-            offerNativeSettings: panel.nativePopup
+            showSettingPages: !panel.nativePopup || panel.nativeSettingPages
+            offerNativeSettings: panel.nativePopup && !panel.nativeSettingPages
+            nativeSettingPages: panel.nativeSettingPages
+            onNativeSettingPageRequested: function(page) { panel.nativeSettingPageRequested(page) }
             onNativeSettingsRequested: panel.session.nativeSettingsRequested()
             onPageChangedByUser: function(reason) { panel.focusInitial(reason) }
         }

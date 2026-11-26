@@ -18,6 +18,14 @@ Item {
 
     onWindowUsableChanged: if (!windowUsable && session) session.closePanel(false)
 
+    Connections {
+        target: overlays.owner
+        function onXChanged() { overlays.session.closePanel(false) }
+        function onYChanged() { overlays.session.closePanel(false) }
+        function onWidthChanged() { overlays.session.closePanel(false) }
+        function onHeightChanged() { overlays.session.closePanel(false) }
+    }
+
     Window {
         id: toolbarWindow
         objectName: "streamToolbarOverlay"

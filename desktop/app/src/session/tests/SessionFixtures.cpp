@@ -192,6 +192,12 @@ void SessionFixtures::attachUnderChrome()
     QTRY_VERIFY(!surface.surfaceVisible());
     owner.showNormal();
     QTRY_VERIFY(surface.surfaceVisible());
+    QVERIFY(chrome->setProperty("fullScreen", false));
+    QVERIFY(chrome->setProperty("panelKind", QStringLiteral("controls")));
+    QTRY_VERIFY(popup->isVisible());
+    owner.setPosition(owner.position() + QPoint(17, 13));
+    QTRY_VERIFY(!popup->isVisible());
+    QVERIFY(surface.surfaceVisible());
 
     surface.requestStop();
     QTRY_COMPARE(ended.size(), 1);
