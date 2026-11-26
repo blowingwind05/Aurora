@@ -30,7 +30,7 @@ foreach(name aurora-session-toolbar.mm aurora-session-toolbar.h aurora-session-t
     configure_file("${moonlight}/app/streaming/${name}" "${engine}/streaming/${name}" COPYONLY)
 endforeach()
 foreach(name AuroraMacTitleBarView.h AuroraMacControlsView.h AuroraMacPrivacyAppearanceView.h
-             AuroraPrivacyArtwork.h AuroraDisplayControls.h
+             AuroraPrivacyArtwork.h AuroraDisplayControls.h)
     configure_file("${desktop}/runtime/stream/qt-session/${name}" "${engine}/qt-session/${name}" COPYONLY)
 endforeach()
 configure_file("${desktop}/protocol/bitrate/ClientProtocol.h" "${engine}/backend/aurora-bitrate.h" COPYONLY)
