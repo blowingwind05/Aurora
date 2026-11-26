@@ -1,6 +1,6 @@
 # 界面图标清单
 
-Windows 和 macOS 共用这套界面图标。Lucide 官方 SVG 来源固定为 **1.77.0**，原档保留 24 × 24 的绘图坐标和 `currentColor` 描边。分发时保留随附许可，涉及 Feather 衍生图标的 MIT 许可也在同一文件内。[上游版本](https://github.com/lucide-icons/lucide/tree/1.77.0/icons) · [本地许可](lucide/LICENSE)
+Windows、macOS 和手机端共用这套界面图标。Lucide 官方 SVG 来源固定为 **1.77.0**，原档保留 24 × 24 的绘图坐标和 `currentColor` 描边。分发时保留随附许可，涉及 Feather 衍生图标的 MIT 许可也在同一文件内。[上游版本](https://github.com/lucide-icons/lucide/tree/1.77.0/icons) · [本地许可](lucide/LICENSE)
 
 | 使用位置 | 文件 |
 | --- | --- |
@@ -21,6 +21,7 @@ Windows 和 macOS 共用这套界面图标。Lucide 官方 SVG 来源固定为 *
 | 设备卡片「更多工具」 | [Fluent Apps Regular](fluent/ic_fluent_apps_24_regular.svg)，右上角为菱形，16 px 显示，随按钮前景着色。[上游 SVG](https://github.com/microsoft/fluentui-system-icons/blob/main/assets/Apps/SVG/ic_fluent_apps_24_regular.svg) · [本地 MIT 许可](fluent/LICENSE) |
 | 设备卡片「重启」「关机」 | [rotate-ccw.svg](lucide/rotate-ccw.svg) · [power.svg](lucide/power.svg) |
 | 串流窗口「控制中心」 | [双横向滑杆](prototype/stream-control-center.svg)，原型定制，16 px 显示 |
+| 手机串流「键盘」和「触控模式」 | [键盘](prototype/mobile-keyboard.svg) · [触控板](prototype/mobile-touchpad.svg)。原型 CSS 内嵌同一 SVG，修改源稿时同步更新。[手机原型样式](../../source/aurora-mobile.css) |
 | 退出 Tailscale 登录 | [log-out.svg](lucide/log-out.svg) |
 | 返回本机被控 | [arrow-left.svg](lucide/arrow-left.svg) |
 | 已登录空列表中的「检查 Tailscale」 | 纯文字主按钮 |

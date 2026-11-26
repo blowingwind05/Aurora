@@ -6,9 +6,9 @@
 
 [建连入口](../desktop/app/src/desktop/NativeDesktopSessions.cpp) 核验设备身份、选择局域网或 Tailscale 路径、确认配对，再启动 [Moonlight 串流组件](../desktop/upstream/moonlight-aurora)。macOS 的 Tailscale 路径由内置节点提供。Windows 可以选用内置节点或已安装的系统客户端。局域网连接沿用已建立的设备信任和 Sunshine 证书校验。
 
-确认配对时，Aurora 调用 `Moonlight list`。启动串流时，Moonlight 再解析主机和目标应用。内置 Tailscale 的配对检查和串流共用所选路由的[转发租约](../desktop/app/src/session/SessionSupervisor.cpp)。[启动警告处理](https://github.com/blowingwind05/moonlight-aurora/blob/639e79c997beda47126763f3785c14a2ef9a44a6/app/cli/commandlineparser.cpp) 将警告写入日志并让 CLI 继续执行。
+确认配对时，Aurora 调用 `Moonlight list`。启动串流时，Moonlight 再解析主机和目标应用。内置 Tailscale 的配对检查和串流共用所选路由的[转发租约](../desktop/app/src/session/SessionSupervisor.cpp)。[启动警告处理](https://github.com/blowingwind05/moonlight-aurora/blob/f89e322c4b7de55fc0aaa3ccca11419e4f8a12eb/app/cli/commandlineparser.cpp) 将警告写入日志并让 CLI 继续执行。
 
-[串流偏好](../desktop/app/src/preferences/DesktopPreferences.cpp) 保存手动选择。默认的「跟随被控端」会在连接时使用已配对 Windows 或 macOS 宿主报告的采集尺寸。源尺寸有效时，运行时按实际宽高比建立视频流。手动指定尺寸优先。旧宿主缺少尺寸信息时沿用串流组件的偏好。Windows 把视频嵌入 [Aurora 会话窗](../desktop/app/qml/stream/NativeSessionWindow.qml)。窗口化时，Windows 和 macOS 都根据实际视频宽高比调整视口。macOS 的串流组件使用 [Aurora 原生连接窗口](https://github.com/blowingwind05/moonlight-aurora/blob/639e79c997beda47126763f3785c14a2ef9a44a6/app/cli/aurora-mac-stream.mm) 显示进度与失败，出画时交给 SDL 视频窗及其 AppKit 控制中心。原生连接入口在当前 Mac 入口中省略了 QML 提示所需的 1.5 秒等待。窗口化时从连接状态打开详情。全屏时可从悬浮控制中心打开同一详情。面板使用当前会话的实测指标，缺失值隐藏。隐私保护由被控端确认是否支持和开启。
+[串流偏好](../desktop/app/src/preferences/DesktopPreferences.cpp) 保存手动选择。默认的「跟随被控端」会在连接时使用已配对 Windows 或 macOS 宿主报告的采集尺寸。源尺寸有效时，运行时按实际宽高比建立视频流。手动指定尺寸优先。旧宿主缺少尺寸信息时沿用串流组件的偏好。Windows 把视频嵌入 [Aurora 会话窗](../desktop/app/qml/stream/NativeSessionWindow.qml)。窗口化时，Windows 和 macOS 都根据实际视频宽高比调整视口。macOS 的串流组件使用 [Aurora 原生连接窗口](https://github.com/blowingwind05/moonlight-aurora/blob/f89e322c4b7de55fc0aaa3ccca11419e4f8a12eb/app/cli/aurora-mac-stream.mm) 显示进度与失败，出画时交给 SDL 视频窗及其 AppKit 控制中心。原生连接入口在当前 Mac 入口中省略了 QML 提示所需的 1.5 秒等待。窗口化时从连接状态打开详情。全屏时可从悬浮控制中心打开同一详情。面板使用当前会话的实测指标，缺失值隐藏。隐私保护由被控端确认是否支持和开启。
 
 ## Qt Quick 会话界面
 
@@ -16,11 +16,13 @@ Aurora 默认启用 `AURORA_QT_SESSION=1`。Windows 的 Aurora 会话窗和两�
 
 桌面指针模式在已配对的 HTTPS 启动或恢复请求中协商。Windows WGC 和 macOS 常规 AVCapture 能确认采集帧排除桌面指针时，主控用本地指针显示操作位置。鼠标离开视频区后，远端物理屏继续显示系统指针。未确认排除指针的采集后端继续使用视频内指针。
 
-### 被控 Mac 的显示器切换
+### 被控 Mac 的同会话切屏
 
-Windows 和 macOS 主控都可以从串流顶栏切换显示器。Aurora Host 为当前会话创建并回收虚拟扩展屏。可直接切换的显示器采用当前串流的协商比例，视频连接、远端应用和音频保持运行。
+以下范围以主仓 `ede08495` 所固定的 Sunshine `1d1e55d` 和 Moonlight `f89e322` 为准。Windows 和 macOS 主控均有接入。当前候选的动态选屏路径以 **macOS 被控端**为目标，Windows 被控端的关屏虚拟输出属于独立的隐私保护模式。正式包的实际能力以该包的 `SOURCE.txt` 和当前会话响应为准。该链路尚缺 Windows 主控连 Mac 与 Mac 主控连 Mac 的两机实测。 [宿主打包与验证](../desktop/packaging/Sunshine.md)
 
-点击另一块屏的标签后，主控暂停发送鼠标操作。被控端确认新捕获源并送出关键帧，主控呈现新画面后在有序的加密鼠标通道确认这一代画面。被控端为新屏启用绝对坐标，再更新选中的标签并恢复移动、点击、拖拽和滚轮。受管显示器的指针由主控绘制，移出画面后远程画面上不再残留指针。无法确认切换时结束当前串流并回收会话的虚拟屏。
+- 主控在配对 HTTPS 启动或恢复时声明显示切换能力。宿主要求相应的加密控制协议、可用的 VideoToolbox 采集路径及关闭的隐私屏保。顶栏根据会话响应的 `canCreate`、`canSelect` 和各目标的 `selectable` 显示操作。创建附加屏只建立当前会话拥有的扩展屏。关闭虚拟屏标签只针对该会话的可移除租约。
+- 切换在同一条视频串流已协商的宽高比内进行，保留远端应用、音频和连接。目标比例不兼容时切屏置灰。主控暂停鼠标，宿主将普通 AVCapture 重建到确切的 Quartz 显示 ID。主控真正呈现新画面后，通过有序、加密的可靠鼠标通道发送 `AURORA_DISPLAY_BARRIER`，携带切换代号和已呈现帧号。宿主校验后恢复绝对坐标移动、点击、拖拽和滚轮。宿主收到首帧只表示采集就绪。 [主控会话状态](../desktop/app/src/session/SessionDisplays.cpp) · [快照解析](../desktop/runtime/stream/qt-session/AuroraDisplayControls.h)
+- Exact 捕获排除宿主系统光标，主控在切换后绘制本地指针。切换失败或确认超时会结束这次会话，并在停止采集、释放输入后回收虚拟屏。多块屏可出现在同一清单，当前会话一次采集一个目标。 [宿主实现](../desktop/upstream/sunshine-aurora/src/platform/macos/display.mm) · [Windows 和 macOS 主控实现](../desktop/upstream/moonlight-aurora)
 
 ## 已配对设备的建连优化
 
@@ -33,7 +35,8 @@ Windows 和 macOS 主控都可以从串流顶栏切换显示器。Aurora Host �
 | 操作 | 实现路径 |
 | --- | --- |
 | 全屏、鼠标模式、左右键互换、反向滚轮、本机静音和性能统计 | 将本机操作送到当前串流进程，复用窗口、输入和渲染处理。切换鼠标模式和按键映射时释放已经转发的按键。 |
-| 分辨率、帧率、编码格式和 HDR | Windows 在当前窗口内按新参数重协商，继续使用所选路由和远端应用，首帧就绪后确认设置。切换失败时尝试恢复原参数。隐私屏保开启或状态未确认时，以及停止串流会退出远端应用时，暂缓重协商。macOS 目前在下次连接应用这些参数。 |
+| 分辨率、帧率、编码格式和 HDR | Windows 主控可在当前窗口停止旧视频流并按新参数重协商，沿用所选路由和远端应用。首帧就绪后才确认，失败时尝试恢复旧参数。隐私状态未确认、屏保开启或停止串流会退出远端应用时暂缓。macOS 主控目前在下次连接应用这些参数。 |
+| 切换显示器 | 支持的 Mac 宿主在现有视频参数内切换捕获目标。改变宽高比、编码格式、HDR 或帧率走上一行的会话参数流程。 |
 | 视频码率 | Windows 和 macOS 主控可向支持重配置的 Windows NVENC 被控端请求即时调整，上限为本次协商的码率预算。Windows 主控可通过同窗口重协商调整预算，macOS 主控对不支持即时调整的宿主依旧在下次连接时应用。 |
 
 已确认的画面偏好由主控端按账号、网络和被控端身份保存。初次连接时仍使用「跟随被控端」获取源画面比例，手动设置优先。按设备存储和参数校验见 [DesktopPreferences.cpp](../desktop/app/src/preferences/DesktopPreferences.cpp)。
@@ -50,10 +53,10 @@ Windows 和 macOS 主控都可以从串流顶栏切换显示器。Aurora Host �
 
 | 环节 | 代码 |
 | --- | --- |
-| 窗口状态、即时调整与重协商 | Windows 的 [SessionBitrate.cpp](../desktop/app/src/session/SessionBitrate.cpp) 和 [SessionVideo.cpp](../desktop/app/src/session/SessionVideo.cpp)、[macOS 控制中心](https://github.com/blowingwind05/moonlight-aurora/blob/639e79c997beda47126763f3785c14a2ef9a44a6/app/streaming/aurora-session-toolbar.mm) |
+| 窗口状态、即时调整与重协商 | Windows 的 [SessionBitrate.cpp](../desktop/app/src/session/SessionBitrate.cpp) 和 [SessionVideo.cpp](../desktop/app/src/session/SessionVideo.cpp)、[macOS 控制中心](https://github.com/blowingwind05/moonlight-aurora/blob/f89e322c4b7de55fc0aaa3ccca11419e4f8a12eb/app/streaming/aurora-session-toolbar.mm) |
 | 复用会话路由、验证工作进程结果 | [ControlAdapter.cpp](../desktop/app/src/adaptors/moonlight/control/ControlAdapter.cpp) |
-| HTTPS、配对证书和请求校验 | [Moonlight HTTPS 实现](https://github.com/blowingwind05/moonlight-aurora/blob/639e79c997beda47126763f3785c14a2ef9a44a6/app/backend/nvhttp.cpp) |
-| 活动会话校验、编码线程和 NVENC 重配置 | [Sunshine RTSP 实现](https://github.com/blowingwind05/Sunshine-aurora/blob/c6a2b19e8cc1ff1fd909971721b8edbea1d985c6/src/rtsp.cpp) |
+| HTTPS、配对证书和请求校验 | [Moonlight HTTPS 实现](https://github.com/blowingwind05/moonlight-aurora/blob/f89e322c4b7de55fc0aaa3ccca11419e4f8a12eb/app/backend/nvhttp.cpp) |
+| 活动会话校验、编码线程和 NVENC 重配置 | [Sunshine RTSP 实现](https://github.com/blowingwind05/Sunshine-aurora/blob/1d1e55da5ca5a11b9a36584f6d348f3543bf209c/src/rtsp.cpp) |
 | 不重启播放进程、同窗口重协商和回复校验 | [会话测试](../desktop/app/src/session/tests/SupervisorTests.cpp)、[控制测试](../desktop/app/src/adaptors/moonlight/control/tests/ControlTest.cpp) |
 
 ## 串流组件裁剪

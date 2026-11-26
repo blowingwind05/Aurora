@@ -10,11 +10,11 @@
 2. **登录并启用被控。** 在「Tailscale 账户」登录同一账号，在要被连接的电脑上开启「本机被控 → 允许本机被控」。macOS 被控要求 14.2 或更新版本。按系统提示授权屏幕录制和辅助功能，授权后重启被控组件。
 3. **连接设备。** 从「我的设备」选择可连接的电脑，点击卡片画面进入远控。已有配对可以继续使用，首次连接会尝试后台配对。能够连到同一台已配对主机时，优先走局域网。
 
-macOS 使用内置 Tailscale。Windows 可在「Tailscale 账户」选择内置节点或系统客户端。内置节点首次登录使用 Tailscale 官方网页，账户切换和连接状态在 Aurora 内管理。
+macOS 使用内置 Tailscale。Windows 可在「Tailscale 账户」选择内置节点或系统客户端。内置节点首次登录使用 Tailscale 官方网页，账户切换和连接状态在 Aurora 内管理。内置节点可以和系统 Tailscale 同时在线。Aurora 通过 Tailscale 验证设备，串流则按当前网络自动选择局域网、公网 IPv6 或 Tailscale 路径。
 
 串流偏好和「允许本机被控」的选择保存在当前用户的设置目录。关闭主窗口时，Windows 默认收进托盘，macOS 默认隐藏到菜单栏。关闭方式和登录自启动可在「设置 → 通用」调整。
 
-设备卡优先使用被控电脑壁纸的本地缩略图。远控窗口和设备列表各有自己的工作区，从「控制中心」可以访问当前会话的操作。
+设备卡优先使用被控电脑壁纸的本地缩略图。远控窗口和设备列表各有自己的工作区，串流顶栏显示可用的显示器，控制中心集中画质与隐私操作。可用项以被控设备确认的能力为准。
 
 用安装器部署的旧版 Windows Aurora，请先通过 Windows 设置卸载，再安装新版。便携包请解压到新目录。
 
@@ -22,11 +22,12 @@ macOS 使用内置 Tailscale。Windows 可在「Tailscale 账户」选择内置�
 
 ## 开发与设计
 
+- [开发交接](docs/handoff.md) 记录默认检出提交、上游锁定版本以及 Windows 和 macOS 的构建与验收入口。
 - [贡献指南](CONTRIBUTING.md) 包含开发环境、构建命令、代码定位和验证步骤。
 - [完整视觉设计](docs/visual-design/README.md) 包含布局、颜色、组件、平台适配和验收口径。
-- [上游组件](desktop/upstream) 记录 Moonlight、Sunshine 和 Tailscale 的构建入口与源码版本。
+- [上游引擎](desktop/upstream) 记录 Moonlight 和 Sunshine 的锁定源码与构建入口。[内置 Tailscale 节点](desktop/tailnet/README.md)
 
-GitHub Actions 的 **Build Aurora for Windows** 生成便携 ZIP 和安装器。Windows 与 macOS 的下载包附带 SHA-256 校验文件，公开仓库的构建还会生成来源证明。[签名与下载验证](docs/signing.md)
+GitHub Actions 的 **Build Aurora for Windows** 生成 Windows x64 便携 ZIP 和安装器。**Build Aurora for macOS** 支持 Apple 芯片和 Intel 的原生包。两端下载包附带 SHA-256 校验文件。[签名与下载验证](docs/signing.md)
 
 旧桌面端及其构建脚本可从 [desktop-dotnet-archive](https://github.com/blowingwind05/Aurora/tree/desktop-dotnet-archive) 检出。
 

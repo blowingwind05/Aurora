@@ -17,7 +17,7 @@ git submodule update --init -- desktop/upstream/moonlight-aurora desktop/upstrea
 
 ## 构建副本
 
-[源码准备脚本](Prepare-EngineSource.py)读取主仓的子模块提交，优先从已检出的源码取用该提交。CI 也可以从 fork 获取同一提交。[子模块初始化脚本](Initialize-BuildSubmodules.py)在构建副本里按平台取用所需依赖。Windows Sunshine 和 libvirtualhid 链接一份 lizardbyte-common。Sunshine 在 macOS 上的 Boost.Locale 兼容修正由引擎 fork 持有。[Boost.Locale 接入](https://github.com/blowingwind05/Sunshine-aurora/blob/c6a2b19e8cc1ff1fd909971721b8edbea1d985c6/cmake/dependencies/Boost_Sunshine.cmake)
+[源码准备脚本](Prepare-EngineSource.py)读取主仓的子模块提交，优先从已检出的源码取用该提交。CI 也可以从 fork 获取同一提交。[子模块初始化脚本](Initialize-BuildSubmodules.py)在构建副本里按平台取用所需依赖。Windows Sunshine 和 libvirtualhid 链接一份 lizardbyte-common。Sunshine 在 macOS 上的 Boost.Locale 兼容修正由引擎 fork 持有。[Boost.Locale 接入](https://github.com/blowingwind05/Sunshine-aurora/blob/1d1e55da5ca5a11b9a36584f6d348f3543bf209c/cmake/dependencies/Boost_Sunshine.cmake)
 
 构建入口和工具链说明在 `packaging`。[Moonlight 构建](../packaging/Streamer.md) · [Sunshine 构建](../packaging/Sunshine.md)
 
@@ -31,9 +31,9 @@ Get-Content (Join-Path $source 'app/backend/nvhttp.cpp')
 
 | 功能 | 源码 |
 | --- | --- |
-| 目标和已配对证书 | [Moonlight 寻址](https://github.com/blowingwind05/moonlight-aurora/blob/639e79c997beda47126763f3785c14a2ef9a44a6/app/backend/computerseeker.cpp) · [HTTPS](https://github.com/blowingwind05/moonlight-aurora/blob/639e79c997beda47126763f3785c14a2ef9a44a6/app/backend/nvhttp.cpp) |
-| 配对与活动串流身份 | [Moonlight 配对](https://github.com/blowingwind05/moonlight-aurora/blob/639e79c997beda47126763f3785c14a2ef9a44a6/app/backend/nvpairingmanager.cpp) · [Sunshine GameStream](https://github.com/blowingwind05/Sunshine-aurora/blob/c6a2b19e8cc1ff1fd909971721b8edbea1d985c6/src/nvhttp.cpp) · [Sunshine RTSP](https://github.com/blowingwind05/Sunshine-aurora/blob/c6a2b19e8cc1ff1fd909971721b8edbea1d985c6/src/rtsp.cpp) |
-| 码率更新 | [主控协议](../protocol/bitrate/ClientProtocol.h) · [被控端协议](../protocol/bitrate/HostControl.h) · [Sunshine NVENC](https://github.com/blowingwind05/Sunshine-aurora/blob/c6a2b19e8cc1ff1fd909971721b8edbea1d985c6/src/nvenc/nvenc_base.cpp) |
+| 目标和已配对证书 | [Moonlight 寻址](https://github.com/blowingwind05/moonlight-aurora/blob/f89e322c4b7de55fc0aaa3ccca11419e4f8a12eb/app/backend/computerseeker.cpp) · [HTTPS](https://github.com/blowingwind05/moonlight-aurora/blob/f89e322c4b7de55fc0aaa3ccca11419e4f8a12eb/app/backend/nvhttp.cpp) |
+| 配对与活动串流身份 | [Moonlight 配对](https://github.com/blowingwind05/moonlight-aurora/blob/f89e322c4b7de55fc0aaa3ccca11419e4f8a12eb/app/backend/nvpairingmanager.cpp) · [Sunshine GameStream](https://github.com/blowingwind05/Sunshine-aurora/blob/1d1e55da5ca5a11b9a36584f6d348f3543bf209c/src/nvhttp.cpp) · [Sunshine RTSP](https://github.com/blowingwind05/Sunshine-aurora/blob/1d1e55da5ca5a11b9a36584f6d348f3543bf209c/src/rtsp.cpp) |
+| 码率更新 | [主控协议](../protocol/bitrate/ClientProtocol.h) · [被控端协议](../protocol/bitrate/HostControl.h) · [Sunshine NVENC](https://github.com/blowingwind05/Sunshine-aurora/blob/1d1e55da5ca5a11b9a36584f6d348f3543bf209c/src/nvenc/nvenc_base.cpp) |
 
 协议解析和码率状态机可独立运行测试。
 

@@ -2,7 +2,7 @@
 
 [协议方案](README.md) · [即时码率](live-bitrate.md) · [协议验收](verification.md)
 
-每次建连保留被控端 UUID、已固定的 Sunshine 证书、精确地址和端口，以及 Aurora 当前连接尝试。走 Tailscale 时也保留已验证的账号、节点身份及所需租约。IP、UUID 和能力标记用于发现和选路。身份验证使用已配对的证书和对应私钥。
+每次建连保留被控端 UUID、已固定的 Sunshine 证书、精确地址和端口，以及 Aurora 当前连接尝试。Aurora 设备间连接统一通过 Tailscale 核验账号、节点身份及授权，并为所选路径保留所需租约。局域网和公网 IPv6 直连也使用经该认证通道取得的会话材料，实际串流按网络条件自动选路。IP、UUID 和能力标记用于发现和选路，连接目标还需用已配对的证书和对应私钥验证。
 
 ## 配对与建连
 
@@ -14,7 +14,7 @@
 | 会话建立 | Sunshine 从 `/launch` 或 `/resume` 的 TLS 连接取得已启用的配对证书。RTSP 建立串流时，从本次启动对象继承主控身份和会话令牌。串流就绪后，令牌才可用于会话控制。 |
 | 会话结束 | 退出、换路、账号失效、解绑和禁用使相关控制授权失效。重连及播放进程替换使用新的会话令牌。已经进入驱动的调用在原会话内收尾。 |
 
-[建连](../../desktop/app/src/desktop/NativeDesktopSessions.cpp) · [配对客户端](../../desktop/app/src/pairing/client/PairingClient.cpp) · [内置配对主机](../../desktop/app/src/pairing/host/EmbeddedPairingHost.cpp) · [系统配对主机](../../desktop/app/src/pairing/systemhost/SystemPairingHost.cpp) · [Sunshine 会话身份](https://github.com/blowingwind05/Sunshine-aurora/blob/c6a2b19e8cc1ff1fd909971721b8edbea1d985c6/src/nvhttp.cpp)
+[建连](../../desktop/app/src/desktop/NativeDesktopSessions.cpp) · [配对客户端](../../desktop/app/src/pairing/client/PairingClient.cpp) · [内置配对主机](../../desktop/app/src/pairing/host/EmbeddedPairingHost.cpp) · [系统配对主机](../../desktop/app/src/pairing/systemhost/SystemPairingHost.cpp) · [Sunshine 会话身份](https://github.com/blowingwind05/Sunshine-aurora/blob/1d1e55da5ca5a11b9a36584f6d348f3543bf209c/src/nvhttp.cpp)
 
 ## 应用层加密
 
@@ -76,4 +76,4 @@ Windows 公网 IPv6 播放使用候选引擎支持的控制消息。桌面端收
 - 码率和隐私共用配对证书及活动串流校验。隐私操作涉及全机显示，仍需检查唯一活动会话、采集后端和遮罩状态。重协商前确认遮罩关闭，避免旧串流退出时遮罩已释放而主控仍显示已保护。
 - 复用 Sunshine 的配对撤销和会话停止入口。待执行操作记录所属授权，编码线程开始执行前检查授权仍有效。撤销先阻止尚未开始的操作，再清理该会话的资源。
 
-当前候选已比较配对证书与串流拥有者。码率状态查询仍会按证书返回唯一活动串流的令牌，发版前须将令牌交付限定到该次启动。旧版隐私入口沿用已有规则，具备会话令牌的版本可迁移到共同授权校验。[码率所有权校验](https://github.com/blowingwind05/Sunshine-aurora/blob/c6a2b19e8cc1ff1fd909971721b8edbea1d985c6/src/rtsp.cpp) · [隐私资格与撤销检查](https://github.com/blowingwind05/Sunshine-aurora/blob/c6a2b19e8cc1ff1fd909971721b8edbea1d985c6/src/nvhttp.cpp)
+当前候选已比较配对证书与串流拥有者。码率状态查询仍会按证书返回唯一活动串流的令牌，发版前须将令牌交付限定到该次启动。旧版隐私入口沿用已有规则，具备会话令牌的版本可迁移到共同授权校验。[码率所有权校验](https://github.com/blowingwind05/Sunshine-aurora/blob/1d1e55da5ca5a11b9a36584f6d348f3543bf209c/src/rtsp.cpp) · [隐私资格与撤销检查](https://github.com/blowingwind05/Sunshine-aurora/blob/1d1e55da5ca5a11b9a36584f6d348f3543bf209c/src/nvhttp.cpp)

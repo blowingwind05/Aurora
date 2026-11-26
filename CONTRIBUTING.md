@@ -1,34 +1,40 @@
 # 开发 Aurora
 
-[项目首页](README.md) · [视觉与交互规范](docs/visual-design/README.md) · [串流运行时](docs/streaming.md)
+[项目首页](README.md) · [开发交接](docs/handoff.md) · [视觉与交互规范](docs/visual-design/README.md) · [串流运行时](docs/streaming.md)
 
 ## 开发环境
 
 - 桌面应用使用 C++17、Qt Quick 和 CMake。构建脚本需要 PowerShell 7.3 与 Python 3.10 或更新版本。
-- Windows x64 使用 Visual Studio x64 开发者环境及带 `qmake` 和 `windeployqt` 的 Qt。安装器使用 Inno Setup 6。
-- macOS 使用目标架构对应的 Xcode 工具和 Qt 6。Windows 与 macOS 的 Sunshine 依赖见[宿主构建说明](desktop/packaging/Sunshine.md)。
+- Windows x64 的 Aurora 和 Moonlight 使用 Visual Studio x64 开发者环境及 Qt 6.6.3 MSVC x64 SDK，需包含 `qmake` 和 `windeployqt`。Sunshine 单独使用 MSYS2 UCRT64 的 GCC 14 或更新版本、CMake 和 Ninja。安装器使用 Inno Setup 6。
+- macOS 使用 Xcode 工具和 Qt 6.6.3，安装 `qtimageformats` 以部署 WebP 插件。两平台的 Sunshine 依赖见[宿主构建说明](desktop/packaging/Sunshine.md)。
 - 内置 Tailscale 使用 Go 1.27.4。Windows 还需要 GNU `windres` 和预处理器。[节点构建说明](desktop/tailnet/README.md)
+
+## 检出源码
+
+默认从[交接基线](docs/handoff.md#默认基线)开工。在 Aurora 主仓根目录按 `.gitmodules` 和该提交的 gitlink 初始化 Moonlight、Sunshine。发布构建从主仓索引读取锁定提交，再按平台准备嵌套依赖。[子模块与构建副本](desktop/upstream/README.md)
 
 ## 构建发布包
 
 ### Windows
 
-在 Visual Studio x64 开发者 PowerShell 中运行，再将前两个脚本输出的部署目录填入变量。
+在 Visual Studio x64 开发者 PowerShell 中运行。按本机安装位置设置 `$qmake` 和 `$msys2`，并将前两个构建脚本输出的部署目录填入 `$streamer` 和 `$sunshine`。
 
 ```powershell
-pwsh -File ./desktop/packaging/Build-Windows-Streamer.ps1
-pwsh -File ./desktop/packaging/Build-Windows-Sunshine.ps1 -Msys2Root C:\msys64
-pwsh -File ./desktop/tailnet/Build-Tailnet.ps1 -Runtime win-x64 -OutputDirectory ./desktop/obj/tailnet-win -RunTests
+$qmake = 'C:\Qt\6.6.3\msvc2019_64\bin\qmake.exe'
+$msys2 = 'C:\msys64'
+pwsh -File ./desktop/packaging/Build-Windows-Streamer.ps1 -Qmake $qmake
+pwsh -File ./desktop/packaging/Build-Windows-Sunshine.ps1 -Msys2Root $msys2
+pwsh -File ./desktop/tailnet/Build-Tailnet.ps1 -Runtime win-x64 -OutputDirectory ./desktop/obj/tailnet-win -RunTests -Windres (Join-Path $msys2 'ucrt64/bin/windres.exe')
 $streamer = 'C:\build\aurora\Streamer'
 $sunshine = 'C:\build\aurora\Sunshine'
-pwsh -File ./desktop/packaging/Build-Windows.ps1 -StreamerDirectory $streamer -SunshineDirectory $sunshine -TailscaleDirectory ./desktop/obj/tailnet-win -Setup
+pwsh -File ./desktop/packaging/Build-Windows.ps1 -StreamerDirectory $streamer -SunshineDirectory $sunshine -TailscaleDirectory ./desktop/obj/tailnet-win -Qmake $qmake -Setup
 ```
 
-`Build-Windows.ps1` 编译 Qt 主程序并组装便携包及校验文件。`-Setup` 同时生成安装器。传入 `-Qmake` 时选与 Moonlight 相同的 Qt 工具链。
+`Build-Windows.ps1` 用与 Moonlight 相同的 Qt 编译主程序并组装便携包及校验文件。`-Setup` 同时生成安装器。
 
 ### macOS
 
-Apple 芯片用 `arm64`，Intel 用 `x64`，两个脚本的运行时架构须一致。
+以下以 Apple 芯片的原生环境为例。Intel 原生环境将 `arm64` 和 `osx-arm64` 分别换成 `x64` 和 `osx-x64`。让 `qmake` 指向上述 Qt 6 SDK，也可通过 `-Qmake` 指定完整路径。
 
 ```powershell
 pwsh -File ./desktop/tailnet/Build-Tailnet.ps1 -Runtime osx-arm64 -OutputDirectory ./desktop/obj/tailnet-mac -RunTests
@@ -48,7 +54,7 @@ pwsh -File ./desktop/packaging/Build-Mac.ps1 -Architecture arm64 -TailscaleDirec
 | [desktop/app/src/platform](desktop/app/src/platform) | 进程单实例、托盘、开机启动和系统适配 |
 | [desktop/app/src](desktop/app/src) | 串流、Sunshine、Tailscale、配对和壁纸模块 |
 | [desktop/packaging](desktop/packaging) | Windows 和 macOS 发布包、安装器和校验 |
-| [desktop/upstream](desktop/upstream) | 上游固定版本、补丁和部署脚本 |
+| [desktop/upstream](desktop/upstream) | Moonlight 和 Sunshine 子模块、版本锁定和构建源码准备 |
 | [desktop/CMakeLists.txt](desktop/CMakeLists.txt) | 桌面程序的统一 CMake 构建入口 |
 | [tests/qt-ui](tests/qt-ui) | Qt 界面回归和模拟预览 |
 

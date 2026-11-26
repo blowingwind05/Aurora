@@ -1,8 +1,8 @@
 # Aurora 远程桌面视觉方案
 
-2026-11-20 · Windows 与 macOS · 浅色界面
+2026-11-20 · Windows、macOS 与手机主控 · 浅色界面
 
-> **新增内容先对齐，再合入。** 补上设计稿未覆盖的状态、说明或操作时，先确定它属于页面、卡片还是表单，再复用同一层级已有的边线、内边距和文字基线。尤其要检查可见文字的起点，按钮自身的内边距会让它看起来和上方文字错开。宽窗和窄窗都要看实际渲染。 [新增内容对齐规则](layout.md#新增内容如何对齐)
+> **先改设计稿，再实现。** 新增或调整界面、交互和状态时，先在本目录更新对应规格与原型，经确认后再修改正式界面。补上设计稿未覆盖的内容时，先确定它属于页面、卡片还是表单，再复用同一层级已有的边线、内边距和文字基线。尤其要检查可见文字的起点，按钮自身的内边距会让它看起来和上方文字错开。宽窗和窄窗都要看实际渲染。 [新增内容对齐规则](layout.md#新增内容如何对齐)
 
 ## 定稿主图标
 
@@ -24,8 +24,11 @@ Aurora 使用这枚**青蓝渐变的折带 A**作为主图标。全系列的 **A
 
 - [Windows 浏览器原型](aurora-preview.html) · [Windows 托盘右键菜单](aurora-windows-tray-preview.html)
 - [macOS 浏览器原型](aurora-macos-preview.html) · [macOS 菜单栏右键菜单](aurora-macos-menu-preview.html)
+- [手机端浏览器原型](aurora-mobile-preview.html) · [手机端设计与截图](mobile.md)
 
-两版使用同一套页面、卡片和交互。Windows 的品牌在左，窗口按钮在右。macOS 的红黄绿窗口按钮在左，品牌在右。设备数据和操作结果均为演示。两版截图来自浏览器渲染，macOS 截图展示拟定的窗口样式与布局。
+两种桌面原型使用同一套页面、卡片和交互。Windows 的品牌在左，窗口按钮在右。macOS 的红黄绿窗口按钮在左，品牌在右。设备数据和操作结果均为演示。桌面截图来自浏览器渲染，macOS 截图展示拟定的窗口样式与布局。
+
+从本地检出或解压后的目录打开 HTML 即可操作原型。保留 `source/` 和 `assets/` 的相对位置。
 
 ## 交付内容
 
@@ -33,6 +36,7 @@ Aurora 使用这枚**青蓝渐变的折带 A**作为主图标。全系列的 **A
 | --- | --- |
 | 页面、菜单、状态与反馈 | [交互设计](interaction.md) · [刷新提示](interaction.md#刷新提示) · [Tailscale 账户](interaction.md#tailscale-账户) · [退出登录确认](interaction.md#退出登录确认) · [未登录时的引导](interaction.md#未登录时的引导) |
 | Tailscale 运行方式与账号切换 | [交互、双平台原型和状态截图](tailscale-runtime.md) |
+| 手机端 | [主界面、串流和交互原型](mobile.md) |
 | 独立串流窗口 | [三态原型、截图与实现规格](stream-session.md) · [串流隐私屏保](stream-privacy-screen.md) |
 | 对齐基线、间距、尺寸与响应式 | [布局与距离](layout.md) · [侧边栏宽度](layout.md#侧边栏宽度) |
 | 配色、组件状态与新增元素验收 | [视觉与组件规范](visual-guidelines.md) · [字体与字重](visual-guidelines.md#字体与文案) · [圆角规范](visual-guidelines.md#圆角规范) · [次级文字操作](visual-guidelines.md#次级文字操作) · [设置和配置的分隔线](visual-guidelines.md#设置和配置的分隔线) · [设置下拉菜单](visual-guidelines.md#设置下拉菜单) · [开关状态](visual-guidelines.md#开关状态) |

@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <title>Aurora 手机端原型</title>
+  <link rel="stylesheet" href="source/aurora-mobile.css">
+  <script src="source/aurora-mobile.js" defer></script>
+</head>
+<body>
+  <div class="mobile-app" data-view="devices">
+    <main class="mobile-content">
+      <section data-view-panel="devices">
+        <header class="page-header">
+          <h1>我的设备</h1>
+          <button class="icon-button quiet" type="button" data-refresh aria-label="刷新设备列表"><i class="icon refresh" aria-hidden="true"></i></button>
+        </header>
+        <div data-device-list class="device-list">
+          <article class="device-card">
+            <button class="device-cover valley" type="button" data-connect aria-label="连接书房主机">
+              <span class="device-state online"><i></i>在线</span>
+              <strong class="device-caption">书房主机</strong>
+            </button>
+            <div class="device-bar" role="group" aria-label="书房主机的操作">
+              <button type="button" data-device-action="文件传输"><i class="icon folder-sync" aria-hidden="true"></i><span>文件传输</span></button>
+              <button type="button" data-device-action="观看模式"><i class="icon square-play" aria-hidden="true"></i><span>观看模式</span></button>
+              <button type="button" data-device-action="终端"><i class="icon square-terminal" aria-hidden="true"></i><span>终端</span></button>
+              <button type="button" data-device-action="端口映射"><i class="icon panels-top-left" aria-hidden="true"></i><span>端口映射</span></button>
+              <button type="button" data-open="device-more" data-device="study" aria-label="书房主机 更多工具" aria-haspopup="dialog"><i class="icon apps" aria-hidden="true"></i><span>更多工具</span></button>
+            </div>
+          </article>
+          <article class="device-card offline-card">
+            <div class="device-cover ginkgo">
+              <span class="device-state"><i></i>离线</span>
+              <strong class="device-caption">客厅电脑</strong>
+            </div>
+            <div class="device-bar" role="group" aria-label="客厅电脑的操作">
+              <button type="button" data-device-action="文件传输" disabled><i class="icon folder-sync" aria-hidden="true"></i><span>文件传输</span></button>
+              <button type="button" data-device-action="观看模式" disabled><i class="icon square-play" aria-hidden="true"></i><span>观看模式</span></button>
+              <button type="button" data-device-action="终端" disabled><i class="icon square-terminal" aria-hidden="true"></i><span>终端</span></button>
+              <button type="button" data-device-action="端口映射" disabled><i class="icon panels-top-left" aria-hidden="true"></i><span>端口映射</span></button>
+              <button type="button" data-open="device-more" data-device="living" aria-label="客厅电脑 更多工具" aria-haspopup="dialog"><i class="icon apps" aria-hidden="true"></i><span>更多工具</span></button>
+            </div>
+          </article>
+        </div>
+        <div class="empty-state" data-devices-empty hidden>
+          <i class="icon monitor" aria-hidden="true"></i>
+          <h2>还没有发现其他极光设备</h2>
+          <p>请在另一台设备上打开极光，并登录同一个 Tailscale 账户。</p>
+        </div>
+        <div class="empty-state" data-signed-out hidden>
+          <img src="assets/icons/prototype/tailscale-dot.svg" alt="">
+          <h2>登录后连接设备</h2>
+          <p>用 Tailscale 登录，查看自己的设备。</p>
+          <button class="primary" type="button" data-login>登录 Tailscale</button>
+        </div>
+      </section>
+      <section data-view-panel="settings" hidden>
+        <header class="page-header"><div class="page-title-group"><button class="icon-button back" type="button" data-back-to-more="settings" aria-label="返回更多"><i class="icon next" aria-hidden="true"></i></button><h1>设置</h1></div></header>
+        <h2 class="group-heading">串流</h2>
+        <div class="settings-card">
+          <button class="setting-row" type="button" data-open="quality">
+            <span>画质</span><span class="row-value" data-quality-value>自动</span><i class="icon next" aria-hidden="true"></i>
+          </button>
+          <button class="setting-row" type="button" data-open="input">
+            <span>默认输入方式</span><span class="row-value" data-input-value>触控板</span><i class="icon next" aria-hidden="true"></i>
+          </button>
+          <label class="setting-row"><span>显示性能统计</span><input class="switch" data-statistics type="checkbox" role="switch"></label>
+        </div>
+      </section>
+      <section data-view-panel="account" hidden>
+        <header class="page-header">
+          <h1>Tailscale 账户</h1>
+          <button class="icon-button quiet" type="button" data-account-refresh aria-label="刷新 Tailscale 状态"><i class="icon refresh" aria-hidden="true"></i></button>
+        </header>
+        <div class="account-details" data-account-details>
+          <button class="settings-card account-card" type="button" data-nav="accounts" aria-label="切换或添加 Tailscale 账户">
+            <span class="account-identity">
+              <span class="avatar" data-account-initial aria-hidden="true">林</span>
+              <span class="account-profile">
+                <span class="account-name"><strong data-account-name>林小满</strong><span class="connected-indicator"><i aria-hidden="true"></i>已连接</span></span>
+                <small data-account-login>xiaoman@github</small>
+              </span>
+            </span>
+            <i class="icon next" aria-hidden="true"></i>
+          </button>
+          <section class="settings-card account-network" aria-labelledby="network-title">
+            <h2 class="group-heading" id="network-title">网络</h2>
+            <dl class="account-network-details">
+              <div><dt>所属网络</dt><dd data-account-network>aurora-demo</dd></div>
+              <div><dt>本机 Tailscale 地址</dt><dd><span data-account-address>100.100.0.18</span><button class="icon-button quiet" type="button" data-account-copy aria-label="复制本机 Tailscale 地址"><i class="icon copy" aria-hidden="true"></i></button></dd></div>
+            </dl>
+          </section>
+          <button class="settings-card account-logout" type="button" data-open="logout"><i class="icon logout" aria-hidden="true"></i><span>退出登录</span></button>
+        </div>
+        <div class="empty-state" data-account-signin hidden>
+          <img src="assets/icons/prototype/tailscale-dot.svg" alt="">
+          <h2>登录 Tailscale</h2>
+          <p>登录后可查看并连接自己的设备。</p>
+          <button class="primary" type="button" data-login>登录 Tailscale</button>
+        </div>
+      </section>
+      <section data-view-panel="accounts" hidden>
+        <header class="page-header">
+          <div class="page-title-group"><button class="icon-button back" type="button" data-accounts-back aria-label="返回 Tailscale 账户"><i class="icon next" aria-hidden="true"></i></button><h1 tabindex="-1">切换账户</h1></div>
+        </header>
+        <h2 class="group-heading">已添加的账户</h2>
+        <ul class="settings-card account-list" data-account-list></ul>
+        <button class="settings-card add-account" type="button" data-open="add-account" aria-haspopup="dialog"><i class="icon plus" aria-hidden="true"></i><span>添加账户</span><i class="icon next" aria-hidden="true"></i></button>
+      </section>
+      <section data-view-panel="more" hidden>
+        <header class="page-header"><h1>更多</h1></header>
+        <div class="settings-card more-card">
+          <button class="setting-row" type="button" data-nav="settings"><i class="icon gear" aria-hidden="true"></i><span>设置</span><i class="icon next" aria-hidden="true"></i></button>
+          <button class="setting-row" type="button" data-check-update><i class="icon refresh" aria-hidden="true"></i><span>检查更新</span></button>
+          <a class="setting-row" href="https://github.com/blowingwind05/Aurora" target="_blank" rel="noopener noreferrer"><i class="icon github" aria-hidden="true"></i><span>开源地址</span></a>
+          <a class="setting-row" href="https://github.com/blowingwind05/Aurora#从极光窗口开始" target="_blank" rel="noopener noreferrer"><i class="icon circle-question-mark" aria-hidden="true"></i><span>帮助</span></a>
+          <button class="setting-row" type="button" data-open="feedback"><i class="icon message-square" aria-hidden="true"></i><span>反馈</span><i class="icon next" aria-hidden="true"></i></button>
+          <button class="setting-row" type="button" data-nav="about"><i class="icon info" aria-hidden="true"></i><span>关于</span><i class="icon next" aria-hidden="true"></i></button>
+        </div>
+      </section>
+      <section data-view-panel="about" hidden>
+        <header class="page-header">
+          <div class="page-title-group"><button class="icon-button back" type="button" data-back-to-more="about" aria-label="返回更多"><i class="icon next" aria-hidden="true"></i></button><h1 tabindex="-1">关于</h1></div>
+        </header>
+        <div class="settings-card about-intro">
+          <div class="about-identity">
+            <img src="assets/brand/Aurora-transparent.svg" alt="">
+            <div><h2>Aurora 远程桌面</h2><p>版本 0.8.0</p></div>
+          </div>
+          <p class="about-description">极光是开源远程桌面应用。登录 Tailscale 后，即可通过局域网或异地网络访问自己的电脑。</p>
+        </div>
+        <section aria-labelledby="about-project">
+          <h2 class="group-heading" id="about-project">项目信息</h2>
+          <div class="settings-card about-list">
+            <a class="setting-row about-link" href="https://github.com/blowingwind05" target="_blank" rel="noopener noreferrer"><span><strong>作者</strong><small>blowingwind05</small></span><i class="icon external" aria-hidden="true"></i></a>
+            <a class="setting-row about-link" href="https://github.com/blowingwind05/Aurora" target="_blank" rel="noopener noreferrer"><span><strong>开源仓库</strong><small>GitHub</small></span><i class="icon external" aria-hidden="true"></i></a>
+            <a class="setting-row about-link" href="https://github.com/blowingwind05/Aurora/blob/main/LICENSE" target="_blank" rel="noopener noreferrer"><span><strong>开源许可</strong><small>GPL-3.0-only</small></span><i class="icon external" aria-hidden="true"></i></a>
+          </div>
+        </section>
+        <section aria-labelledby="about-components">
+          <h2 class="group-heading" id="about-components">主要组件</h2>
+          <div class="settings-card about-list">
+            <a class="setting-row about-link" href="https://github.com/moonlight-stream/moonlight-qt" target="_blank" rel="noopener noreferrer"><span><strong>Moonlight</strong><small>播放远程桌面并传送输入。</small></span><i class="icon external" aria-hidden="true"></i></a>
+            <a class="setting-row about-link" href="https://github.com/SunshineStream/Sunshine" target="_blank" rel="noopener noreferrer"><span><strong>Sunshine</strong><small>在被控端采集并发送桌面画面。</small></span><i class="icon external" aria-hidden="true"></i></a>
+            <a class="setting-row about-link" href="https://github.com/tailscale/tailscale" target="_blank" rel="noopener noreferrer"><span><strong>Tailscale</strong><small>发现同账号设备并建立跨网连接。</small></span><i class="icon external" aria-hidden="true"></i></a>
+          </div>
+        </section>
+      </section>
+    </main>
+    <nav class="tab-bar" aria-label="主导航">
+      <button type="button" data-nav="devices" aria-current="page"><i class="icon monitor" aria-hidden="true"></i><span>我的设备</span></button>
+      <button type="button" data-nav="account"><span class="tab-avatar avatar" data-account-initial aria-hidden="true">林</span><img class="tab-avatar" data-signed-out-mark src="assets/icons/prototype/tailscale-dot.svg" alt="" hidden><span>Tailscale</span></button>
+      <button type="button" data-nav="more"><i class="icon menu" aria-hidden="true"></i><span>更多</span></button>
+    </nav>
+
+    <section class="stream" data-view-panel="stream" tabindex="-1" hidden aria-label="书房主机远控">
+      <div class="stream-stage" aria-label="远端桌面预览">
+        <img src="assets/wallpapers/default/mountain-valley.webp" alt="书房主机桌面预览">
+        <span class="performance" data-performance hidden>1080p · 60 FPS</span>
+      </div>
+      <div class="stream-tools" aria-label="串流操作">
+        <button type="button" data-open="control" aria-label="控制中心"><i class="icon sliders" aria-hidden="true"></i>控制中心</button>
+        <button type="button" data-open="keyboard"><i class="icon keyboard" aria-hidden="true"></i>键盘</button>
+        <button type="button" data-open="input"><i class="icon pointer" aria-hidden="true"></i><span data-input-value>触控板</span></button>
+        <button type="button" data-open="display"><i class="icon monitor" aria-hidden="true"></i>显示器</button>
+        <button class="back" type="button" data-open="disconnect" aria-label="返回设备"><i class="icon next" aria-hidden="true"></i>返回</button>
+      </div>
+    </section>
+
+    <dialog class="mobile-sheet" aria-labelledby="sheet-title">
+      <header class="sheet-header"><div class="sheet-handle" aria-hidden="true"></div><h2 id="sheet-title"></h2><button class="icon-button close-sheet" type="button" aria-label="关闭菜单"><i class="icon close" aria-hidden="true"></i></button></header>
+      <div class="sheet-body">
+        <section data-sheet-panel="feedback" hidden>
+          <a class="setting-row" href="mailto:blowingwind05@mail.ustc.edu.cn"><i class="icon mail" aria-hidden="true"></i><span>blowingwind05@mail.ustc.edu.cn</span></a>
+          <a class="setting-row" href="https://github.com/blowingwind05/Aurora/issues" target="_blank" rel="noopener noreferrer"><i class="icon github" aria-hidden="true"></i><span>GitHub Issues</span></a>
+        </section>
+        <section data-sheet-panel="device-more" hidden>
+          <button class="setting-row" type="button" data-copy="lan"><i class="icon copy" aria-hidden="true"></i><span>复制局域网地址</span></button>
+          <button class="setting-row" type="button" data-copy="tailscale"><i class="icon copy" aria-hidden="true"></i><span>复制 Tailscale 地址</span></button>
+          <button class="setting-row" type="button" data-power="重启"><i class="icon rotate-ccw" aria-hidden="true"></i><span>重启</span></button>
+          <button class="setting-row" type="button" data-power="关机"><i class="icon power" aria-hidden="true"></i><span>关机</span></button>
+        </section>
+        <section data-sheet-panel="device-power" hidden>
+          <p class="sheet-note" data-power-note></p>
+          <div class="sheet-actions"><button class="secondary" type="button" data-cancel>取消</button><button class="danger" type="button" data-power-confirm></button></div>
+        </section>
+        <section data-sheet-panel="control" hidden>
+          <p class="sheet-note">书房主机 · <span data-stream-status>已连接</span></p>
+          <button class="setting-row" type="button" data-open="quality"><span>画质</span><span class="row-value" data-quality-value>自动</span><i class="icon next" aria-hidden="true"></i></button>
+          <button class="setting-row" type="button" data-open="input"><span>输入</span><span class="row-value" data-input-value>触控板</span><i class="icon next" aria-hidden="true"></i></button>
+          <button class="setting-row" type="button" data-open="privacy"><span>隐私保护</span><span class="row-value" data-privacy-state>关闭</span><i class="icon next" aria-hidden="true"></i></button>
+          <button class="setting-row destructive" type="button" data-open="disconnect"><i class="icon logout" aria-hidden="true"></i><span>断开远控</span></button>
+        </section>
+        <section data-sheet-panel="quality" hidden>
+          <button class="setting-row choice" type="button" data-quality="自动" aria-pressed="true">自动</button>
+          <button class="setting-row choice" type="button" data-quality="720p" aria-pressed="false">720p</button>
+          <button class="setting-row choice" type="button" data-quality="1080p" aria-pressed="false">1080p</button>
+        </section>
+        <section data-sheet-panel="input" hidden>
+          <button class="setting-row choice" type="button" data-input="触控板" aria-pressed="true">触控板</button>
+          <button class="setting-row choice" type="button" data-input="直接触控" aria-pressed="false">直接触控</button>
+        </section>
+        <section data-sheet-panel="display" hidden>
+          <button class="setting-row choice" type="button" data-display="主显示器" aria-pressed="true">主显示器</button>
+          <button class="setting-row choice" type="button" data-display="显示器 2" aria-pressed="false">显示器 2</button>
+        </section>
+        <section data-sheet-panel="privacy" hidden>
+          <p class="sheet-note">被控设备 · 书房主机</p>
+          <button class="setting-row choice" type="button" data-privacy="关闭" aria-pressed="true">关闭</button>
+          <button class="setting-row choice" type="button" data-privacy="隐私屏保" aria-pressed="false">隐私屏保</button>
+          <button class="setting-row" type="button" data-open="screensaver"><span>设置隐私屏保</span><i class="icon next" aria-hidden="true"></i></button>
+        </section>
+        <section data-sheet-panel="screensaver" hidden>
+          <p class="sheet-note">书房主机 · 本地预览</p>
+          <img class="screensaver-preview" data-screensaver-preview src="assets/wallpapers/default/mountain-valley.webp" alt="隐私屏保本地预览">
+          <div class="preset-heading"><h3>内置壁纸</h3><button class="quiet-text" type="button" data-import>导入图片</button><input type="file" data-picture-file accept="image/*" hidden></div>
+          <div class="preset-grid" data-presets></div>
+          <div class="sheet-actions"><button class="quiet-text" type="button" data-restore>恢复默认</button><button class="primary" type="button" data-save disabled>保存样式</button></div>
+        </section>
+        <section data-sheet-panel="keyboard" hidden>
+          <label class="sheet-note" for="keyboard-input">输入文字</label>
+          <textarea id="keyboard-input" rows="3" placeholder="轻触这里输入"></textarea>
+          <div class="sheet-actions"><button type="button" class="primary" data-send-text>发送</button></div>
+        </section>
+        <section data-sheet-panel="disconnect" hidden>
+          <p class="sheet-note">结束与书房主机的远控会话。</p>
+          <div class="sheet-actions"><button type="button" class="secondary" data-cancel>继续远控</button><button type="button" class="danger" data-disconnect>断开远控</button></div>
+        </section>
+        <section data-sheet-panel="add-account" hidden>
+          <p class="sheet-note">在浏览器登录 Tailscale 并完成授权后，返回 Aurora。</p>
+          <div class="sheet-actions"><button class="secondary" type="button" data-cancel>取消</button><button class="primary" type="button" data-add-account>前往登录</button></div>
+        </section>
+        <section data-sheet-panel="logout" hidden>
+          <p class="sheet-note">退出后，需要重新登录才能连接设备。</p>
+          <div class="sheet-actions"><button class="secondary" type="button" data-cancel>取消</button><button class="danger" type="button" data-logout>退出登录</button></div>
+        </section>
+      </div>
+    </dialog>
+    <p class="toast" role="status" hidden></p>
+  </div>
+</body>
+</html>
